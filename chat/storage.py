@@ -4,8 +4,8 @@ Conversation metadata (user ownership, timestamps) is stored in SQLite via
 db/conversation_store.py.  The actual conversation content lives on disk:
 
     data/chats/{conversation_id}/
-        chat_history.json   — message history + guide snapshot + per-conversation
-                              notice flags (see get_conversation_flags)
+        chat_history.json   — message history + per-conversation notice flags
+                              (see get_conversation_flags)
         sdk_history.json    — Gemini SDK session history (API mode only)
         workspace/          — the conversation workspace: files uploaded by the
                               user or written by the agent, for standalone AND
@@ -27,7 +27,7 @@ with compact JSON (``write_json_atomic``), and every read-modify-write
 holds the conversation's file lock (``_transcript_file_lock``). Message appends run
 their read-modify-write in a worker thread, one at a time per
 conversation in call order (``_transcript_append_lock``); the few
-synchronous writers (notice flags, guide snapshot, action-request status)
+synchronous writers (notice flags, action-request status)
 take the same file lock on the event loop, so they never interleave with
 a threaded append.
 """
@@ -761,6 +761,8 @@ class ChatStorage:
                 "archived": meta.get("archived", False),
                 "custom_name": meta.get("custom_name"),
                 "origin": meta.get("origin"),
+                "unread_seq": meta.get("unread_seq") or 0,
+                "read_seq": meta.get("read_seq") or 0,
             })
 
         return conversations
@@ -1154,61 +1156,6 @@ class ChatStorage:
             ),
             fields,
         )
-
-    @staticmethod
-    def set_guide_snapshot(
-        conversation_id: str,
-        guide_id: str,
-        guide_name: str,
-        guide_content: str,
-    ) -> None:
-        """Set the guide snapshot on a conversation (called once on first message).
-
-        Only sets the snapshot if it hasn't been set already (idempotent).
-
-        Args:
-            conversation_id: Conversation UUID.
-            guide_id: Guide UUID.
-            guide_name: Guide display name.
-            guide_content: Guide system prompt content at time of snapshot.
-        """
-        chat_file = ChatStorage._get_chat_history_file(conversation_id)
-        with _transcript_file_lock(conversation_id):
-            if not chat_file.exists():
-                return
-
-            with open(chat_file, "r") as f:
-                chat_data = json.load(f)
-
-            # Only set if not already snapshotted
-            if "guide_id" not in chat_data or chat_data["guide_id"] is None:
-                chat_data["guide_id"] = guide_id
-                chat_data["guide_snapshot"] = {
-                    "name": guide_name,
-                    "content": guide_content,
-                }
-                write_json_atomic(chat_file, chat_data)
-
-    @staticmethod
-    def guide_snapshot_from(chat_data: Optional[Dict]) -> Optional[Dict]:
-        """Extract the guide snapshot from an already-parsed chat_history.json.
-
-        Args:
-            chat_data: The parsed chat_history.json (``get_conversation``
-                output), or None for a conversation without one.
-
-        Returns:
-            Dict with 'guide_id' and 'guide_snapshot' keys, or None if not set.
-        """
-        if not isinstance(chat_data, dict):
-            return None
-        guide_id = chat_data.get("guide_id")
-        if guide_id:
-            return {
-                "guide_id": guide_id,
-                "guide_snapshot": chat_data.get("guide_snapshot"),
-            }
-        return None
 
     # ------------------------------------------------------------------
     # Per-conversation notice flags (chat_history.json top level)
@@ -2242,6 +2189,8 @@ class ChatStorage:
                 "archived": meta.get("archived", False),
                 "custom_name": meta.get("custom_name"),
                 "origin": meta.get("origin"),
+                "unread_seq": meta.get("unread_seq") or 0,
+                "read_seq": meta.get("read_seq") or 0,
             })
 
         return conversations

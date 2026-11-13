@@ -395,7 +395,6 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
     project_id = routine["project_id"]
     user_id = routine["user_id"]
     prompt = routine["prompt"]
-    guide_id = routine.get("guide_id")
     routine_model = routine.get("model")
 
     logger.info(
@@ -454,7 +453,6 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
                 model=routine_model,
                 on_event=noop_event,
                 messages_out=messages_out,
-                guide_id=guide_id,
                 project_id=project_id,
                 routine_id=routine_id,
             )
@@ -468,7 +466,8 @@ async def _execute_scheduled_run(app, schedule: dict, routine: dict, run_id: str
             log_prefix="[scheduler]",
         )
 
-        # Persist the response messages
+        # Persist the response messages. The conversation stays read: a
+        # routine's own run never marks it unread (chat/unread.py).
         await _persist_scheduler_messages(conversation_id, messages_out)
 
         await finish_run(schedule_id, run_id, "completed")

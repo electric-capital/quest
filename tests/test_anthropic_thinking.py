@@ -253,6 +253,11 @@ def test_registry_lists_selectable_levels_per_model():
     assert "none" not in resolve_model("claude-sonnet-5-5").thinking_efforts
     # Gemini entries document the API default and offer the three levels
     assert resolve_model("gemini-4-argon").thinking_efforts == ("low", "medium", "high")
+    assert resolve_model("gemini-4-carbon").thinking_efforts == ("low", "medium", "high")
+    # Hydrogen defaults to high and adds xhigh
+    hydrogen = resolve_model("gemini-4-hydrogen")
+    assert hydrogen.thinking_efforts == ("low", "medium", "high", "xhigh")
+    assert hydrogen.thinking_effort == "high"
     # No sublevel for models the registry pins nothing on
     assert resolve_model("claude-sonnet-5").thinking_efforts == ()
     # Picks are validated against the list; anything else is the default

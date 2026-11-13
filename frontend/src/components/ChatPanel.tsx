@@ -7,6 +7,7 @@ import { RichMarkdown } from './RichMarkdown';
 import { useNavigate } from 'react-router-dom';
 import { useCodeAndMathLoaded } from '../hooks/useCodeAndMath';
 import { useConversation } from '../hooks/useConversation';
+import { useMarkConversationViewed } from '../hooks/useConversationUnread';
 import { useConversationModels } from '../contexts/ConversationModelsContext';
 import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useNavigationState } from '../contexts/NavigationContext';
@@ -222,6 +223,10 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     setArchived,
   } = useConversation(conversationId, { onLoadedSkills: handleLoadedSkills, onModelLoaded: handleModelLoaded, onProjectIdLoaded: handleProjectIdLoaded });
 
+  // This conversation is what the main view shows: while the window is
+  // focused it counts as read (the sidebar's unread dot).
+  useMarkConversationViewed(conversationId, isLoaded);
+
   // Slack-driven conversations are read-only in the web UI; the user is
   // conversing via Slack DMs and the model replies through the
   // send_slack_reply_and_get_response tool. Cross-user subagent
@@ -338,11 +343,20 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // after a message_appended event lands AFTER the streaming bubble cleared).
   // Without this, the post-stream scroll position predates the new content and
   // the last message hangs below the viewport.
+  //
+  // ``wasNearBottom`` is read through a ref so the effect fires only when the
+  // tail grows. As a dependency it would also fire whenever the user scrolls
+  // back into the near-bottom zone, and the scroll anchor sits above the
+  // list's trailing padding, so that pulled the view up off the true bottom.
+  const wasNearBottomRef = useRef(wasNearBottom);
   useEffect(() => {
-    if (isLoaded && !isLoading && wasNearBottom && messages.length > 0) {
+    wasNearBottomRef.current = wasNearBottom;
+  }, [wasNearBottom]);
+  useEffect(() => {
+    if (isLoaded && !isLoading && wasNearBottomRef.current && messages.length > 0) {
       scrollToBottom('smooth');
     }
-  }, [messages.length, isLoaded, isLoading, wasNearBottom, scrollToBottom]);
+  }, [messages.length, isLoaded, isLoading, scrollToBottom]);
 
   // Scroll to bottom after loading conversation (instant)
   useEffect(() => {
@@ -390,14 +404,13 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       !isStreaming &&
       messages.length === 0  // Only send if conversation is fresh (no messages yet)
     ) {
-      const { prompt, guideId } = pendingRoutineMessage;
+      const { prompt } = pendingRoutineMessage;
       setPendingRoutineMessage(null);  // Clear immediately to prevent re-send
 
-      // Send the routine prompt, carrying the routine's guide override (if
-      // any) -- the only remaining path that sends a guide_id.
+      // Send the routine prompt
       const model = getModelForConversation(conversationId);
       sendMessage(
-        prompt, model, guideId ?? undefined, undefined, undefined, undefined, undefined,
+        prompt, model, undefined, undefined, undefined, undefined,
         getThinkingEffortForConversation(conversationId),
       );
 
@@ -460,7 +473,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         : undefined;
       const attachmentsToSend = attachments && attachments.length > 0 ? attachments : undefined;
       sendMessage(
-        prompt, effectiveModel, undefined, skillIdsToSend, attachmentsToSend, flagsToSend, attachedFilenamesToSend,
+        prompt, effectiveModel, skillIdsToSend, attachmentsToSend, flagsToSend, attachedFilenamesToSend,
         effectiveEffort,
       );
 
@@ -538,19 +551,19 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
         })
           .then((resp) => {
             const attachedFilenames = resp.uploadedFiles.map((f) => f.name);
-            sendMessage(text, model, undefined, skillIds, attachments, flags, attachedFilenames, thinkingEffort);
+            sendMessage(text, model, skillIds, attachments, flags, attachedFilenames, thinkingEffort);
           })
           .catch(() => {
             // Fall back to sending without the attached-filename hint rather
             // than dropping the message; the files just weren't uploaded.
-            sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
+            sendMessage(text, model, skillIds, attachments, flags, undefined, thinkingEffort);
           })
           .finally(() => {
             setUploadStatus(null);
           });
         return;
       }
-      sendMessage(text, model, undefined, skillIds, attachments, flags, undefined, thinkingEffort);
+      sendMessage(text, model, skillIds, attachments, flags, undefined, thinkingEffort);
     },
     [conversationId, messages.length, modelVisibility, persistDefaultModel, sendMessage],
   );

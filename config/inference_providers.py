@@ -1000,7 +1000,7 @@ def _detect_google_credentials() -> dict:
     """Describe where Google credentials for Vertex would come from.
 
     Checks ``GOOGLE_APPLICATION_CREDENTIALS`` first (a service-account key
-    file; this is how both run.py and the prod bootstrap wire Vertex auth),
+    file; this is how run.py and the first-run setup flow wire Vertex auth),
     then the gcloud ADC well-known file. Metadata-server credentials (GCE)
     are intentionally not probed -- that would add network latency to a
     settings request -- so ``source`` may be None on a GCE deployment that

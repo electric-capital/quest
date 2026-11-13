@@ -1,6 +1,6 @@
 /**
- * One conversation row in a Sidebar list: origin badge + title (or the
- * inline rename editor), the "more options" button and its dropdown.
+ * One conversation row in a Sidebar list: unread dot + origin badge + title
+ * (or the inline rename editor), the "more options" button and its dropdown.
  *
  * Shared by the top-level list, the drilled project's standalone rows and
  * the rows inside a routine-run group; the `variant` picks the routine-run
@@ -11,6 +11,7 @@
 import type React from 'react';
 import type { Conversation } from '../../api/types';
 import type { ConversationListActions } from '../../hooks/useConversationListActions';
+import { useConversationUnread } from '../../hooks/useConversationUnread';
 import { formatRoutineTimestamp } from '../../utils/sidebarItems';
 import { ConversationOriginIcon, KebabIcon } from './icons';
 
@@ -36,6 +37,7 @@ export function ConversationRow({
   menuExtras,
 }: ConversationRowProps) {
   const isRoutineRun = variant === 'routine-run';
+  const unread = useConversationUnread(conversation);
   const title = conversation.custom_name || conversation.title;
   const label = isRoutineRun
     ? (conversation.custom_name
@@ -79,6 +81,9 @@ export function ConversationRow({
         />
       ) : (
         <div className={isRoutineRun ? 'conversation-title routine-sub-item-timestamp' : 'conversation-title'}>
+          {unread && (
+            <span className="conversation-unread-dot" role="img" aria-label="Unread" />
+          )}
           <ConversationOriginIcon origin={conversation.origin} />
           {label}
         </div>

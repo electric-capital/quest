@@ -7,7 +7,6 @@
  * - AppearanceContext       colour scheme / colour theme
  * - NavigationContext       active conversation, views, first-send hand-offs
  * - ProjectsContext         project list, active + drilled project
- * - GuidesContext           deprecated guide list
  * - ConversationModelsContext  default + per-conversation models, provider locks
  * - ConversationSkillsContext  queued / loaded skills per conversation
  * - FileBrowserStateContext    per-conversation file-browser path
@@ -15,7 +14,7 @@
  *                              workspace download goes through
  *
  * Order matters only where a provider reads another: Auth reads AppConfig;
- * Appearance, Projects, Guides and ConversationModels read Auth (and
+ * Appearance, Projects and ConversationModels read Auth (and
  * ConversationModels reads AppConfig).
  */
 
@@ -25,7 +24,6 @@ import { AuthProvider } from './AuthContext';
 import { AppearanceProvider } from './AppearanceContext';
 import { NavigationProvider } from './NavigationContext';
 import { ProjectsProvider } from './ProjectsContext';
-import { GuidesProvider } from './GuidesContext';
 import { ConversationModelsProvider } from './ConversationModelsContext';
 import { ConversationSkillsProvider } from './ConversationSkillsContext';
 import { FileBrowserStateProvider } from './FileBrowserStateContext';
@@ -38,17 +36,15 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
         <AppearanceProvider>
           <NavigationProvider>
             <ProjectsProvider>
-              <GuidesProvider>
-                <ConversationModelsProvider>
-                  <ConversationSkillsProvider>
-                    <FileBrowserStateProvider>
-                      <DownloadWarningProvider>
-                        {children}
-                      </DownloadWarningProvider>
-                    </FileBrowserStateProvider>
-                  </ConversationSkillsProvider>
-                </ConversationModelsProvider>
-              </GuidesProvider>
+              <ConversationModelsProvider>
+                <ConversationSkillsProvider>
+                  <FileBrowserStateProvider>
+                    <DownloadWarningProvider>
+                      {children}
+                    </DownloadWarningProvider>
+                  </FileBrowserStateProvider>
+                </ConversationSkillsProvider>
+              </ConversationModelsProvider>
             </ProjectsProvider>
           </NavigationProvider>
         </AppearanceProvider>

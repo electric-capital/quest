@@ -46,6 +46,31 @@ def make_conversation_list_changed(
     }
 
 
+def make_conversation_unread_changed(
+    conversation_id: str,
+    unread_seq: int,
+    read_seq: int,
+    project_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Envelope for ``conversation_unread_changed``.
+
+    Per-user global carrying the conversation's two unread seqs after one of
+    them moved; the conversation is unread while ``unread_seq > read_seq``.
+    Both only move forward, so a receiver merges each with ``max`` and the
+    order events arrive in does not matter. ``project_id`` is the
+    conversation's project (None for a standalone one), which lets a client
+    keep a project's unread dot current without having listed the
+    conversation.
+    """
+    return {
+        "type": "conversation_unread_changed",
+        "conversation_id": conversation_id,
+        "project_id": project_id,
+        "unread_seq": unread_seq,
+        "read_seq": read_seq,
+    }
+
+
 FILE_LIST_SCOPES = frozenset({"conversation", "project"})
 
 
@@ -253,6 +278,20 @@ def make_doc_note_suggestions_changed(
         "conversation_id": conversation_id,
         "pending_count": pending_count,
         "total_pending": total_pending,
+    }
+
+
+def make_notifications_changed(open_count: int) -> dict[str, Any]:
+    """Envelope for ``notifications_changed``.
+
+    Per-user global published when the user's system notifications change
+    (chat/notifications.py: one created, or one dismissed from any tab).
+    ``open_count`` is how many are still open, for the sidebar inbox badge
+    and the inbox's Other tab, which re-reads its list on the event.
+    """
+    return {
+        "type": "notifications_changed",
+        "open_count": open_count,
     }
 
 

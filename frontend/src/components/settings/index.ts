@@ -5,7 +5,6 @@
 export { DataConnectionsSection } from './DataConnectionsSection';
 export { MemoriesSection } from './MemoriesSection';
 export { AppearanceSection } from './AppearanceSection';
-export { GuidesSection } from './GuidesSection';
 export { SkillsSection } from './SkillsSection';
 export { SlackSection } from './SlackSection';
 export { GmailSection } from './GmailSection';

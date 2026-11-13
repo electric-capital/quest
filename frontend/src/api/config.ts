@@ -87,6 +87,10 @@ export const endpoints = {
   memoryInboxPending: () => `${API_BASE_URL}/memory-inbox/pending`,
   memoryInboxResolved: () => `${API_BASE_URL}/memory-inbox/resolved`,
 
+  notifications: () => `${API_BASE_URL}/notifications`,
+  notificationsCount: () => `${API_BASE_URL}/notifications/count`,
+  notificationDismiss: (id: string) => `${API_BASE_URL}/notifications/${id}/dismiss`,
+
   projectMemories: (projectId: string) => `${API_BASE_URL}/projects/${projectId}/memories`,
 
   projectMemory: (projectId: string, id: string) =>
@@ -96,10 +100,6 @@ export const endpoints = {
     `${API_BASE_URL}/conversations/${conversationId}/project-memory-suggestions`,
 
   projectMemorySuggestion: (id: string) => `${API_BASE_URL}/project-memory-suggestions/${id}`,
-
-  guides: () => `${API_BASE_URL}/guides`,
-
-  guide: (id: string) => `${API_BASE_URL}/guides/${id}`,
 
   skills: () => `${API_BASE_URL}/skills`,
 
@@ -191,7 +191,6 @@ export const endpoints = {
   adminMostExpensiveConversations: () => `${API_BASE_URL}/admin/system-monitor/most-expensive-conversations`,
   adminUserReport: () => `${API_BASE_URL}/admin/system-monitor/user-report`,
   adminModelReport: () => `${API_BASE_URL}/admin/system-monitor/model-report`,
-  adminGuidesReport: () => `${API_BASE_URL}/admin/system-monitor/guides-report`,
   adminDocsReport: () => `${API_BASE_URL}/admin/system-monitor/docs-report`,
   adminTablesReport: () => `${API_BASE_URL}/admin/system-monitor/tables-report`,
   adminMemoriesReport: () => `${API_BASE_URL}/admin/system-monitor/memories-report`,
@@ -209,6 +208,13 @@ export const endpoints = {
   passwordLinkInfo: () => '/auth/password/link-info',
   passwordSet: () => '/auth/password/set',
   passwordChange: () => '/auth/password/change',
+
+  // First-run setup (auth/first_run.py; unauthenticated, open only while
+  // the deployment is unconfigured).
+  setupUnlock: () => `${API_BASE_URL}/setup/unlock`,
+  setupComplete: () => `${API_BASE_URL}/setup/complete`,
+  setupProvider: () => `${API_BASE_URL}/setup/inference/provider`,
+  setupVertex: () => `${API_BASE_URL}/setup/inference/vertex`,
 
   adminFeatureGates: () => `${API_BASE_URL}/admin/feature-gates`,
 

@@ -23,7 +23,6 @@ function routine(id: string, name: string): Routine {
     project_id: 'p1',
     user_id: 1,
     prompt: '',
-    guide_id: null,
     model: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: null,

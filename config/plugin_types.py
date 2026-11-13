@@ -188,6 +188,12 @@ class UserConnectionSpec:
     account_from: Optional[Callable[[dict], Optional[str]]] = None
     # row -> short warning shown on the connection in Settings, or None.
     row_warning: Optional[Callable[[dict], Optional[str]]] = None
+    # oauth kind, optional: POST URL under /auth/<id> that removes the
+    # user's connection; its presence shows a Disconnect button on the row.
+    disconnect_url: Optional[str] = None
+    # all kinds, optional: async (row) -> None that revokes the row's tokens
+    # at the identity provider. Called with a copy of the decrypted row.
+    revoke: Optional[Callable[[dict], Awaitable[None]]] = None
 
 
 @dataclass(frozen=True)

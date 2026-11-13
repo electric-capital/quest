@@ -3,14 +3,12 @@ import { fetchConnectors, fetchSettings } from '../api/client';
 import type { ConnectorRow, UserSettings } from '../api/types';
 import { useAppConfig } from '../contexts/AppConfigContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useGuides } from '../contexts/GuidesContext';
 import { useNavigationState } from '../contexts/NavigationContext';
 import { useIsMobile } from '../hooks/useIsMobile';
 import {
   DataConnectionsSection,
   MemoriesSection,
   AppearanceSection,
-  GuidesSection,
   SkillsSection,
   SlackSection,
   GmailSection,
@@ -44,16 +42,12 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsSection = 'data-connections' | 'appearance' | 'password' | 'sign-in' | 'slack' | 'gmail' | 'sms' | 'memories' | 'guides' | 'skills' | 'inference-api' | 'feature-gates' | 'service-credentials' | 'inference-providers' | 'model-selection' | 'dreaming' | 'limits' | 'about' | 'sign-out';
+type SettingsSection = 'data-connections' | 'appearance' | 'password' | 'sign-in' | 'slack' | 'gmail' | 'sms' | 'memories' | 'skills' | 'inference-api' | 'feature-gates' | 'service-credentials' | 'inference-providers' | 'model-selection' | 'dreaming' | 'limits' | 'about' | 'sign-out';
 
 interface SectionEntry {
   id: SettingsSection;
   label: string;
 }
-
-// Server-global feature gate (config/feature_gates.py) that keeps the
-// deprecated Guides section alive for installs still migrating to Skills.
-const GUIDES_FEATURE = 'guides';
 
 const MAIN_SECTIONS: SectionEntry[] = [
   { id: 'data-connections', label: 'Data Connections' },
@@ -61,8 +55,6 @@ const MAIN_SECTIONS: SectionEntry[] = [
   // Listed only under email/password sign-in.
   { id: 'password', label: 'Password' },
   { id: 'memories', label: 'Memories' },
-  // Listed only while the admin `guides` feature gate is on for this user.
-  { id: 'guides', label: 'Guides' },
   { id: 'skills', label: 'Skills' },
   { id: 'inference-api', label: 'Inference API' },
 ];
@@ -113,16 +105,12 @@ const SECTION_LABELS = Object.fromEntries(
 ) as Record<SettingsSection, string>;
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const { isAdmin, enabledFeatures, refreshConnectionStatus } = useAuth();
+  const { isAdmin, refreshConnectionStatus } = useAuth();
   const { loginMethod } = useAppConfig();
-  const { loadGuides: refreshContextGuides } = useGuides();
   const { settingsInitialSection, setSettingsInitialSection } = useNavigationState();
-  const guidesEnabled = enabledFeatures.includes(GUIDES_FEATURE);
   const passwordLogin = loginMethod === 'password';
   const visibleMainSections = MAIN_SECTIONS.filter(
-    (entry) =>
-      (entry.id !== 'guides' || guidesEnabled) &&
-      (entry.id !== 'password' || passwordLogin)
+    (entry) => entry.id !== 'password' || passwordLogin
   );
   const isMobile = useIsMobile();
   const [activeSection, setActiveSection] = useState<SettingsSection>('data-connections');
@@ -160,7 +148,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   useEffect(() => {
     if (!isOpen) return;
 
-    // Handle initial section navigation from context (e.g., from guide edit button)
+    // Handle initial section navigation from context (e.g., from an inbox notification's link)
     if (settingsInitialSection) {
       setActiveSection(settingsInitialSection as SettingsSection);
       setMobileSectionOpen(true);
@@ -186,12 +174,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   // A connector section that lost its connection (e.g. Slack disconnected
   // from another tab) must not stay selected as an empty pane: fall back to
   // Data Connections, derived rather than stored so no effect re-renders.
-  // The Guides section is feature-gated the same way: if the gate closes
-  // while it is selected, fall back rather than render an empty pane.
+  // The Password section falls back the same way under another sign-in.
   const isGatedSection = CONNECTOR_SECTIONS.some((entry) => entry.id === activeSection);
   const effectiveSection: SettingsSection =
     (isGatedSection && !isConnectorSectionActive(activeSection)) ||
-    (activeSection === 'guides' && !guidesEnabled) ||
     (activeSection === 'password' && !passwordLogin)
       ? 'data-connections'
       : activeSection;
@@ -233,14 +219,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return <MemoriesSection />;
       case 'appearance':
         return <AppearanceSection />;
-      case 'guides':
-        if (!guidesEnabled) return null;
-        return (
-          <GuidesSection
-            onGuidesChanged={refreshContextGuides}
-            onNavigateToSkills={() => setActiveSection('skills')}
-          />
-        );
       case 'skills':
         return <SkillsSection />;
       case 'inference-api':

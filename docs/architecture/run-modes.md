@@ -44,7 +44,7 @@ See [Shared Dev Config in Local Mode](../setup/development.md#shared-dev-config-
 
 ### Seed data
 
-`scripts/seed_local.py` runs automatically when the database file is fresh. It creates four canned users -- `admin@quest.local` (Ada Admin), `alice@quest.local` (Alice Chen), `bob@quest.local` (Bob Rivera), `heidi@quest.local` (Heidi Highvolume) -- plus memories, a guide, a skill, a project with a workspace file, and seeded conversations (written through `chat/storage.py` so DB rows and `chat_history.json` files stay coupled).
+`scripts/seed_local.py` runs automatically when the database file is fresh. It creates four canned users -- `admin@quest.local` (Ada Admin), `alice@quest.local` (Alice Chen), `bob@quest.local` (Bob Rivera), `heidi@quest.local` (Heidi Highvolume) -- plus memories, a skill, a project with a workspace file, and seeded conversations (written through `chat/storage.py` so DB rows and `chat_history.json` files stay coupled).
 
 Heidi is a high-volume account for exercising the paged sidebar list and its server-side filters: 140 standalone web conversations (the oldest 10 archived) with `last_message_at` spread over ~3 months, 12 Slack-origin and 12 Inference-API-origin conversations, and a project with 8 conversations.
 
@@ -71,8 +71,6 @@ Staging behaves like prod -- domain restriction on, real credentials, persistent
 
 `run.py --prod`, port 8000, `quest_session` cookie, all credentials required for their respective features.
 
-### First-run bootstrap
+### First-run setup
 
-When the deployment is missing `admin_emails` or Google OAuth client credentials, `run.py --prod` runs an interactive configuration wizard (`scripts/bootstrap_prod.py`, stdlib-only) before the build steps; non-interactive unconfigured startups abort with instructions (`QUEST_SKIP_BOOTSTRAP=1` starts anyway), and `--bootstrap` re-runs the wizard on a configured deployment.
-
-The wizard writes `server_config.json` (admin emails, `allowed_login_domain`, `app_base_url`, Vertex project id), the `google_oauth` per-service credential store file, and a service-account key copy at `<data_dir>/vertex-service-account.json` that `run.py` exports as `GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`). See [Production Deployment](../setup/production.md).
+A staging/prod deployment missing `admin_emails` or a way to sign in starts normally and serves the setup screen in place of the sign-in screen (`auth/first_run.py`, `frontend/src/components/SetupScreen.tsx`), unlocked with the encryption password `run.py` prompted for -- the only command-line input. It writes `server_config.json`, the `google_oauth` credential store file, the first admin's password and, from its models step, an inference provider or a service-account key copy at `<data_dir>/vertex-service-account.json` that `run.py` exports as `GOOGLE_APPLICATION_CREDENTIALS` in staging/prod (`setup_server_vertex_credentials()`). See [Production Deployment -- First-Run Setup](../setup/production.md#first-run-setup).

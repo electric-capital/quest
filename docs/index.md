@@ -5,22 +5,23 @@
 |------|---------|
 | [overview.md](architecture/overview.md) | System map: code map of the top-level directories with their owning docs, request lifecycles, storage, cross-cutting decisions |
 | [admin-impersonation.md](architecture/admin-impersonation.md) | Admin impersonation of another user: session cookie field, endpoints, UI state while impersonating |
-| [admin-system-monitor.md](architecture/admin-system-monitor.md) | Admin System Reports dashboard: conversations, costs, users, models, docs, tables, memories, skills, tool calls, guides, total usage |
+| [admin-system-monitor.md](architecture/admin-system-monitor.md) | Admin System Reports dashboard: conversations, costs, users, models, docs, tables, memories, skills, tool calls, total usage |
 | [analytics.md](architecture/analytics.md) | DuckDB analytics store: append-only event ledgers (skill_loads, tool_calls), writer thread, numbered SQL migrations, backfills, single opener |
 | [auth.md](architecture/auth.md) | Sign-in (Google OAuth or email/password), sessions and cookies, OAuth state, Google service scopes, login admission |
 | [conversation-flags.md](architecture/conversation-flags.md) | Per-conversation opt-in flags set at conversation start: composer popover, magic first line, registry, gating |
+| [conversation-unread.md](architecture/conversation-unread.md) | Unread conversations: the two seqs on the row, what marks a run unread, the focused-client acknowledgement, the sidebar dot |
 | [connect-requests.md](architecture/connect-requests.md) | Inline connect card for admin-configured services the user has not connected: list tool, blocking connect tool, verified resolve |
 | [data-paths.md](architecture/data-paths.md) | Data directory layout, the id-to-path resolvers for conversations, projects and docs, and ownership guards for routes |
 | [encryption-at-rest.md](architecture/encryption-at-rest.md) | Encryption of stored secrets: password-wrapped data key, encrypted columns and credential files, startup unlock |
 | [expensive-resume.md](architecture/expensive-resume.md) | Warning before resuming a long-idle, long-context conversation: rules, cost estimate, send gate, warning card |
-| [memory-suggestions.md](architecture/memory-suggestions.md) | Non-blocking `suggest_memory` tool, the review row, bubbles and inbox Memories tab shared with project memories and doc notes, and model guidance |
+| [memory-suggestions.md](architecture/memory-suggestions.md) | Non-blocking `suggest_memory` tool, review row, bubbles and inbox Memories tab shared with project memories and doc notes, the `archive_memory` card |
+| [notifications.md](architecture/notifications.md) | System notifications (inbox Other tab): rows, kinds, dismiss, the open-count event and badge, guides-to-skills migration notes |
 | [project-memories.md](architecture/project-memories.md) | Project-scoped memories (public projects too): the store, read/suggest tools, the project suggestions bubble and Project Settings table |
 | [feature-gates.md](architecture/feature-gates.md) | Admin on/off switches for optional features, per-user access lists, and how each gate is enforced |
 | [database.md](architecture/database.md) | SQLite schema via SQLAlchemy and Alembic: tables, store modules, migrations, encrypted columns, LLM call analytics |
 | [frontend.md](architecture/frontend.md) | React + Vite frontend: contexts and state, routing, sidebar, composer, chat panel, messages, right-panel file cards, theming |
 | [gemini-api.md](architecture/gemini-api.md) | Conversation loop and tools: tool tiers and dispatch, system prompt, sub-agents, authed requests, suspend, error surfacing |
 | [realtime.md](architecture/realtime.md) | Persistent multiplexed WebSocket: subscribe and catch-up, send and stop, durable and transient events, per-user globals |
-| [guides.md](architecture/guides.md) | Deprecated guides (system prompt presets): snapshot mechanism, feature gate, conversion to skills |
 | [llm-providers.md](architecture/llm-providers.md) | LLM provider layer: Vertex Gemini and Claude, OpenAI-compatible instances, model registry, streaming, refusal fallbacks |
 | [inference-providers.md](architecture/inference-providers.md) | Admin Inference Providers panel: Vertex AI models, admin-added provider instances, first-run quick setup, model health checks |
 | [inference-catalogs.md](architecture/inference-catalogs.md) | Provider model catalogs: the cached router and vendor model lists, self-hosted discovery, quick-setup model suggestions |
@@ -42,7 +43,7 @@
 | [quest-tables-frontend.md](architecture/quest-tables-frontend.md) | Quest Tables UI: routes and gate, sidebar blocks, All Tables, viewer and grid, filters, schema editor, History drawer, card previews, phone layouts |
 | [plugins.md](architecture/plugins.md) | Plugin system: discovery, manifest validation, atomic registration, what a plugin can register, in-tree plugins |
 | [route-dispatch.md](architecture/route-dispatch.md) | Internal route dispatch for tool calls: conversation_id injection, blocked proxy paths |
-| [run-modes.md](architecture/run-modes.md) | Run modes (local, staging, prod): capability flags, zero-credential local mode, dev-config pre-baking, prod bootstrap |
+| [run-modes.md](architecture/run-modes.md) | Run modes (local, staging, prod): capability flags, zero-credential local mode, dev-config pre-baking, first-run setup pointer |
 | [routines.md](architecture/routines.md) | Routines: one-click project prompts with model and skill auto-loads, completion signal, agent create/edit, costs |
 | [scheduling.md](architecture/scheduling.md) | Routine scheduling daemon: schedule types, restart-safe due times, catch-up and missed runs, run ledger, pausing |
 | [script-runner.md](architecture/script-runner.md) | Sandboxed script execution in Podman: restricted and public images, mounts, sandbox tool API and tokens, seccomp |
@@ -62,7 +63,7 @@
 |------|---------|
 | [chat-api.md](api/chat-api.md) | Conversation REST endpoints, the persistent WebSocket protocol, and the Data Connections endpoints |
 | [api-client-usage.md](api/api-client-usage.md) | Frontend TypeScript API client: request helpers, types, error handling |
-| [admin-system-monitor-api.md](api/admin-system-monitor-api.md) | Admin System Reports endpoints: conversation, user, model, docs, tables, memories, skills, tool-call, guide and usage reports, cost conventions |
+| [admin-system-monitor-api.md](api/admin-system-monitor-api.md) | Admin System Reports endpoints: conversation, user, model, docs, tables, memories, skills, tool-call and usage reports, cost conventions |
 | [airtable-api.md](api/airtable-api.md) | Airtable read access via authed_get with a personal access token |
 | [calendar-api.md](api/calendar-api.md) | Google Calendar reads via authed_get and the create and edit event action requests |
 | [docs-api.md](api/docs-api.md) | Google Docs reads via authed_get and Drive, plus exporting a Doc into the workspace |
@@ -90,7 +91,7 @@
 |------|---------|
 | [development.md](setup/development.md) | Local development setup: run.py launcher, data directory, server config, shared dev-config pre-baking |
 | [development-workflows.md](setup/development-workflows.md) | Development workflow: PR-based branching, releases and tags, frontend checks, pytest layout, dependency audits |
-| [production.md](setup/production.md) | Production deployment: first-run bootstrap wizard, serving, HTTPS options |
+| [production.md](setup/production.md) | Production deployment: first-run setup flow served by the app, serving, HTTPS options |
 | [ramp-setup.md](setup/ramp-setup.md) | Creating and configuring a Ramp OAuth app for Quest |
 
 ## Plugins

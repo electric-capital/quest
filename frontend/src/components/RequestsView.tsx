@@ -1,11 +1,13 @@
 /**
  * RequestsView - the full-pane inbox, replacing the chat panel + file
- * browser when the user clicks the inbox button in the sidebar. Two tabs,
- * each with its own URL: Requests (/inbox) lists every action request;
- * Memories (/inbox/memories) is the MemoryInbox of suggestions awaiting
- * review (personal and project memories, doc notes). The tab labels carry
- * the unanswered counts (the Memories one from usePendingSuggestionCounts,
- * like the sidebar badge).
+ * browser when the user clicks the inbox button in the sidebar. Three
+ * tabs, each with its own URL: Requests (/inbox) lists every action
+ * request; Memories (/inbox/memories) is the MemoryInbox of suggestions
+ * awaiting review (personal and project memories, doc notes); Other
+ * (/inbox/other) is the NotificationsInbox of system notifications. The
+ * tab labels carry the unanswered counts (the Memories one from
+ * usePendingSuggestionCounts and the Other one from
+ * useOpenNotificationCount, like the sidebar badge).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -21,6 +23,7 @@ import {
   totalPendingSuggestions,
   usePendingSuggestionCounts,
 } from '../hooks/usePendingSuggestionCounts';
+import { useOpenNotificationCount } from '../hooks/useOpenNotificationCount';
 import { onRequestCountChange } from '../services/requestEvents';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
 import { ReviseFeedbackForm } from './ReviseFeedbackForm';
@@ -33,16 +36,29 @@ import {
 } from './DocEditGroupPreview';
 import { AnimatedWidthButton } from './AnimatedWidthButton';
 import { MemoryInbox } from './MemoryInbox';
+import { NotificationsInbox } from './NotificationsInbox';
 import './RequestsView.css';
 
 type FilterStatus = 'all' | 'open' | 'executed' | 'denied' | 'stopped';
 type PendingAction = 'approve' | 'revise' | 'stop';
-type InboxTab = 'requests' | 'memories';
+type InboxTab = 'requests' | 'memories' | 'other';
 
 export const INBOX_TAB_PATHS: Record<InboxTab, string> = {
   requests: '/inbox',
   memories: '/inbox/memories',
+  other: '/inbox/other',
 };
+
+/** Whether ``pathname`` is one of the inbox's tabs (App.tsx opens the view on these). */
+export function isInboxPath(pathname: string): boolean {
+  return Object.values(INBOX_TAB_PATHS).includes(pathname);
+}
+
+function tabForPath(pathname: string): InboxTab {
+  if (pathname === INBOX_TAB_PATHS.memories) return 'memories';
+  if (pathname === INBOX_TAB_PATHS.other) return 'other';
+  return 'requests';
+}
 
 /** Format a timestamp as a relative or absolute string. */
 function formatTimestamp(isoTimestamp: string): string {
@@ -72,9 +88,10 @@ export function RequestsView() {
 
   const navigate = useNavigate();
   const location = useLocation();
-  // The URL picks the tab (App.tsx keeps the view open on both paths).
-  const tab: InboxTab = location.pathname === INBOX_TAB_PATHS.memories ? 'memories' : 'requests';
+  // The URL picks the tab (App.tsx keeps the view open on every tab's path).
+  const tab = tabForPath(location.pathname);
   const pendingMemoryCount = totalPendingSuggestions(usePendingSuggestionCounts());
+  const openNotificationCount = useOpenNotificationCount();
 
   const [requests, setRequests] = useState<EnrichedActionRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -439,6 +456,7 @@ export function RequestsView() {
   const tabs: { key: InboxTab; label: string; count: number }[] = [
     { key: 'requests', label: 'Requests', count: counts.open },
     { key: 'memories', label: 'Memories', count: pendingMemoryCount },
+    { key: 'other', label: 'Other', count: openNotificationCount },
   ];
 
   return (
@@ -480,7 +498,9 @@ export function RequestsView() {
 
       <div className="requests-view-content" ref={contentRef}>
         <div className="requests-view-inner">
-          {tab === 'memories' ? (
+          {tab === 'other' ? (
+            <NotificationsInbox />
+          ) : tab === 'memories' ? (
             <MemoryInbox
               onGoToConversation={handleGoToConversation}
               // The doc link navigates itself; the inbox closes first, as

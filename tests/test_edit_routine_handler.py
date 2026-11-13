@@ -78,7 +78,7 @@ def _setup(stores):
 
 def test_validate_rejects_unknown_key():
     with pytest.raises(ValueError, match="Unknown parameter"):
-        EditRoutineHandler().validate_params({"routine_id": "r", "guide_id": "g"})
+        EditRoutineHandler().validate_params({"routine_id": "r", "no_such_param": "x"})
 
 
 def test_validate_rejects_missing_routine_id():
@@ -615,7 +615,7 @@ def test_create_validate_requires_name_and_prompt():
         CreateRoutineHandler().validate_params({"name": "n"})
     with pytest.raises(ValueError, match="Unknown parameter"):
         CreateRoutineHandler().validate_params(
-            {"name": "n", "prompt": "p", "guide_id": "g"}
+            {"name": "n", "prompt": "p", "no_such_param": "x"}
         )
 
 
@@ -734,7 +734,6 @@ def test_create_execute_full(_isolated_db):
     created = _run(stores["routine_store"].get_routine(user["id"], result["routine_id"]))
     assert created["name"] == "Weekly Digest"
     assert created["model"] == model
-    assert created["guide_id"] is None
     sched = _run(stores["schedule_store"].get_schedule_for_routine(result["routine_id"]))
     assert sched["schedule_type"] == "daily"
     assert sched["daily_time_utc"] == "08:00"

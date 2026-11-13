@@ -57,7 +57,7 @@ All conversation REST endpoints are defined in `chat/routes/conversations.py`. S
   - Returns the same seed-friendly shape as `POST /conversations`. Surfaced as the "Duplicate Workspace" item in the sidebar conversation meatball menu (`Sidebar.tsx`), which navigates to the new conversation.
 - **GET `/app/api/conversations/{id}`** -- Get conversation with full message history (`get_conversation_endpoint()`). Response includes `last_message_seq` so the persistent-WS client can subscribe with a usable `last_seq` right after hydration. Also carries the sidebar title fields -- `title` (resolved via `ChatStorage._resolve_list_title()`), `custom_name`, and `archived` -- so the chat header title unit shows the same title as the sidebar row. See [Realtime Architecture](../architecture/realtime.md).
 - **GET `/app/api/conversations/{id}/tail?after_seq=N`** -- Return only messages with `seq > after_seq` (`get_conversation_tail()`), fetched by the persistent-WS client after each `message_appended` event. After the ownership check the rows come from the replay buffer when it holds all of them, else from `chat_history.json` read in a worker thread (see [Realtime -- Replay Buffer](../architecture/realtime.md#replay-buffer)). Response shape: `{messages: [...], last_message_seq: N}`.
-- **PUT `/app/api/conversations/{id}/archive`** -- Soft-delete a conversation (`archive_conversation_endpoint()`). Delegates to `archive_conversation()` in `db/conversation_store.py`.
+- **PUT `/app/api/conversations/{id}/archive`** -- Soft-delete a conversation (`archive_conversation_endpoint()`). Delegates to `archive_conversation()` in `db/conversation_store.py`, which also marks it read.
 - **PUT `/app/api/conversations/{id}/unarchive`** -- Restore an archived conversation (`unarchive_conversation_endpoint()`). Delegates to `unarchive_conversation()` in `db/conversation_store.py`.
 - **PUT `/app/api/conversations/{id}/rename`** -- Set or clear a custom name (`rename_conversation_endpoint()`). Max length: `MAX_CONVERSATION_NAME_LENGTH` in `db/conversation_store.py`. Empty strings normalized to NULL.
 - **PATCH `/app/api/conversations/{id}/model`** -- Update the LLM model for a conversation (`update_conversation_model_endpoint()`). Uses `set_conversation_model()` in `db/conversation_store.py` (always overwrites).
@@ -93,6 +93,12 @@ Returns `404 Not Found` with error code `conversation_not_found` when the conver
 
 ---
 
+### Mark Conversation Read
+
+**Endpoint**: `POST /app/api/conversations/{conversation_id}/read` (`mark_conversation_read_endpoint()` in `chat/routes/conversations.py`) -- a client showing the conversation in a focused window acknowledges it up to a message seq. The list rows and the detail response carry the `unread_seq` / `read_seq` pair it moves. See [Conversation Unread State](../architecture/conversation-unread.md).
+
+---
+
 ### Archive Conversation
 
 Archive a conversation (soft-delete). Archived conversations are excluded from list results by default and hidden from the sidebar.
@@ -110,6 +116,7 @@ Archive a conversation (soft-delete). Archived conversations are excluded from l
 
 **Side effects**:
 - Sets `archived=True` on the conversation row in the `conversations` table via `archive_conversation()` in `db/conversation_store.py`
+- Marks the conversation read and publishes `conversation_unread_changed` ([Conversation Unread State](../architecture/conversation-unread.md#when-a-conversation-becomes-read))
 
 **Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `conversation_not_found`)
 
@@ -293,7 +300,7 @@ There is no per-conversation WebSocket: clients use the persistent socket and re
 
 ### Send Message
 
-`{op: "send_message", conversation_id, message, model?, thinking_effort?, guide_id?, skill_ids?, timezone?, attachments?, flags?, attached_filenames?, client_send_id?}` kicks off a model run on this conversation (`guide_id` is only sent by the routine auto-send path -- the composer no longer offers guides). `thinking_effort`: [LLM Providers -- Thinking effort](../architecture/llm-providers.md#thinking-effort).
+`{op: "send_message", conversation_id, message, model?, thinking_effort?, skill_ids?, timezone?, attachments?, flags?, attached_filenames?, client_send_id?}` kicks off a model run on this conversation. `thinking_effort`: [LLM Providers -- Thinking effort](../architecture/llm-providers.md#thinking-effort).
 
 The user message is appended to `chat_history.json` (which fires `message_appended` to every subscriber), the sending connection alone receives the delivery receipt `{type: "send_message_accepted", conversation_id, seq, client_send_id?}` (the optional opaque `client_send_id` from the request is echoed verbatim so the sender can match the receipt to its optimistic bubble; no receipt is sent when the append fails -- see [Realtime -- Delivery Receipt and Failed Sends](../architecture/realtime.md#delivery-receipt-and-failed-sends)), then `run_conversation_turn()` runs as a cancellable task.
 
@@ -333,6 +340,7 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
 - Per-user globals:
   - **`request_count_changed`** (`counts: {all, open, executed, denied, stopped}`),
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
+  - **`conversation_unread_changed`** (`conversation_id`, `project_id`, `unread_seq`, `read_seq`; see [Conversation Unread State](../architecture/conversation-unread.md#realtime)),
   - **`file_list_changed`** (`conversation_id`, `project_id`, `scope: "project" | "conversation"`; emitted from each workspace-mutating tool handler and REST route (the copy routes also on a 500 `copy_failed`, since a failed copy may have written part of the destination) so file browsers can silent-refresh mid-turn; project-scoped writes fan out across sibling-conversation tabs),
   - **`wait_handle_resolved`** (`conversation_id`, `handle_id`, `kind`, `status`, optional `request_id`, optional `response`),
   - **`routine_list_changed`** (`project_id`; emitted when a `create_routine`/`edit_routine` action request executes so the sidebar refreshes its cached per-project routine list),
@@ -372,16 +380,16 @@ These endpoints are defined in `chat/routes/user.py` and `chat/routes/admin.py`.
 
 - **POST `/app/api/admin/shutdown`** -- Graceful server shutdown (`admin_shutdown()` in `chat/routes/admin.py`). Admin-only (checked via `is_admin()` in `chat/auth.py`). Sets `app.state.shutdown_event`; lifespan handler sends SIGTERM after 1-second delay.
 - **GET `/app/api/settings`** -- Get user settings (`get_settings()` in `chat/routes/user.py`). Reads from `settings` column in user record.
-- **PUT `/app/api/settings`** -- Update user settings (`update_settings()`). Calls `invalidate_user_sessions()` to discard cached SDK sessions when system prompt changes.
+- **PUT `/app/api/settings`** -- Update user settings (`update_settings()`). Calls `invalidate_user_sessions()` to discard the user's cached SDK sessions.
   - Accepts `default_model` (per-user web/composer default for private conversations) and `public_default_model` (the same for public-project conversations), each validated via `resolve_model()` (Vertex registry ids and `<instance>:<wire_id>` instance-model ids) with empty string normalised to NULL (clear) and unknown ids rejected with 400 `invalid_model` -- mirrors the `slack_default_model` handling. The FE writes one of them best-effort only on the first send of a new chat, under the key matching the chat's visibility, with `default_thinking_effort` / `public_default_thinking_effort` (the pick's level; empty string clears, validated only when a turn uses it).
   - Also accepts `theme` (Settings > Appearance colour scheme): `"light"` / `"dark"` stored as-is, `"auto"` or empty string normalised to NULL (follow the OS), anything else rejected with 400 `invalid_theme`. `GET /app/api/me` surfaces the stored value as `theme` (null = auto) so the FE can apply it on hydration.
 - **GET `/api/instructions`** -- Get full API documentation with embedded API key (`get_instructions()` in `quest.py`). Includes all services regardless of connection status (unlike system prompts which are filtered). Source of truth: `get_instructions_content()` in `api/instructions.py`.
 - **POST `/api/reset-api-key`** -- Generate a new API key (`api_reset_api_key()` in `quest.py`). Old key stops working immediately. Key generation via `generate_api_key()` in `auth/config.py`.
-- **GET `/app/api/connectors`** -- Get the user's Data Connections rows (`get_connectors()`). Returns a LIST of generically renderable rows (`kind: "oauth"` with `connect_url`, or `"api_key"` with `key_url`/`key_field`/`disconnect_url`; `available: false` hides a row; scope-mismatch detection for Google Services via `needs_reauth`). A multi-connection plugin row (always for `kind: "form"`) adds `multi_connection`, `connection_limit`, `connections` (per-connection `{id, account, description, is_default, needs_reauth, warning, created_at}`, default first, never a secret or form value), `connections_url` and, for `form`, `form_fields` with select options resolved at request time; a multi-connection `api_key` row omits the service-wide key / disconnect URLs. Re-fetched after OAuth popup completion. See [Settings Data Connections](../architecture/settings-data-connections.md).
+- **GET `/app/api/connectors`** -- Get the user's Data Connections rows (`get_connectors()`). Returns a LIST of generically renderable rows (`kind: "oauth"` with `connect_url` (plus optional plugin `disconnect_url`), or `"api_key"` with `key_url`/`key_field`/`disconnect_url`; `available: false` hides a row; scope-mismatch detection for Google Services via `needs_reauth`). A multi-connection plugin row (always for `kind: "form"`) adds `multi_connection`, `connection_limit`, `connections` (per-connection `{id, account, description, is_default, needs_reauth, warning, created_at}`, default first, never a secret or form value), `connections_url` and, for `form`, `form_fields` with select options resolved at request time; a multi-connection `api_key` row omits the service-wide key / disconnect URLs. Re-fetched after OAuth popup completion. See [Settings Data Connections](../architecture/settings-data-connections.md).
 - **POST `/auth/connections/{service}`**, **PUT / DELETE `/auth/connections/{service}/{id}`** -- per-connection management for multi-connection plugins (`auth/connections.py`, cookie or API-key auth): add (`{values, description?}` for `form` kind, run through the plugin's `verify` hook; `{api_key, description?}` for `api_key` kind; 201 `{connection}`), change the description / make default / re-enter credentials (`values` merged over the stored ones, `api_key`), delete (204, a new default is promoted). Errors are `{error, message}` details, including `invalid_request`, `invalid_values` (per-field `fields`), `invalid_description`, `invalid_key`, `verify_failed`, `account_unresolved`, `account_mismatch`, `use_connect_url` (400 for oauth kind), `connection_exists` (409, with the existing `connection_id`), `conflict` (409 on a lost unique-index race), `connection_limit`, `cannot_unset_default`, `connection_not_found`, `unknown_service` (404 for a service that is not multi-connection), and 429 `rate_limited` with `Retry-After` past 10 verify / api_key attempts (add or re-entry) per user per rolling minute (a `validate_key` rejection does not count). See [User Connections](../architecture/user-connections.md).
 - **POST `/auth/service-key/{service}`**, **POST `/auth/service-key/{service}/remove`** -- save / remove the pasted key of a single-connection `api_key`-kind plugin (`auth/service_key.py`, cookie auth); 404 for multi-connection plugins, which use the connection routes above.
 - **POST `/app/api/logout`** -- Log out, preserving data (`logout()`). Revokes the account's sessions ([Auth](../architecture/auth.md#session-cookies)), clears the cookie.
-- **POST `/app/api/logout-and-disconnect`** -- Log out and revoke OAuth tokens (`logout_and_disconnect()`).
+- **POST `/app/api/logout-and-disconnect`** -- Log out and revoke OAuth tokens (`logout_and_disconnect()`); plugins' optional `revoke` hooks run first (as in delete-account).
 - **POST `/app/api/delete-account`** -- Delete all account data (`delete_account()`). Cascades to memories, action requests, and user record.
 
 ---
@@ -395,7 +403,7 @@ All memory endpoints are defined in `chat/memory_routes.py` with data access in 
 - **GET `/app/api/memories/{memory_id}`** -- Get memory (`get_user_memory()`).
 - **PUT `/app/api/memories/{memory_id}`** -- Update memory content (`update_user_memory()`). FTS5 index updated via `memories_au` trigger.
 - **DELETE `/app/api/memories/{memory_id}`** -- Delete memory (`delete_user_memory()`). FTS5 index updated via `memories_ad` trigger.
-- **PUT `/app/api/memories/{memory_id}/archive`** -- Archive memory (`archive_user_memory()`).
+- **PUT `/app/api/memories/{memory_id}/archive`** -- Archive memory (`archive_user_memory()`), with no reason. Every memory object carries `archive_reason`, non-null only when the `archive_memory` action request archived it (see [Action Requests](../architecture/action-requests.md)).
 - **PUT `/app/api/memories/{memory_id}/unarchive`** -- Unarchive memory (`unarchive_user_memory()`).
 
 ---
@@ -429,18 +437,13 @@ Action requests are created by the LLM agent during conversations and persist wi
 
 ---
 
-## Guide Endpoints
+## Notification Endpoints
 
-All guide endpoints are defined in `chat/guide_routes.py` with data access in `db/guide_store.py`. See [Guides Architecture](../architecture/guides.md) for the full architecture.
+System notifications (the inbox's Other tab) are served by `chat/notification_routes.py` with data access in `db/notification_store.py`; what a notification is, its kinds and the `notifications_changed` event are in [Notifications](../architecture/notifications.md).
 
-Guides are named system prompt presets, **deprecated in favor of skills**: new guides cannot be created, the composer no longer offers guide selection (only routine guide overrides still send a `guide_id`), new conversations no longer fall back to the default guide, and a missing default guide is never recreated. Existing guides remain manageable in Settings so users can convert them.
-
-- **GET `/app/api/guides`** -- List guides. Default guide first, then alphabetically. Does not auto-create a default.
-- **POST `/app/api/guides`** -- Returns 410 `guides_deprecated`.
-- **POST `/app/api/guides/{guide_id}/convert-to-skill`** -- Convert the guide into a private skill and delete the guide (see [Guides Architecture -- Migration to Skills](../architecture/guides.md#migration-to-skills)).
-- **GET `/app/api/guides/{guide_id}`** -- Get guide.
-- **PUT `/app/api/guides/{guide_id}`** -- Update guide. Updating `content` calls `invalidate_user_sessions()` to discard cached SDK sessions.
-- **DELETE `/app/api/guides/{guide_id}`** -- Delete any guide, the default included. Existing conversations using the deleted guide are unaffected (they use snapshotted content).
+- **GET `/app/api/notifications`** -- The user's notifications, newest first, open and dismissed, with `open_count` (`list_notifications()`).
+- **GET `/app/api/notifications/count`** -- `open_count` alone, for the sidebar inbox badge (`count_notifications()`).
+- **POST `/app/api/notifications/{notification_id}/dismiss`** -- Dismiss one (`dismiss_notification()`); idempotent, 404 `not_found` for another user's or an unknown id.
 
 ---
 

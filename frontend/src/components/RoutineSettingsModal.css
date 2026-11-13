@@ -237,47 +237,6 @@
   opacity: 0.6;
 }
 
-/* Read-only display for a leftover (deprecated) guide attachment */
-.routine-settings-guide-readonly {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  background-color: rgba(255, 255, 255, 0.05);
-  box-sizing: border-box;
-}
-
-.routine-settings-guide-name {
-  color: rgba(255, 255, 255, 0.87);
-  font-size: 0.875rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.routine-settings-guide-clear-button {
-  padding: 0.25rem 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  background: none;
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 0.8125rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-  flex-shrink: 0;
-}
-
-.routine-settings-guide-clear-button:hover:not(:disabled) {
-  background-color: rgba(255, 255, 255, 0.05);
-}
-
-.routine-settings-guide-clear-button:disabled {
-  opacity: 0.6;
-}
-
 /* Schedule fields wrapper -- grayed out when schedule is disabled */
 .routine-settings-schedule-fields {
   transition: opacity 0.15s;
@@ -651,24 +610,6 @@
     border-color: rgba(0, 0, 0, 0.2);
     background-color: rgba(0, 0, 0, 0.03);
     color: #1a1a1a;
-  }
-
-  .routine-settings-guide-readonly {
-    border-color: rgba(0, 0, 0, 0.2);
-    background-color: rgba(0, 0, 0, 0.03);
-  }
-
-  .routine-settings-guide-name {
-    color: #1a1a1a;
-  }
-
-  .routine-settings-guide-clear-button {
-    border-color: rgba(0, 0, 0, 0.2);
-    color: rgba(0, 0, 0, 0.6);
-  }
-
-  .routine-settings-guide-clear-button:hover:not(:disabled) {
-    background-color: rgba(0, 0, 0, 0.05);
   }
 
   .routine-settings-nav {

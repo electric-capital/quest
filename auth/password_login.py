@@ -14,9 +14,8 @@ Passwords are only ever set through a one-time link (``password_tokens``):
   admission policy can request a *reset* link from the sign-in screen --
   for an address without an account this is self-service sign-up, and
   the emailed link proves they own the address;
-- the prod bootstrap wizard hashes the first admin's password itself and
-  hands it over through the pending-passwords file (applied at startup by
-  ``apply_pending_admin_passwords``).
+- the first admin chooses theirs in the first-run setup flow
+  (auth/first_run.py), which stores the hash directly.
 
 Logged-in users can change their password (current password required when
 one is set). Setting a password advances the account's session epoch, and
@@ -27,8 +26,6 @@ so a password change or reset signs out every other session.
 import asyncio
 import logging
 import re
-import time
-from collections import defaultdict, deque
 from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -41,14 +38,13 @@ from auth.config import (
     oauth_base_url,
 )
 from auth.mailer import MailerError, send_email, smtp_configured
+from auth.rate_limit import SlidingWindow
 from auth.session import forbid_impersonation, get_user_from_cookie, set_session_cookie
 from config.password_hashing import (
     burn_verify_time,
     hash_password,
     password_fingerprint,
     password_problem,
-    read_pending_admin_passwords,
-    pending_admin_passwords_path,
     verify_password,
 )
 from db.password_store import (
@@ -76,34 +72,8 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Rate limiting (in-memory, per process)
 # ---------------------------------------------------------------------------
 
-class _SlidingWindow:
-    """Allow at most ``limit`` events per key within ``window`` seconds."""
-
-    def __init__(self, limit: int, window: float):
-        self.limit = limit
-        self.window = window
-        self._events: dict[str, deque] = defaultdict(deque)
-
-    def _trim(self, key: str, now: float) -> deque:
-        events = self._events[key]
-        while events and events[0] <= now - self.window:
-            events.popleft()
-        if not events:
-            self._events.pop(key, None)
-            return deque()
-        return events
-
-    def blocked(self, key: str) -> bool:
-        return len(self._trim(key, time.monotonic())) >= self.limit
-
-    def hit(self, key: str) -> None:
-        now = time.monotonic()
-        self._trim(key, now)
-        self._events[key].append(now)
-
-    def reset(self, key: str) -> None:
-        self._events.pop(key, None)
-
+# Module alias: the limiter class lives in auth/rate_limit.py.
+_SlidingWindow = SlidingWindow
 
 # Failed password checks: per account and per client address.
 _failed_by_email = _SlidingWindow(limit=10, window=15 * 60)
@@ -185,7 +155,7 @@ def _default_name(email: str) -> str:
     return " ".join(w.capitalize() for w in words) or local
 
 
-async def _ensure_account(email: str, name: str = "") -> dict:
+async def ensure_account(email: str, name: str = "") -> dict:
     """The user row for *email*, created (without a password) if missing."""
     user = await get_user_by_email(email)
     if user:
@@ -395,7 +365,7 @@ async def set_password_with_link(request: Request):
             detail={"error": "invalid_link", "message": "This link is invalid or has expired."},
         )
 
-    await _ensure_account(email, str(body.get("name") or ""))
+    await ensure_account(email, str(body.get("name") or ""))
     password_hash = await asyncio.to_thread(hash_password, password)
     await set_password_hash(email, password_hash)
     _failed_by_email.reset(email)
@@ -450,32 +420,3 @@ async def change_password(request: Request):
     user = await get_user_by_email(email)
     response = JSONResponse({"success": True})
     return set_session_cookie(response, user, password_fingerprint(password_hash))
-
-
-# ---------------------------------------------------------------------------
-# Startup hook
-# ---------------------------------------------------------------------------
-
-async def apply_pending_admin_passwords(data_dir) -> list[str]:
-    """Apply passwords the prod bootstrap wizard left for the server.
-
-    The wizard runs before the database exists, so it writes
-    ``{email: password_hash}`` to ``<data_dir>/pending_admin_passwords.json``;
-    this creates missing accounts, stores the hashes and deletes the file.
-    Returns the emails applied.
-    """
-    pending = read_pending_admin_passwords(data_dir)
-    path = pending_admin_passwords_path(data_dir)
-    if not pending:
-        if path.exists():
-            path.unlink()
-        return []
-    applied = []
-    for email, password_hash in pending.items():
-        await _ensure_account(email)
-        await set_password_hash(email, password_hash)
-        applied.append(email)
-        logger.info("[PasswordLogin] Applied bootstrap password for %s", email)
-    path.unlink()
-    return applied
-

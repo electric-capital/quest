@@ -3,7 +3,7 @@
 Provides async CRUD operations for user projects. Projects group conversations
 with a shared workspace and optional project guide.
 
-This module follows the same async pattern as db/guide_store.py and
+This module follows the same async pattern as db/skill_store.py and
 db/conversation_store.py: each function opens a fresh AsyncSessionLocal() session.
 """
 
@@ -13,7 +13,7 @@ from typing import Optional
 from sqlalchemy import select, delete, func, case
 
 from db.engine import AsyncSessionLocal
-from db.models import Project, ProjectDocSource, Conversation, Skill, User
+from db.models import Project, ProjectDocSource, Conversation, Skill
 
 
 # Maximum project name length
@@ -129,37 +129,6 @@ async def list_projects(user_id: int, include_archived: bool = True) -> list[dic
             d["conversation_count"] = count or 0
             output.append(d)
         return output
-
-
-async def list_all_project_guides() -> list[dict]:
-    """List every project with non-empty project instructions (admin reporting).
-
-    The ``projects.guide`` text field ("Project Instructions" in the UI).
-    Returns owner identity plus ``content_length`` instead of the text
-    itself; projects with empty instructions are skipped. Ordered by owner
-    email, then project name.
-    """
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Project, User.email, User.name)
-            .join(User, User.id == Project.user_id)
-            .where(Project.guide != "")
-            .order_by(User.email.asc(), Project.name.asc())
-        )
-        rows = []
-        for project, email, name in result.all():
-            rows.append({
-                "id": project.id,
-                "user_id": project.user_id,
-                "user_email": email,
-                "user_name": name or "",
-                "name": project.name,
-                "public": bool(project.public),
-                "content_length": len(project.guide or ""),
-                "created_at": project.created_at.isoformat() if project.created_at else None,
-                "updated_at": project.updated_at.isoformat() if project.updated_at else None,
-            })
-        return rows
 
 
 async def update_project(

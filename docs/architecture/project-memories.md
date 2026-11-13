@@ -17,7 +17,7 @@ Every project, public ones included, keeps its own memories beside each user's p
 - `chat/project_memory_routes.py` -- owner CRUD under `/app/api/projects/{id}/memories` and the suggestion review routes, mirroring `chat/memory_routes.py`.
 - `chat/routes/conversations.py` -- `pending_project_memory_suggestions` on `GET /conversations/{id}`.
 - `frontend/src/components/MemorySuggestions.tsx` -- `kind="project"` renders the project bubble and panel; `MemorySuggestionsBar` shows it beside the personal and doc note bubbles above the composer. The project kind has its own icon, wording and a fixed amber colour so it never reads as another kind's suggestion under any colour theme.
-- `frontend/src/components/settings/MemoriesSection.tsx` -- the memories table; with a `projectId` it manages the project's memories and is the Memories section of `ProjectSettingsModal.tsx`.
+- `frontend/src/components/settings/MemoriesSection.tsx` -- the memories table; with a `projectId` it manages the project's memories and is the Memories section of `ProjectSettingsModal.tsx`. A collapsed row shows up to two lines of the text. Its filter box matches a memory's text or, from four characters up, any part of its id (the model quotes ids in its replies); a row found by id prints the id, as does every expanded row.
 
 ## Flow
 
@@ -37,6 +37,6 @@ Every project, public ones included, keeps its own memories beside each user's p
 ## Design Decisions
 
 - **Separate tables, not a `project_id` column on `memories`.** Every personal-memory query stays untouched, so a project fact can never leak into `memory_search` of another project or a standalone chat.
-- **Suggestions only, no card.** Project memories are meant to accumulate without interrupting the conversation; the review bubble is the single consent point, also for explicit requests.
+- **Suggestions only, no card, for new memories.** Project memories are meant to accumulate without interrupting the conversation; the review bubble is the single consent point, also for explicit requests. Retiring one is the exception: the `archive_memory` action request with `scope: "project"` archives a project memory with a recorded reason behind an approval card ([Action Requests](action-requests.md)), in private projects only.
 - **Available in public projects.** A public conversation sees only its own project's memories, which nothing outside the project can read, and every write waits for the user's accept -- so no internal data reaches the internet-facing sandbox and nothing leaves the project. The user's personal memories stay unreachable there.
 - **A second bubble, not a mixed panel.** The two stores answer different questions (who the user is vs. what the project knows); separate bubbles make the destination of each accept obvious.

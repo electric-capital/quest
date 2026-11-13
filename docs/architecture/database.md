@@ -2,7 +2,7 @@
 
 ## Overview
 
-Every piece of structured user data -- accounts and their secrets, memories, guides, projects, routines and schedules, conversation metadata, action requests, skills and their shares/auto-loads, wait handles, Quest Doc and Quest Table metadata and LLM call analytics -- is stored in a SQLite database at `data/quest.db`, managed by SQLAlchemy ORM with Alembic for schema migrations. The set of tables is the set of `Base` subclasses in `db/models.py` (one ORM class per table, columns, indexes and FK actions declared there); the `db/` package provides the engine configuration, those models, and one `*_store.py` data access module per concern. Append-only event ledgers (skill loads, tool calls) live outside it, in the DuckDB [Analytics Store](analytics.md).
+Every piece of structured user data -- accounts and their secrets, memories, system notifications, projects, routines and schedules, conversation metadata, action requests, skills and their shares/auto-loads, wait handles, Quest Doc and Quest Table metadata and LLM call analytics -- is stored in a SQLite database at `data/quest.db`, managed by SQLAlchemy ORM with Alembic for schema migrations. The set of tables is the set of `Base` subclasses in `db/models.py` (one ORM class per table, columns, indexes and FK actions declared there); the `db/` package provides the engine configuration, those models, and one `*_store.py` data access module per concern. Append-only event ledgers (skill loads, tool calls) live outside it, in the DuckDB [Analytics Store](analytics.md).
 
 Chat message history remains in JSON files (`data/chats/{conversation_id}/chat_history.json`). Conversation ownership, timing metadata, custom names and model selection live in the `conversations` table.
 
@@ -52,7 +52,7 @@ Keys are written by the generic routes `POST /auth/service-key/{service}` and `P
 
 ## Memory Model
 
-The `Memory` model in `db/models.py` maps to the `memories` table. Memories are markdown text blobs associated with a user (size capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced at the application layer), supporting inline editing, soft-delete via archiving, and full-text search. The columns are on the class; ids are UUIDs generated at the application layer, `updated_at` is stamped on content update, archive and unarchive, and archived rows are excluded from list/search by default.
+The `Memory` model in `db/models.py` maps to the `memories` table: markdown text blobs owned by a user (capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, app-enforced), with inline editing, soft-delete via archiving and full-text search. Ids are app-generated UUIDs; `updated_at` is stamped on content update, archive and unarchive, and archived rows are excluded from list/search by default. `archive_reason` (also on `project_memories`) is set only by the [`archive_memory` request](memory-suggestions.md#archiving-a-memory-by-request) and cleared on unarchive.
 
 The composite `(user_id, archived)` index serves the common query, listing a user's non-archived memories; `user_id` cascades on user delete.
 
@@ -76,23 +76,9 @@ The `DreamRun` model maps to `dream_runs`: one row per dream with its outcome, m
 
 When a user account is deleted, all of that user's memories are automatically removed via the database-level `ON DELETE CASCADE` foreign key from `memories.user_id` to `users.id`. Additionally, `delete_all_user_memories()` in `db/memory_store.py` is available for explicit bulk deletion at the application layer (e.g., during account deletion flows that need to perform additional cleanup).
 
-## Guide Model
+## UserNotification Model
 
-The `Guide` model in `db/models.py` maps to the `guides` table. Guides are named system prompt presets associated with a user, used to provide custom instructions to the LLM. Each user has a default guide (`is_default`, migrated from the old `custom_system_prompt` setting). The columns are on the class; name length and content size are capped at the application layer by `MAX_GUIDE_NAME_LENGTH` / `MAX_GUIDE_CONTENT_SIZE` in `db/guide_store.py`.
-
-A composite unique index on `(user_id, name)` (declared in `__table_args__` on the model) prevents duplicate guide names per user. The `user_id` column has a foreign key to `users.id` with `ON DELETE CASCADE`, so guides are automatically deleted when the parent user record is removed.
-
-### Data Migration
-
-The Alembic migration `alembic/versions/4e8960c4dacc_create_guides_table.py` creates the `guides` table and migrates existing data:
-
-1. Creates the `guides` table with all columns and indexes
-2. Creates the `ix_guides_user_id_name` composite unique index
-3. For each existing user, creates a default guide (`is_default=True`, `name="Default"`) with the content copied from the user's `settings.custom_system_prompt` field (if present)
-
-### Cascade Deletion
-
-When a user account is deleted, all of that user's guides are automatically removed via the database-level `ON DELETE CASCADE` foreign key from `guides.user_id` to `users.id`. Additionally, `delete_all_user_guides()` in `db/guide_store.py` is available for explicit bulk deletion at the application layer (called during account deletion flows in `chat/routes/user.py`).
+The `UserNotification` model maps to `user_notifications`: one row per system notification of a user, open until dismissed, cascading with the user ([Notifications](notifications.md)). Columns are on the class; data access is `db/notification_store.py`. The table is created by migration `c5a9e3f7d2b1`, which also writes its first rows.
 
 ## Project Model
 
@@ -111,11 +97,11 @@ When a user account is deleted, all of that user's projects are automatically re
 
 ## Routine Model
 
-The `Routine` model in `db/models.py` maps to the `routines` table. Routines are canned prompts attached to projects that can be run in one click, combining a prompt, an optional guide override, and an optional model specification. See [Routines Architecture](routines.md) for the full feature description.
+The `Routine` model in `db/models.py` maps to the `routines` table. Routines are canned prompts attached to projects that can be run in one click, combining a prompt and an optional model specification. See [Routines Architecture](routines.md) for the full feature description.
 
-The columns are on the class; the name length and prompt size caps are `MAX_ROUTINE_NAME_LENGTH` / `MAX_ROUTINE_PROMPT_SIZE` in `db/routine_store.py`. Semantics the schema cannot express: `user_id` is denormalised from the project for fast per-user queries; `guide_id` NULL means no guide override; `model` NULL means the user's current model selection on manual runs or the server default on scheduled runs; `updated_at` is stamped on create and on every value-changing update and doubles as the optimistic-concurrency token for `update_routine()` (see [Routines Architecture](routines.md), Optimistic Concurrency) -- legacy NULL rows were backfilled from `created_at` by Alembic migration `a9e2be6b9caa`.
+The columns are on the class; the name length and prompt size caps are `MAX_ROUTINE_NAME_LENGTH` / `MAX_ROUTINE_PROMPT_SIZE` in `db/routine_store.py`. Semantics the schema cannot express: `user_id` is denormalised from the project for fast per-user queries; `model` NULL means the user's current model selection on manual runs or the server default on scheduled runs; `updated_at` is stamped on create and on every value-changing update and doubles as the optimistic-concurrency token for `update_routine()` (see [Routines Architecture](routines.md), Optimistic Concurrency) -- legacy NULL rows were backfilled from `created_at` by Alembic migration `a9e2be6b9caa`.
 
-An index on `project_id` and a composite unique index on `(project_id, name)` are declared in `__table_args__` on the model. The composite unique index prevents duplicate routine names within a project. The `project_id` column has a foreign key to `projects.id` with `ON DELETE CASCADE`, so routines are automatically deleted when the parent project is removed. The `user_id` column has a foreign key to `users.id` with `ON DELETE CASCADE`. The `guide_id` column uses `ON DELETE SET NULL` so that deleting a guide sets the routine's guide reference to NULL rather than deleting the routine.
+An index on `project_id` and a composite unique index on `(project_id, name)` are declared in `__table_args__` on the model. The composite unique index prevents duplicate routine names within a project. The `project_id` column has a foreign key to `projects.id` with `ON DELETE CASCADE`, so routines are automatically deleted when the parent project is removed. The `user_id` column has a foreign key to `users.id` with `ON DELETE CASCADE`.
 
 ### Cascade Deletion
 
@@ -123,7 +109,6 @@ Routines and their schedules are cleaned up in multiple scenarios:
 
 - **Project deletion**: `ON DELETE CASCADE` FK on `routines.project_id` removes all routines when the parent project is deleted. Schedules are then removed via `ON DELETE CASCADE` FK on `routine_schedules.routine_id`
 - **User account deletion**: `delete_all_user_routines()` in `db/routine_store.py` is called explicitly during account deletion in `chat/routes/user.py`; `ON DELETE CASCADE` FKs on `routines.user_id` and `routine_schedules.user_id` also provide database-level cleanup
-- **Guide deletion**: `ON DELETE SET NULL` FK on `routines.guide_id` sets the guide reference to NULL, preserving the routine
 
 ## RoutineSchedule Model
 
@@ -162,7 +147,8 @@ The columns are on the class. The ones whose meaning the schema cannot carry:
 - `model` NULL means no model has been set yet (new conversation before first message). Persisted on first message by `run_conversation_turn()` via `update_conversation_model()`, and updated explicitly by the PATCH endpoint via `set_conversation_model()`. When a routine specifies a model, it is set at conversation creation time.
 - `thinking_effort` -- the level picked for `model` ([LLM Providers -- Thinking effort](llm-providers.md#thinking-effort)); NULL = default; written with `model`; migration `a9d3e7f1c5b2`, no backfill.
 - `origin` records where the conversation was created. There is no enum: the values are the `origin=` literals passed by the `ChatStorage.create_*_conversation()` constructors in `chat/storage.py` (Slack DMs, cross-user subagent runs, inference API calls), and NULL -- pre-migration rows and the web UI -- is treated as web everywhere. The `GET /conversations/{id}` endpoint and the sidebar filters (`list_conversations_meta` in `db/conversation_store.py`) branch on it -- see [Slack Socket Mode](slack-socket-mode.md).
-- `last_message_seq` is the monotonic high-water mark for the per-conversation seq stamped on each message in `chat_history.json`. Cached here so the persistent-WS subscribe handler can answer `up_to_date` / `catchup` / `resync` without reading the file. Advanced by `record_messages_appended()` (one session per append, also setting `last_message_at` and `auto_title`) after each successful append. The JSON file is the source of truth for the seq on each message; this column is a denormalised cache. Added by Alembic migration `2a4c7e9b1d3f`; backfilled in `quest.py:lifespan` for pre-migration rows. See [Realtime Architecture](realtime.md).
+- `last_message_seq` is the monotonic high-water mark for the per-conversation seq stamped on each message in `chat_history.json`. Cached here so the persistent-WS subscribe handler can answer `up_to_date` / `catchup` / `resync` without reading the file. Advanced by `record_messages_appended()` (one session per append, also setting `last_message_at` and `auto_title`) after each successful append. The JSON file is the source of truth. Added by Alembic migration `2a4c7e9b1d3f`; backfilled in `quest.py:lifespan` for pre-migration rows. See [Realtime Architecture](realtime.md).
+- `unread_seq` / `read_seq` hold the unread state: see [Conversation Unread State](conversation-unread.md).
 - `flags` holds the per-conversation opt-in behaviors set at the *start* of the conversation, as a JSON array of enabled flag-name strings. NULL/missing means no flags, like `origin`. Parsed from a magic `%%flags[...]` first line on the first web message and persisted by `set_conversation_flags()` (set-only-if-not-already-set; start-of-conversation only). The known flag set and the parser live in `chat/conversation_flags.py`. Added by Alembic migration `bf3a48a208a6` (no backfill needed -- NULL == no flags). See [Conversation Flags](conversation-flags.md).
 
 The `user_id` column is an integer foreign key to `users.id` with `ON DELETE CASCADE`. An index on `user_id` and a composite index on `(user_id, last_message_at)` are declared in `__table_args__` on the model.
@@ -197,7 +183,7 @@ Rows deliberately survive deletion of either user or conversation because they a
 
 ## Skill Model
 
-The `Skill` model in `db/models.py` maps to the `skills` table. Skills are reusable instruction/prompt definitions that can be shared across users. Unlike guides (per-user, CASCADE delete), skills use SET NULL on creator deletion so they persist for other users. See [Skill Library Architecture](skill-library.md) for the full feature description.
+The `Skill` model in `db/models.py` maps to the `skills` table. Skills are reusable instruction/prompt definitions that can be shared across users. Skills use SET NULL on creator deletion, not CASCADE, so they persist for the users they are shared with. See [Skill Library Architecture](skill-library.md) for the full feature description.
 
 The columns are on the class; the name/description/content caps are `MAX_SKILL_NAME_LENGTH` / `MAX_SKILL_DESCRIPTION_LENGTH` / `MAX_SKILL_CONTENT_SIZE` in `db/skill_store.py`. `creator_id` is NULL once the creator has been deleted, `project_id` is NULL for user-level skills, and `visibility` takes the values of the `SkillVisibility` enum (see [Enums](#enums)).
 
@@ -319,13 +305,13 @@ Each store module provides a `_*_to_dict()` helper that converts ORM instances t
 
 **`db/memory_store.py`** -- Memory CRUD with archiving (soft-delete) and FTS5 full-text search. `search_memories()` uses raw SQL via `text()` to join with `memories_fts` for FTS5 MATCH queries, excluding archived memories.
 
-**`db/guide_store.py`** -- Guide CRUD with default guide management (`get_default_guide()`). The default guide cannot be renamed or deleted; nothing recreates one once gone (guides are deprecated -- see [Guides](guides.md)).
+**`db/notification_store.py`** -- System notification rows: create, the per-user list and open count, and the owner-scoped, idempotent dismiss ([Notifications](notifications.md)).
 
 **`db/conversation_store.py`** -- Conversation metadata CRUD. Ownership and last-message timestamps are managed here; actual message content stays in `chat_history.json`. `update_conversation_model()` is a conditional set (no-op if model already set), while `set_conversation_model()` always overwrites. `set_conversation_flags()` is an idempotent set-only-if-not-already-set writer (empty list / already-set / missing row are all no-ops) and `get_conversation_flags()` reads the array NULL-safely (`[]` when unset). `_conversation_to_dict()` emits `flags` as `conv.flags or []`. Supports archiving, custom naming, and project/routine association.
 
 **`db/project_store.py`** -- Project CRUD. `delete_project()` explicitly deletes project skills first (non-cascading FK on `skills.project_id`), then deletes the project row (CASCADE removes conversation rows and routines).
 
-**`db/routine_store.py`** -- Routine CRUD scoped to projects. Uses ellipsis sentinels for nullable `guide_id` and `model` fields in updates. `update_routine()` accepts an `expected_updated_at` token and raises `StaleRoutineError` (carrying the fresh row as `.current`) on optimistic-concurrency mismatch; no-op saves short-circuit without bumping `updated_at`.
+**`db/routine_store.py`** -- Routine CRUD scoped to projects. Uses an ellipsis sentinel for the nullable `model` field in updates. `update_routine()` accepts an `expected_updated_at` token and raises `StaleRoutineError` (carrying the fresh row as `.current`) on optimistic-concurrency mismatch; no-op saves short-circuit without bumping `updated_at`.
 
 **`db/schedule_store.py`** -- Schedule CRUD and scheduler helpers. `list_enabled_schedules()` joins with routine data for the scheduler daemon. The run ledger is driven by `claim_occurrence()` (one row per occurrence, the unique index making the claim exclusive), `record_missed()`, `claim_retry()`, `set_run_conversation()` and `finish_run()`, with `mark_running_runs_interrupted()` / `list_interrupted_runs()` for the startup sweep and `clear_stale_running_flags()` for recovery from stuck runs. `update_schedule()` accepts an `expected_updated_at` token and raises `StaleScheduleError` (carrying the fresh row as `.current`) on optimistic-concurrency mismatch; no-op saves short-circuit without bumping `updated_at`.
 
@@ -423,7 +409,7 @@ The `_process_revision_directives` callback in `alembic/env.py` collects all PK 
 
 ### Batch Rebuilds
 
-SQLite has no `ALTER COLUMN`, so a type or nullability change takes `batch_alter_table`, which rebuilds the table: create a copy, move the rows, drop the original. The rebuild can lose the original's triggers, so migration `9fb10fc3827d` re-creates any missing FTS5 sync trigger afterwards. Under `PRAGMA foreign_keys=ON`, dropping the original also runs the `ON DELETE` actions of every key that references it, which is why `docs` is only ever altered in place ([Doc and DocShare Models](#doc-and-docshare-models)).
+SQLite has no `ALTER COLUMN`, so a type or nullability change takes `batch_alter_table`, which rebuilds the table: create a copy, move the rows, drop the original. The rebuild can lose the original's triggers, so migration `9fb10fc3827d` re-creates any missing FTS5 sync trigger afterwards. Under `PRAGMA foreign_keys=ON`, dropping the original also runs the `ON DELETE` actions of every key that references it, which is why `docs` and `routines` are only ever altered in place ([Doc and DocShare Models](#doc-and-docshare-models)). A column that carries a table-level foreign key cannot be dropped natively either: migration `c5a9e3f7d2b1` first removes the key's clause from the stored `CREATE TABLE` text (`PRAGMA writable_schema`, which touches no row), then drops the column; its docstring has the reasoning.
 
 **Running migrations**: `uv run alembic upgrade head`
 
@@ -474,12 +460,6 @@ Without it, deleting a user would leave orphaned rows in every table whose FK to
 **Why move conversation ownership to SQLite instead of inferring it from the filesystem?**
 Deriving ownership from the path `data/chats/{user_id}/{conversation_id}/` coupled storage layout to business logic. Moving ownership to a `conversations` table makes it explicit, enables indexed queries (`list_conversations_meta` does a single DB lookup instead of directory traversal), and decouples the on-disk layout from access control.
 
-**Why snapshot guide content into conversations instead of referencing by ID?**
-If guides were referenced by ID, editing a guide would retroactively change the system prompt for all conversations using it. Snapshotting the guide content on first message (in `chat_history.json` via `ChatStorage.set_guide_snapshot()`) preserves the instructions as they were when the conversation started.
-
-**Why a composite unique index on (user_id, name) for guides?**
-Guide names should be unique per user to avoid confusion in the dropdown selector. The database-level constraint prevents race conditions that application-level checks alone could miss.
-
 **Why declare indexes in `__table_args__` on the model instead of only in migrations?**
 Alembic autogenerate compares `Base.metadata` (the ORM models) against the actual database schema. If indexes exist in the database but are not declared on the models, autogenerate proposes dropping them on every run. Declaring all indexes in `__table_args__` keeps `Base.metadata` in sync with the DB, so `alembic revision --autogenerate` produces empty migrations when no model changes exist.
 
@@ -491,9 +471,6 @@ SQLite FTS5 virtual tables and their shadow tables (suffixed `_config`, `_data`,
 
 **Why denormalize `user_id` on the routines table?**
 The `user_id` column is technically derivable from `project_id` (via the project's `user_id`), but storing it directly on the routine enables fast per-user queries (e.g., `delete_all_user_routines()` during account deletion) without joining through the projects table.
-
-**Why `ON DELETE SET NULL` for `routines.guide_id` instead of `CASCADE`?**
-Deleting a guide should not delete routines that reference it. Setting `guide_id` to NULL gracefully degrades the routine to use the default guide, preserving the routine's prompt and other settings.
 
 **Why a separate `routine_schedules` table instead of columns on `routines`?**
 A separate table keeps the scheduling concern isolated from existing routine CRUD, avoids widening the routines table with many nullable columns (schedule type, daily time, timezone, hourly minute, interval, running state, etc.), and makes it easy to query "all schedules that are due" across all users. The one-to-one relationship is enforced by a unique index on `routine_id`.
@@ -530,8 +507,6 @@ Per-turn granularity allows distinguishing top-level agent usage from sub-agent 
 - Memory content is capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced at both the data access layer and the API validation layer (`chat/memory_routes.py`).
 - The `memories_fts` virtual table and its sync triggers must exist for search to work. They are created by the Alembic migration `94c49d92fea7`.
 - The `updated_at` column, `archived` column, and the `(user_id, archived)` composite index are added by the Alembic migration `861a7abe9a23`.
-- The `guides` table and its indexes are created by the Alembic migration `4e8960c4dacc`, which also migrates existing `custom_system_prompt` data to default guides.
-- Guide content is capped by `MAX_GUIDE_CONTENT_SIZE` in `db/guide_store.py`, enforced at both the data access layer and the API validation layer (`chat/guide_routes.py`); guide names by `MAX_GUIDE_NAME_LENGTH` beside it.
 - The `conversations` table must exist before the server accepts requests. It is created by an Alembic migration; `run.py` runs `alembic upgrade head` on startup to ensure the schema is current.
 - The `projects` table and its indexes, and the `conversations.project_id` FK with its index, are created by the Alembic migration `f09302acbdf1`.
 - Deleting a project cascades to conversation metadata rows via `ON DELETE CASCADE` on `conversations.project_id`. The caller must separately delete filesystem directories (project workspace and conversation chat directories).

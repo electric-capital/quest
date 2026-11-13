@@ -500,6 +500,15 @@ async def _run_resume(
                     "[wait-resume] Final flush failed (conversation=%s)",
                     conversation_id,
                 )
+            # Same rule as the WS send path: a run that ended on its own
+            # leaves the conversation unread, a stopped one does not. A
+            # resume continues the run that suspended, so it is never
+            # user-started (a routine's own run stays read). Kept before
+            # the terminal publish, which must be followed by no await
+            # (see the ``_streaming_resumes`` note below).
+            if not interrupted:
+                from chat.unread import mark_unread_after_run
+                await mark_unread_after_run(conversation_id, user_started=False)
         # Clear the Slack typing indicator now that this resume task has
         # finished, EXCEPT when the model suspended again on another
         # send_slack_reply_and_get_response (in which case Slack already

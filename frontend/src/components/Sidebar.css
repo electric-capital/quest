@@ -455,6 +455,22 @@
   color: var(--text);
 }
 
+/* Unread dot in front of a conversation title, or of a project's name
+   while one of its conversations is unread (store/unreadStore.ts). It
+   takes inline space, so an unread title sits slightly to the right. */
+.conversation-unread-dot {
+  display: inline-block;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  margin-right: 0.4375rem;
+  border-radius: 50%;
+  background-color: var(--accent);
+  vertical-align: middle;
+  /* Optical centring on the lowercase letters rather than the line box. */
+  position: relative;
+  top: -0.0625rem;
+}
+
 /* Routines section in project drill-down */
 .routines-section {
   margin-bottom: 1.5rem;

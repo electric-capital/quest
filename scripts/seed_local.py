@@ -53,13 +53,6 @@ MEMORIES = [
     "Timezone: US/Pacific. Schedule suggestions accordingly.",
 ]
 
-GUIDE_NAME = "Concise analyst"
-GUIDE_CONTENT = (
-    "You are a concise analyst. Lead with the answer, use short bullet "
-    "points, and quantify claims whenever possible. Ask at most one "
-    "clarifying question, and only when truly blocked."
-)
-
 SKILL_NAME = "weekly-update-format"
 SKILL_DESCRIPTION = "Format for the weekly team status update."
 SKILL_CONTENT = (
@@ -276,7 +269,6 @@ async def seed() -> bool:
     """Create the canned users and demo data. Returns False when skipped."""
     from auth.config import generate_api_key
     from chat.storage import ChatStorage
-    from db.guide_store import create_guide
     from db.memory_store import create_memory
     from db.project_store import create_project
     from db.skill_store import create_skill
@@ -305,9 +297,6 @@ async def seed() -> bool:
     for content in MEMORIES:
         await create_memory(alice["id"], content)
     print(f"  {len(MEMORIES)} memories for alice@quest.local")
-
-    await create_guide(alice["id"], GUIDE_NAME, content=GUIDE_CONTENT)
-    print(f"  guide: {GUIDE_NAME}")
 
     await create_skill(
         creator_id=alice["id"],

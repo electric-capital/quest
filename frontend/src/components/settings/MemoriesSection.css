@@ -138,8 +138,9 @@
   padding: 0.5rem 0.25rem 0.625rem;
 }
 
-/* The content cell: one ellipsized line when collapsed, the full text
-   (markdown source, so pre-wrap) when expanded. */
+/* The content cell: up to two lines when collapsed (memories often open
+   with the same words, so one line does not tell them apart), the full
+   text (markdown source, so pre-wrap) when expanded. */
 .memory-row-content {
   display: flex;
   align-items: baseline;
@@ -160,11 +161,17 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .memory-row-expanded .memory-row-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -183,6 +190,47 @@
 
 .memory-row-archived .memory-row-text {
   color: var(--text-secondary);
+}
+
+/* The memory's id, shown in the expanded view and when the filter matched
+   it: the model refers to memories by id, so it can be checked here. */
+.memory-row-id {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  /* Never ellipsized: the id is there to be read and copied in full. */
+  overflow-wrap: anywhere;
+}
+
+.memory-row-id-label {
+  font-weight: 600;
+}
+
+.memory-row-id code {
+  font-size: 0.6875rem;
+  user-select: all;
+}
+
+/* Why an archived memory was archived (set by the archive_memory action
+   request): one ellipsized line under the text, in full when expanded. */
+.memory-archive-reason {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-row-expanded .memory-archive-reason {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-archive-reason-label {
+  font-weight: 600;
 }
 
 /* Icon actions, always visible (touch has no hover) but muted until the

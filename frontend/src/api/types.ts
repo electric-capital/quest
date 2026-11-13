@@ -15,6 +15,10 @@ export interface Conversation {
   slack_channel_id?: string;
   slack_thread_ts?: string;
   slack_team_id?: string;
+  /** Unread state: the conversation is unread while unread_seq > read_seq
+   *  (store/unreadStore.ts merges these with the realtime updates). */
+  unread_seq?: number;
+  read_seq?: number;
 }
 
 /** A composer attachment ref returned by the upload-composer-attachments
@@ -555,6 +559,9 @@ export interface ConversationDetail {
   subagent_run?: SubagentRunInfo;
   /** High-water seq of the conversation's chat_history.json (Phase 2). */
   last_message_seq?: number;
+  /** Unread state, as on the list rows (unread while unread_seq > read_seq). */
+  unread_seq?: number;
+  read_seq?: number;
   /** Persisted per-conversation flags (opt-in behaviors set at the start).
    *  Drives the read-only "N flags enabled" composer label after first send. */
   flags?: string[];
@@ -666,7 +673,6 @@ export interface WebSocketSendMessage {
   /** Thinking level picked for ``model`` (one of its thinking_efforts);
    *  omitted = the model's default. */
   thinking_effort?: string;
-  guide_id?: string;
   skill_ids?: string[];
   /** Per-conversation flags selected via the composer Flags popover.
    *  Honored on the first message only (out-of-band of the %%flags line). */
@@ -774,7 +780,6 @@ export interface SearchResponse {
 }
 
 export interface UserSettings {
-  custom_system_prompt?: string;
   slack_default_model?: string | null;
   default_model?: string | null;
   // Last-used composer model inside public projects (public visibility has
@@ -840,7 +845,8 @@ export interface ConnectorRow {
   // Server-side availability (e.g. a plugin service the admin has not configured).
   // Absent means available; false hides the row in Settings.
   available?: boolean;
-  // oauth rows: popup URL for Connect/Reconnect.
+  // oauth rows: popup URL for Connect/Reconnect. A plugin may also set
+  // disconnect_url (below) to show a Disconnect button.
   connect_url?: string;
   // api_key rows: key entry POSTs {[key_field]: key} to key_url; the
   // Disconnect button POSTs to disconnect_url.
@@ -940,6 +946,8 @@ export interface Memory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+  /** Why it was archived, when the ``archive_memory`` action request did it. */
+  archive_reason?: string | null;
 }
 
 /** A memory the model proposed via ``suggest_memory``, reviewed from the
@@ -1009,6 +1017,58 @@ export interface MemoryInboxResolvedResponse {
   next_cursor: string | null;
 }
 
+/** A skill a ``guides_converted`` notification says a guide became. */
+export interface ConvertedGuideSkill {
+  skill_id: string;
+  skill_name: string;
+  guide_name: string;
+  was_default: boolean;
+}
+
+/** A routine a ``guides_converted`` notification says lost its guide. */
+export interface ConvertedGuideRoutine {
+  routine_id: string;
+  routine_name: string;
+  project_id: string;
+  project_name: string;
+  skill_id: string;
+  skill_name: string;
+}
+
+/**
+ * A system notification (the inbox's Other tab, chat/notifications.py):
+ * something the system did for the user that needs no decision. Open until
+ * the user dismisses it. ``title`` and ``body`` (plain text, line breaks
+ * kept) always stand on their own; ``data`` is the kind's details.
+ */
+export interface UserNotification {
+  id: string;
+  /** e.g. ``guides_converted``; a kind this build does not know renders
+   *  with its title and body only. */
+  kind: string;
+  title: string;
+  body: string;
+  data: Record<string, unknown> | null;
+  created_at: string;
+  /** null while the notification is open. */
+  dismissed_at: string | null;
+}
+
+export interface NotificationsListResponse {
+  /** Newest first, open and dismissed. */
+  notifications: UserNotification[];
+  open_count: number;
+}
+
+export interface NotificationsCountResponse {
+  open_count: number;
+}
+
+export interface NotificationDismissResponse {
+  notification: UserNotification;
+  open_count: number;
+}
+
 export interface AcceptMemorySuggestionResponse {
   suggestion: MemorySuggestion;
   /** The memory created; null when the suggestion was archive-only. */
@@ -1028,6 +1088,7 @@ export interface ProjectMemory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+  archive_reason?: string | null;
 }
 
 export interface ProjectMemoriesListResponse {
@@ -1048,21 +1109,6 @@ export interface ProjectMemorySuggestionsListResponse {
 export interface AcceptProjectMemorySuggestionResponse {
   suggestion: ProjectMemorySuggestion;
   memory: ProjectMemory;
-}
-
-// Guide types
-export interface Guide {
-  id: string;
-  user_id: number;
-  name: string;
-  content: string;
-  is_default: boolean;
-  created_at: string;
-  updated_at: string | null;
-}
-
-export interface GuidesListResponse {
-  guides: Guide[];
 }
 
 // Skill types
@@ -1106,6 +1152,13 @@ export interface UserSearchResponse {
 }
 
 // Project types
+/** One unread conversation of a project, as listed on a project row. */
+export interface UnreadConversationRef {
+  id: string;
+  unread_seq: number;
+  read_seq: number;
+}
+
 export interface Project {
   id: string;
   user_id: number;
@@ -1120,6 +1173,9 @@ export interface Project {
   created_at: string;
   updated_at: string | null;
   conversation_count: number;
+  /** The project's unread conversations when the list was fetched (list
+   *  rows only); store/unreadStore.ts keeps the project's dot current. */
+  unread_conversations?: UnreadConversationRef[];
 }
 
 export interface ProjectsListResponse {
@@ -1149,7 +1205,6 @@ export interface Routine {
   user_id: number;
   name: string;
   prompt: string;
-  guide_id: string | null;
   model: string | null;
   created_at: string;
   updated_at: string | null;
@@ -2317,35 +2372,6 @@ export interface AdminUsageReport {
   series: Record<AdminUsageGranularity, AdminUsageBucket[]>;
 }
 
-// One row of the admin Guides report (System Reports > Guides). A deprecation
-// tracker: every user guide (guides table, incl. empty auto-created default
-// rows) plus every project with non-empty project instructions
-// (projects.guide). Content is never shipped, only its length.
-export interface AdminGuideReportRow {
-  kind: 'user' | 'project';
-  // Guide id for kind=user, project id for kind=project.
-  id: string;
-  // Guide name (user) or project name (project).
-  name: string;
-  user_id: number;
-  user_email: string;
-  user_name: string;
-  // kind=user only (null for project rows).
-  is_default: boolean | null;
-  // kind=project only (null for user rows).
-  project_id: string | null;
-  public: boolean | null;
-  content_length: number;
-  // Routines still referencing the guide as an override; kind=user only.
-  routine_count: number | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface AdminGuidesReportResponse {
-  guides: AdminGuideReportRow[];
-}
-
 // Admin System Reports "Docs" / "Tables" sections
 // (GET /admin/system-monitor/docs-report and /tables-report): one row per
 // user who owns at least one doc / table, lifetime ownership figures next
@@ -2415,10 +2441,25 @@ export interface AdminMemoriesReportRow {
   archived_count: number;
   content_chars: number;
   created_in_range: number;
+  // Suggestions the model raised in the user's conversations in range, by
+  // current status (dream-raised ones are in the dream funnel below).
   suggested_in_range: number;
   accepted_in_range: number;
   dismissed_in_range: number;
   pending_in_range: number;
+  // Dreaming: lifetime runs and newest run start; runs started in range
+  // with their failures and the summed list-price cost of their model
+  // calls (null when a run in range ran on an unpriced model); the
+  // suggestions those reviews raised in range, by current status.
+  dream_count: number;
+  last_dream_at: string | null;
+  dreams_in_range: number;
+  dreams_failed_in_range: number;
+  dream_cost_usd_in_range: number | null;
+  dream_suggested_in_range: number;
+  dream_accepted_in_range: number;
+  dream_dismissed_in_range: number;
+  dream_pending_in_range: number;
   // Project memories across the projects the user owns.
   project_memory_count: number;
   project_archived_count: number;
@@ -3073,4 +3114,77 @@ export interface PasswordLinkInfo {
   purpose: 'invite' | 'reset';
   account_exists: boolean;
   name: string;
+}
+
+// First-run setup (auth/first_run.py): POST /app/api/setup/unlock
+export interface SetupDefaults {
+  login_method: 'google' | 'password';
+  login_method_configured: boolean;
+  admin_emails: string[];
+  allowed_login_domain: string;
+  allowed_login_emails: string[];
+  app_base_url: string;
+  app_base_url_configured: boolean;
+  google_oauth_configured: boolean;
+  google_client_id: string;
+  google_project_id: string;
+  redirect_paths: string[];
+  public_email_domains: string[];
+  inference: SetupInferenceDefaults;
+}
+
+// The models step: provider kinds to offer and the Vertex AI environment
+export interface SetupInferenceDefaults {
+  llm_configured: boolean;
+  kinds: InferenceInstanceKind[];
+  api_types: InferenceApiType[];
+  vertex: {
+    // "env" (GOOGLE_APPLICATION_CREDENTIALS), "gcloud_adc" or null when no
+    // Application Default Credentials were found
+    credentials_source: 'env' | 'gcloud_adc' | null;
+    service_account_email: string | null;
+    detected_project_id: string | null;
+    problem: string | null;
+    configured_project_id: string;
+  };
+}
+
+// POST /app/api/setup/inference/provider
+export interface SetupProviderResult {
+  instance: { id: string; kind: string; label: string };
+  added: string[];
+  check: InferenceModelTestResult | null;
+  catalog_error: string | null;
+}
+
+// POST /app/api/setup/inference/vertex
+export interface SetupVertexResult {
+  project_id: string;
+  credentials_source: 'env' | 'gcloud_adc' | null;
+  check: InferenceModelTestResult | null;
+}
+
+export interface SetupUnlockResult {
+  token: string;
+  defaults: SetupDefaults;
+}
+
+// POST /app/api/setup/complete
+export interface SetupCompleteRequest {
+  token: string;
+  login_method: 'google' | 'password';
+  admin_emails: string[];
+  allowed_login_domain: string;
+  allowed_login_emails: string[];
+  app_base_url: string;
+  admin_password?: string;
+  google_client_id?: string;
+  google_client_secret?: string;
+  google_project_id?: string;
+}
+
+export interface SetupCompleteResult {
+  login_method: 'google' | 'password';
+  // Password sign-in: the first admin's session cookie came with the response.
+  signed_in: boolean;
 }

@@ -248,6 +248,12 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
   const renderConnectedActions = (connector: ConnectorRow) => {
     if (connector.kind === 'oauth') {
       const connect = () => handleOAuthConnect(connector.connect_url || '');
+      // Only rows whose plugin declares a disconnect_url can be removed here.
+      const disconnect = connector.disconnect_url ? (
+        <button onClick={() => handleDisconnect(connector)} className="connector-btn-disconnect">
+          Disconnect
+        </button>
+      ) : null;
       if (connector.needs_reauth) {
         return (
           <>
@@ -255,6 +261,7 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
             <button className="connector-btn connector-btn-connect" onClick={connect}>
               Re-authorize
             </button>
+            {disconnect}
           </>
         );
       }
@@ -264,6 +271,7 @@ export function DataConnectionsSection({ refreshConnectionStatus }: DataConnecti
           <button className="connector-btn connector-btn-reconnect" onClick={connect}>
             Reconnect
           </button>
+          {disconnect}
         </>
       );
     }

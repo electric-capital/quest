@@ -1,6 +1,7 @@
 /**
- * The Sidebar's "Projects" section: one drill-down row per project, or a
- * "Create Project" call-to-action while the user has none.
+ * The Sidebar's "Projects" section: one drill-down row per project (with
+ * the unread dot while one of its conversations is unread), or a "Create
+ * Project" call-to-action while the user has none.
  *
  * `projects` is the full list incl. archived ones (see ProjectsContext);
  * archived rows are hidden here unless the header's options menu has
@@ -9,6 +10,7 @@
 
 import { useState } from 'react';
 import type { Project } from '../../api/types';
+import { useProjectUnread } from '../../hooks/useConversationUnread';
 import { ConversationFilterMenu } from './ConversationFilterMenu';
 import { ChevronRightIcon, FolderIcon, FolderPlusIcon, GlobeIcon, PlusIcon } from './icons';
 
@@ -18,6 +20,38 @@ interface ProjectsSectionProps {
   onShowArchivedChange: (show: boolean) => void;
   onOpenProject: (projectId: string) => void;
   onCreateProject: () => void;
+}
+
+function ProjectRow({ project, onOpen }: { project: Project; onOpen: () => void }) {
+  const unread = useProjectUnread(project);
+  return (
+    <div className="project-group">
+      <div
+        className={`project-header${project.archived ? ' archived' : ''}`}
+        onClick={onOpen}
+      >
+        <FolderIcon className="project-folder-icon" />
+        <span className="project-name">
+          {unread && (
+            <span
+              className="conversation-unread-dot"
+              role="img"
+              aria-label="Unread conversations"
+            />
+          )}
+          {project.name}
+        </span>
+        {project.public && (
+          <GlobeIcon
+            className="project-public-badge"
+            title="Public project — internet access, no internal data"
+          />
+        )}
+        {/* Right chevron indicating navigation */}
+        <ChevronRightIcon className="project-nav-chevron" />
+      </div>
+    </div>
+  );
 }
 
 export function ProjectsSection({
@@ -69,23 +103,11 @@ export function ProjectsSection({
         </button>
       ) : (
         visible.map((project) => (
-          <div key={project.id} className="project-group">
-            <div
-              className={`project-header${project.archived ? ' archived' : ''}`}
-              onClick={() => onOpenProject(project.id)}
-            >
-              <FolderIcon className="project-folder-icon" />
-              <span className="project-name">{project.name}</span>
-              {project.public && (
-                <GlobeIcon
-                  className="project-public-badge"
-                  title="Public project — internet access, no internal data"
-                />
-              )}
-              {/* Right chevron indicating navigation */}
-              <ChevronRightIcon className="project-nav-chevron" />
-            </div>
-          </div>
+          <ProjectRow
+            key={project.id}
+            project={project}
+            onOpen={() => onOpenProject(project.id)}
+          />
         ))
       )}
     </div>

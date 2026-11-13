@@ -18,7 +18,8 @@ dependencies = [
     "aiofiles>=25.1.0",
     "python-multipart>=0.0.31",
     "telethon>=1.42.0",
-    "google-genai>=1.0.0",
+    # 3.3.0 is the first release whose ThinkingLevel has XHIGH (Gemini 4 Hydrogen)
+    "google-genai>=3.3.0",
     "anthropic[vertex]>=1.0.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
@@ -65,7 +66,10 @@ exclude-newer = "1 week"
 # uploaded before the given time; delete it once the fix is a week old. Write
 # the cutoff as a UTC timestamp (2026-10-25T00:00:00Z): uv reads a bare date in
 # the local time zone, which moves the cutoff and breaks `uv lock --check`.
-exclude-newer-package = { certifi = "2026-10-25T00:00:00Z", pillow = "2026-10-25T00:00:00Z" }
+# google-genai is not a security fix: 3.3.0 (2026-11-12) is admitted early as
+# the first release with the XHIGH thinking level Gemini 4 Hydrogen offers.
+# Delete its entry from 2026-11-20.
+exclude-newer-package = { certifi = "2026-10-25T00:00:00Z", pillow = "2026-10-25T00:00:00Z", google-genai = "2026-11-14T00:00:00Z" }
 
 [tool.pytest.ini_options]
 # Core tests plus every in-tree plugin's own tests/ directory; the

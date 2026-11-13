@@ -32,14 +32,13 @@ from db.doc_note_suggestion_store import (
     list_all_suggestion_rows as list_all_doc_suggestion_rows,
 )
 from db.doc_store import list_all_doc_rows
-from db.guide_store import list_all_guides
+from db.dream_run_store import list_all_run_rows as list_all_dream_run_rows
 from db.memory_store import list_all_memory_rows
 from db.memory_suggestion_store import list_all_suggestion_rows
 from db.project_memory_store import list_all_project_memory_rows
 from db.project_memory_suggestion_store import (
     list_all_suggestion_rows as list_all_project_suggestion_rows,
 )
-from db.project_store import list_all_project_guides
 from db.table_store import list_all_table_rows
 from db.routine_store import get_routine_labels
 from db.skill_store import list_skill_labels
@@ -709,76 +708,6 @@ async def admin_usage_report(
     )
 
 
-@router.get("/admin/system-monitor/guides-report")
-async def admin_guides_report(
-    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
-):
-    """Return every guide in the system, user guides and project guides alike.
-
-    Deprecation-tracking report: guides are being retired in favor of
-    skills, and this lists who still has them. One row per user guide
-    (``kind="user"``: the ``guides`` table, incl. the empty auto-created
-    default guides so an admin can tell "has a default row" from "wrote
-    instructions") and one row per project with non-empty project
-    instructions (``kind="project"``: the ``projects.guide`` text field).
-    Content is reported as ``content_length`` -- the admin needs owners and
-    names, not the prompt text. ``routine_count`` (user guides only) is the
-    number of routines still using the guide as an override, the last
-    remaining code path that applies a guide to new conversations.
-    Sorted by owner email, then user guides (default first) before project
-    guides, then name.
-    """
-    if not is_admin(user["email"]):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "forbidden",
-                "message": "Admin access required.",
-            }
-        )
-
-    rows = []
-    for guide in await list_all_guides():
-        rows.append({
-            "kind": "user",
-            "id": guide["id"],
-            "name": guide["name"],
-            "user_id": guide["user_id"],
-            "user_email": guide["user_email"],
-            "user_name": guide["user_name"],
-            "is_default": guide["is_default"],
-            "project_id": None,
-            "public": None,
-            "content_length": guide["content_length"],
-            "routine_count": guide["routine_count"],
-            "created_at": guide["created_at"],
-            "updated_at": guide["updated_at"],
-        })
-    for project in await list_all_project_guides():
-        rows.append({
-            "kind": "project",
-            "id": project["id"],
-            "name": project["name"],
-            "user_id": project["user_id"],
-            "user_email": project["user_email"],
-            "user_name": project["user_name"],
-            "is_default": None,
-            "project_id": project["id"],
-            "public": project["public"],
-            "content_length": project["content_length"],
-            "routine_count": None,
-            "created_at": project["created_at"],
-            "updated_at": project["updated_at"],
-        })
-    rows.sort(key=lambda r: (
-        r["user_email"],
-        0 if r["kind"] == "user" else 1,
-        0 if r["is_default"] else 1,
-        r["name"].lower(),
-    ))
-    return {"guides": rows}
-
-
 @router.get("/admin/system-monitor/docs-report")
 async def admin_docs_report(
     start: Optional[str] = None,
@@ -836,22 +765,25 @@ async def admin_memories_report(
     """Return per-user memory adoption and the suggestion funnel for a date
     range.
 
-    One row per user with any personal memory, memory suggestion, project
-    memory (in a project they own), project memory suggestion (raised in
-    their conversation), doc memory (on a doc they own) or doc note
-    suggestion (raised in their conversation): memory counts (active and
-    archived for personal and project memories; doc memories have no
-    archive), the characters stored (personal memories only), memories
-    created in range, and the suggestions created in range split by their
-    current status (accepted / dismissed / pending), each for personal,
-    project and doc memories. Memory and suggestion text is never returned. Row shape and
-    sort order are on ``build_memories_report`` in
+    One row per user with any personal memory, memory suggestion, dream
+    run, project memory (in a project they own), project memory
+    suggestion (raised in their conversation), doc memory (on a doc they
+    own) or doc note suggestion (raised in their conversation): memory
+    counts (active and archived for personal and project memories; doc
+    memories have no archive), the characters stored (personal memories
+    only), memories created in range, the suggestions created in range
+    split by their current status (accepted / dismissed / pending), each
+    for personal (conversation-raised), dream, project and doc memories,
+    and the dreams run in range with their failures and cost. Memory and
+    suggestion text and dream error text are never returned. Row shape
+    and sort order are on ``build_memories_report`` in
     chat/feature_usage_report.py.
     """
     _require_admin(user)
     start_date, end_date, _, _ = _resolve_range_window(start, end)
     memory_rows = await list_all_memory_rows()
     suggestion_rows = await list_all_suggestion_rows()
+    dream_run_rows = await list_all_dream_run_rows()
     project_memory_rows = await list_all_project_memory_rows()
     project_suggestion_rows = await list_all_project_suggestion_rows()
     doc_memory_rows = await list_all_doc_memory_rows()
@@ -862,6 +794,7 @@ async def admin_memories_report(
         memory_rows, suggestion_rows, project_memory_rows, project_suggestion_rows,
         doc_memory_rows, doc_suggestion_rows,
         users, start_date, end_date,
+        dream_run_rows,
     )
 
 
@@ -1563,33 +1496,18 @@ async def admin_list_inference_providers(
     never include the key itself.
     """
     _require_admin(user)
-    from config.inference_providers import INSTANCE_KINDS, LOCAL_API_TYPES, list_instances
+    from chat.llm.model_setup import provider_kind_views
+    from config.inference_providers import list_instances
 
+    kinds, api_types = provider_kind_views()
     return {
         "vertex": _vertex_status(),
         "instances": [_instance_status(inst) for inst in list_instances()],
-        # ``catalog`` tells the card where its "Add model" typeahead looks:
-        # the shared OpenRouter list, the instance's own key-fetched vendor
-        # catalog (Anthropic, OpenAI, Gemini, Fireworks), NEAR AI's or
-        # TrustedRouter's public list, or the self-hosted server itself.
-        # ``hint`` / ``key_required`` also feed the composer's first-run
-        # model setup card (ModelSetupCard.tsx), which offers these kinds.
-        "kinds": [
-            {
-                "kind": kind,
-                "label": spec["label"],
-                "endpoint": spec["endpoint"],
-                "catalog": spec["catalog"],
-                "hint": spec["hint"],
-                "key_required": spec["key_required"],
-            }
-            for kind, spec in INSTANCE_KINDS.items()
-        ],
-        # API types a self-hosted instance can speak (the card's selector)
-        "api_types": [
-            {"id": api_type, "label": spec["label"], "description": spec["description"]}
-            for api_type, spec in LOCAL_API_TYPES.items()
-        ],
+        # The kind roster for the composer's model setup card
+        # (ModelSetupCard.tsx) and the API types a self-hosted instance can
+        # speak; see provider_kind_views().
+        "kinds": kinds,
+        "api_types": api_types,
     }
 
 
@@ -2048,21 +1966,8 @@ async def admin_quick_setup_inference(
 ):
     """Connect a provider from one credential and make its models usable --
     the composer's first-run model setup card (shown to admins while no
-    model is available).
-
-    In one step: an instance of ``kind`` is created -- or an existing
-    instance of the kind that serves no available model yet is reused, so
-    a retry after a rejected key never piles up empty instances -- the API
-    key (or server URL + API type) is stored, the kind's catalog is fetched
-    fresh with it, and the quick-setup suggestions
-    (``chat.llm.model_setup.suggested_models``: the models Quest has real
-    metadata for) are added. The first suggestion is added alone and
-    health-checked live first; only when it passes are the rest added
-    (rechecked in the background), so a bad key leaves the instance
-    connected but empty rather than flashing unchecked models into the
-    picker. Unlike models added from Settings, these start **allowed in
-    private conversations**: the admin is connecting the deployment's
-    first model for exactly that.
+    model is available). The work is ``quick_setup_provider()`` in
+    chat/llm/model_setup.py, shared with the first-run setup screen.
 
     Returns ``{instance, added, check, catalog_error}``: the instance card
     payload, the qualified ids added, the first model's health verdict
@@ -2070,128 +1975,22 @@ async def admin_quick_setup_inference(
     admin to Settings to pick models) and the catalog fetch error, if any.
     """
     _require_admin(user)
-    from chat.llm.config import (
-        drop_provider_instance,
-        get_available_models,
-        get_configured_models,
-        reset_provider_client_caches,
-    )
-    from chat.llm.health import get_model_health_store, schedule_model_rechecks
-    from chat.llm.model_setup import fetch_instance_catalog, suggested_models
-    from chat.llm.openrouter_catalog import catalog_snapshot
-    from config.inference_providers import (
-        DEFAULT_LOCAL_API_TYPE,
-        INSTANCE_KINDS,
-        LOCAL_API_TYPES,
-        list_instances,
-        new_instance_id,
-        normalize_base_url,
-        qualify_model_id,
-        read_inference_credentials,
-        upsert_instance,
-        write_inference_credentials,
-    )
+    from chat.llm.model_setup import QuickSetupError, quick_setup_provider
 
-    # Resolve the request's kind to the registry's own key object: the
-    # instance id (and so the credential file name) derives from the kind
-    # name, and taking it from INSTANCE_KINDS rather than the request body
-    # keeps request data out of the path (``inference_credentials_path``
-    # format-checks every id on top of that).
-    kind_name = next((name for name in INSTANCE_KINDS if name == body.kind), None)
-    if kind_name is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "unknown_kind", "message": f"Unknown inference provider kind: {body.kind}"},
+    try:
+        result = await quick_setup_provider(
+            body.kind, api_key=body.api_key or "", base_url=body.base_url or "",
+            api_type=body.api_type or "",
         )
-    kind = INSTANCE_KINDS[kind_name]
-    api_key = (body.api_key or "").strip()
-    base_url = normalize_base_url(body.base_url) if body.base_url else None
-    api_type = body.api_type or DEFAULT_LOCAL_API_TYPE
-    if kind["endpoint"]:
-        if base_url is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "invalid_params", "message": "base_url must be an http:// or https:// server URL."},
-            )
-        if api_type not in LOCAL_API_TYPES:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "invalid_params", "message": f"Unknown api_type: {api_type} (one of {sorted(LOCAL_API_TYPES)})."},
-            )
-    elif not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "invalid_params", "message": f"An API key is required for {kind['label']}."},
-        )
-
-    available = set(get_available_models())
-    instance = next(
-        (
-            inst for inst in list_instances()
-            if inst["kind"] == kind_name
-            and not any(m.startswith(f"{inst['id']}:") for m in available)
-        ),
-        None,
-    )
-    if instance is None:
-        instance = {"id": new_instance_id(kind_name), "kind": kind_name, "label": "", "models": []}
-    if kind["endpoint"]:
-        instance["base_url"] = base_url
-        instance["api_type"] = api_type
-    instance = upsert_instance(instance)
-    if api_key:
-        stored = dict(read_inference_credentials(instance["id"]) or {})
-        stored["api_key"] = api_key
-        write_inference_credentials(instance["id"], stored)
-    reset_provider_client_caches()
-    drop_provider_instance(kind["provider"], instance["id"])
-
-    catalog = await fetch_instance_catalog(instance, refresh=True)
-    existing = {m["id"] for m in instance["models"]}
-    suggested = [w for w in suggested_models(instance, catalog["models"]) if w not in existing]
-    added: list[str] = []
-    check = None
-
-    def _entry(wire_id: str) -> dict:
-        return {"id": wire_id, "enabled": True, **(catalog_snapshot(catalog["models"], wire_id) or {})}
-
-    if suggested:
-        probe = suggested[0]
-        instance["models"].append(_entry(probe))
-        instance = upsert_instance(instance)
-        probe_id = qualify_model_id(instance["id"], probe)
-        check = await get_model_health_store().run_check(probe_id)
-        if check["ok"]:
-            added.append(probe_id)
-            for wire_id in suggested[1:]:
-                instance["models"].append(_entry(wire_id))
-                added.append(qualify_model_id(instance["id"], wire_id))
-            instance = upsert_instance(instance)
-            prefix = f"{instance['id']}:"
-            schedule_model_rechecks([
-                m for m in get_configured_models() if m.startswith(prefix) and m != probe_id
-            ])
-        else:
-            instance["models"] = [m for m in instance["models"] if m["id"] != probe]
-            instance = upsert_instance(instance)
-            await get_model_health_store().forget([probe_id])
-    elif instance["models"]:
-        # Nothing new to suggest but the reused instance already lists
-        # models: recheck them under the new credential.
-        prefix = f"{instance['id']}:"
-        schedule_model_rechecks([m for m in get_configured_models() if m.startswith(prefix)])
-
+    except QuickSetupError as exc:
+        raise HTTPException(status_code=400, detail={"error": exc.code, "message": str(exc)})
+    check = result["check"]
     logger.info(
         "[admin] %s quick-set-up inference instance %s (%s): added %s, check %s",
-        user["email"], instance["id"], kind_name, added,
+        user["email"], result["instance"]["id"], body.kind, result["added"],
         "n/a" if check is None else ("ok" if check["ok"] else check["error"]),
     )
-    return {
-        "instance": _instance_status(instance),
-        "added": added,
-        "check": check,
-        "catalog_error": catalog["error"],
-    }
+    return {**result, "instance": _instance_status(result["instance"])}
 
 
 class InferenceModelTestRequest(BaseModel):
@@ -2312,26 +2111,17 @@ async def admin_stop_impersonation(
 # Sign-in method + email/password account management
 # ---------------------------------------------------------------------------
 
-def _google_login_configured() -> bool:
-    from auth.config import load_client_config
-    try:
-        config = load_client_config()
-    except HTTPException:
-        return False
-    return bool(config.get("client_id") and config.get("client_secret"))
-
-
 @router.get("/admin/sign-in")
 async def admin_get_sign_in(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Sign-in method status for the admin Settings > Sign-in section."""
     _require_admin(user)
-    from auth.config import login_method
+    from auth.config import google_login_configured, login_method
     from auth.mailer import smtp_configured
     return {
         "login_method": login_method(),
-        "google_oauth_configured": _google_login_configured(),
+        "google_oauth_configured": google_login_configured(),
         "smtp_configured": smtp_configured(),
     }
 
@@ -2355,7 +2145,7 @@ async def admin_set_login_method(
     server_config.json edit (``"login_method": "password"``).
     """
     _require_admin(user)
-    from auth.config import LOGIN_METHOD_GOOGLE, login_method
+    from auth.config import LOGIN_METHOD_GOOGLE, google_login_configured, login_method
     from config.server_config import update_server_config
 
     if body.login_method != LOGIN_METHOD_GOOGLE:
@@ -2370,7 +2160,7 @@ async def admin_set_login_method(
         )
     if login_method() == LOGIN_METHOD_GOOGLE:
         return {"login_method": LOGIN_METHOD_GOOGLE}
-    if not _google_login_configured():
+    if not google_login_configured():
         raise HTTPException(
             status_code=400,
             detail={

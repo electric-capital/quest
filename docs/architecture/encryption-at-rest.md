@@ -84,13 +84,15 @@ the DEK from process memory or the password from the process environment.
 
 Startup (`run.py`):
 
-1. `resolve_encryption_password()` runs right after the prod bootstrap
-   wizard / local pre-baking, before the build steps -> `config/encryption.py`
+1. `resolve_encryption_password()` runs right after local pre-baking,
+   before the build steps -> `config/encryption.py`
    (`resolve_password`): `QUEST_ENCRYPTION_PASSWORD`, then the file named by
    `QUEST_ENCRYPTION_PASSWORD_FILE`, then (local mode only)
    `LOCAL_DEV_PASSWORD`, then a hidden TTY prompt (asked twice when the key
    file does not exist yet). No password on a non-TTY staging/prod start
-   aborts with instructions.
+   aborts with instructions. This is the only command-line input a
+   deployment needs: the same password unlocks the first-run setup screen
+   (`verify_password()`, see [Production -- First-Run Setup](../setup/production.md#first-run-setup)).
 2. Step 3 exports the password as `QUEST_ENCRYPTION_PASSWORD` for the
    subprocesses and runs `uv run python -m config.encryption init`, which
    creates the key file on first run (or verifies the password unlocks it)
@@ -179,6 +181,5 @@ be a regression and `--keep-data` must keep working. The sentinel is public
 by design and refused in staging/prod.
 
 **Why a JSON wrapper for store files instead of a bare envelope string?**
-`scripts/bootstrap_prod.py` and `run.py` are stdlib-only and only test for
-the file's presence via a JSON-object read; keeping the file a JSON object
-means they need no crypto.
+`run.py` is stdlib-only and only tests for the file's presence via a
+JSON-object read; keeping the file a JSON object means it needs no crypto.

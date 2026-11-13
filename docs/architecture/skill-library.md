@@ -4,11 +4,11 @@ This document describes the Skill Library feature, which provides a system for c
 
 ## Overview
 
-The Skill Library allows users to create named skill definitions containing instructions or prompts that can be shared with other users. Unlike guides (which are per-user with CASCADE delete on user removal), skills use SET NULL on creator deletion so they persist for other users who have access. Skills support four visibility levels: private (creator only), shared (creator + explicitly shared users via a junction table), public (all users), and project (scoped to a specific project). Project-level skills are managed through the Project Settings modal and can be auto-loaded for all conversations in a project.
+The Skill Library allows users to create named skill definitions containing instructions or prompts that can be shared with other users. Skills use SET NULL on creator deletion so they persist for other users who have access. Skills support four visibility levels: private (creator only), shared (creator + explicitly shared users via a junction table), public (all users), and project (scoped to a specific project). Project-level skills are managed through the Project Settings modal and can be auto-loaded for all conversations in a project.
 
 In addition to DB-backed user skills, the codebase also ships a fixed catalog of **system skills** (hardcoded, non-DB, loadable through the same `list_skills`/`search_skills`/`load_skills` tools). See [System Skills](#system-skills) below.
 
-Skills replace the deprecated [guides](guides.md) feature: guide creation is disabled, and existing guides can be converted one-click into private skills (the default guide's skill is auto-loaded). See [Guides -- Migration to Skills](guides.md#migration-to-skills).
+A private skill described as `Converted from the '<name>' guide.` was written by Alembic migration `c5a9e3f7d2b1`; see [Notifications -- Migration Notes](notifications.md#migration-notes).
 
 ## Skill Model
 
@@ -79,7 +79,7 @@ The `SkillVisibility` enum in `db/models.py` defines four levels:
 
 ## Data Access Layer
 
-`db/skill_store.py` provides async CRUD operations, sharing management, and access checks. It follows the same pattern as `db/guide_store.py` (each function opens a fresh `AsyncSessionLocal()` session). See [Database Architecture](database.md) for the function summary table.
+`db/skill_store.py` provides async CRUD operations, sharing management, and access checks. Each function opens a fresh `AsyncSessionLocal()` session. See [Database Architecture](database.md) for the function summary table.
 
 ### Access Check Logic
 
@@ -230,7 +230,7 @@ Current catalog (registered in order):
 | `system:github` | `github` | GitHub reads plus `github_get_job_log` tool (plugin-registered from `plugins/github`, content from its `instructions.md`) |
 | `system:federal_register` | — (none) | Federal Register reads via `authed_get` -- documents, agencies, public-inspection docs (delegates to `api.federal_register.get_instructions`). Ungated: the API is free/public and needs no connection, so it is always visible/loadable. See [Federal Register API](../api/federal-register-api.md) |
 | `system:sec_edgar` | — (none) | SEC EDGAR reads via `authed_get` -- company submissions/filing history and XBRL facts, ticker→CIK map files (plugin-registered from `plugins/sec_edgar`, content from its `instructions.md`). Ungated: the API is free/public and the plugin has no connection to gate on. See [SEC EDGAR API](../../plugins/sec_edgar/docs/sec-edgar-api.md) |
-| `system:memory` | — | Memory reads (`memory_search`, `memory_list`, `memory_get`) and the `create_action_request(request_type="create_memory", ...)` write path |
+| `system:memory` | — | Memory reads (`memory_search`, `memory_list`, `memory_get`) and the `create_memory`/`archive_memory` action requests |
 | `system:workspace` | — | Workspace file tools (one space and the four `*_workspace_file` tools in standalone conversations; two spaces -- `chat://` / `proj://`, the five scheme-qualified tools `list_files`/`read_file`/`write_file`/`edit_file`/`copy_file`, the `/project` sandbox mount, `shutil.copy` promotion and the copy-first rule -- in project conversations), `run_python` vs `run_script` patterns, sandbox details (incl. when to use the pre-installed pypdf/PyPDFForm libraries vs `get_workspace_file` for PDFs), plus guidance to put non-user-facing scratch in hidden dot-prefixed dirs (`.temp/`, cross-linked to `authed_get`'s `.responses/`) since the file browser hides them by default |
 | `system:action_requests` | — | Generic approval / cancel / retry mechanics for `create_action_request`; points at per-backend skills for request-type specs; includes an "Inside a sub-agent" subsection covering the `agent_task_response` escape hatch |
 | `system:skill_management` | — | Skill inspection (`list_my_skills` / `get_skill`) plus the `create_skill` / `edit_skill` action-request specs (user-vs-project targeting, visibility/share rules, project auto-load toggle, collision behavior); content built from a string in `catalog.py` |
@@ -270,7 +270,7 @@ System skills are not eligible for auto-load. The enumeration block is the only 
 ## Design Decisions
 
 **Why SET NULL on creator deletion instead of CASCADE?**
-Skills can be shared with or visible to other users. If the creator deletes their account, those users should retain access to the skill. SET NULL preserves the skill with a NULL `creator_id`, indicating the original creator no longer exists. This differs from guides, which are personal to each user and should be cleaned up on deletion.
+Skills can be shared with or visible to other users. If the creator deletes their account, those users should retain access to the skill. SET NULL preserves the skill with a NULL `creator_id`, indicating the original creator no longer exists.
 
 **Why a separate skill_shares junction table instead of a JSON column?**
 A junction table allows efficient querying from both directions (which users can access a skill, and which skills a user can access), supports database-level cascade deletion, and enables proper unique constraints to prevent duplicate shares. JSON columns would require full-table scans for access checks.
@@ -278,11 +278,11 @@ A junction table allows efficient querying from both directions (which users can
 **Why resolve emails to user IDs in the route layer?**
 The share endpoint accepts email addresses (user-friendly) and resolves them to integer user IDs before passing to the store layer. This keeps the store layer clean (works with IDs only) while providing a convenient API. Unknown emails are silently skipped, and sharing with oneself is prevented.
 
-**Why 64KB max content instead of 16KB like guides?**
+**Why 64KB max content?**
 Skills are intended to be comprehensive, reusable instruction sets that may include detailed examples and multi-step workflows. The larger limit accommodates this use case while still preventing abuse.
 
-**Why are skills NOT snapshotted like guides?**
-Guides are snapshotted into `chat_history.json` on first message so that a conversation preserves the guide content even if the guide is later edited or deleted. Skills are intentionally not snapshotted -- each message resolves the current set of enabled skills and their current content. This means edits to a skill are immediately reflected in all conversations that have it enabled, and disabling a skill removes it from future messages without affecting the conversation history. This design treats skills as living, cross-conversation resources rather than per-conversation configuration.
+**Why are skills NOT snapshotted into the conversation?**
+A snapshot in `chat_history.json` would freeze a skill's content at the first message. Skills are intentionally not snapshotted -- each message resolves the current set of enabled skills and their current content. This means edits to a skill are immediately reflected in all conversations that have it enabled, and disabling a skill removes it from future messages without affecting the conversation history. This design treats skills as living, cross-conversation resources rather than per-conversation configuration.
 
 **Why silently skip inaccessible auto-loaded skills?**
 A user's auto-loaded skills may include skills that have been deleted, made private by another user, or had their share revoked. The `get_user_autoloaded_skills()` function applies access control filtering, so inaccessible skills are automatically excluded without raising errors. The `ON DELETE CASCADE` foreign keys on `user_skill_autoloads` also clean up rows when skills are deleted.
@@ -327,7 +327,7 @@ Rather than having each sub-agent independently resolve enabled skills from user
 
 ### User Settings UI
 
-The "Skills" section in `settings/SkillsSection.tsx` is a category nav item in the user SettingsModal alongside Data Connections, Memories, Guides, LLM Instructions, and Sign Out. It provides full skill management with a tabbed interface:
+The "Skills" section in `settings/SkillsSection.tsx` is a category nav item in the user SettingsModal alongside Data Connections, Memories, LLM Instructions, and Sign Out. It provides full skill management with a tabbed interface:
 
 **Tab layout:** "My Skills" / "Shared with Me" tabs at the top of the section.
 
@@ -392,7 +392,7 @@ Auto-loaded skills are tracked at two levels:
 
 ### System Prompt Injection
 
-When a user sends a message, auto-loaded skills are resolved and injected into the system prompt. This happens on every message -- skills are NOT snapshotted (unlike guides). Each message uses the current set of auto-loaded skills and their current content.
+When a user sends a message, auto-loaded skills are resolved and injected into the system prompt. This happens on every message -- skills are NOT snapshotted. Each message uses the current set of auto-loaded skills and their current content.
 
 **Data flow (API mode):**
 
@@ -402,16 +402,15 @@ When a user sends a message, auto-loaded skills are resolved and injected into t
 4. Merges all three sets of auto-loaded skills, deduplicating by skill ID. Precedence order is user -> project -> routine (the first occurrence wins)
 5. If non-empty, builds a skills content string by joining `### {skill_name}\n{skill_content}` blocks separated by double newlines
 6. Passes `skills_content` to `get_system_prompt()` in `chat/gemini_api/system_prompt.py`
-7. The system prompt builder inserts it as an "Enabled Skills" section between Custom Instructions and Project-Specific Instructions
+7. The system prompt builder inserts it as an "Enabled Skills" section between the identity line and Project-Specific Instructions
 8. For sub-agents, the same pre-resolved `skills_content` string is passed through to `_run_sub_agent()` and `_run_parallel_sub_agents()` in `chat/gemini_api/sub_agent.py`
 
 **System prompt section ordering:**
 
 1. Identity line (who the user is)
-2. User's Custom Instructions (from guide)
-3. Enabled Skills
-4. Project-Specific Instructions (from project guide)
-5. Tool documentation and API docs
+2. Enabled Skills
+3. Project-Specific Instructions (from project guide)
+4. Tool documentation and API docs
 
 **User auto-load resolution:** `get_user_autoloaded_skills(user_id)` in `db/skill_store.py` joins `user_skill_autoloads` with `skills` and applies access control filtering (creator, public, or shared-with-user). Results are ordered by name for deterministic prompt ordering. Skills that the user can no longer access (e.g., share revoked, skill deleted) are automatically excluded.
 
@@ -437,7 +436,7 @@ In addition to auto-loaded skills (which apply to every conversation), users can
 
 ### Frontend UI
 
-A "+ Skill" button appears next to the guide selector dropdown under the message input box in `ChatPanel.tsx`. Clicking it opens the `SkillSelectorModal`, which is modeled after `SearchModal.tsx` and uses `createPortal` for rendering.
+A "+ Skill" button appears under the message input box in `ChatPanel.tsx`. Clicking it opens the `SkillSelectorModal`, which is modeled after `SearchModal.tsx` and uses `createPortal` for rendering.
 
 **SkillSelectorModal behavior:**
 

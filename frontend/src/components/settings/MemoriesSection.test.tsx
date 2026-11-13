@@ -64,10 +64,38 @@ describe('MemoriesSection', () => {
     expect(mocks.fetchMemories).toHaveBeenCalledTimes(1);
 
     fireEvent.change(screen.getByLabelText('Filter memories'), { target: { value: 'nothing here' } });
-    expect(screen.getByText('No memories match "nothing here".')).not.toBeNull();
+    expect(screen.getByText('No memories match "nothing here". Archived memories are hidden.')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
     expect(rows()).toHaveLength(3);
+  });
+
+  it('finds a memory by part of its id and shows the id on the match', async () => {
+    mocks.fetchMemories.mockResolvedValue({
+      memories: [
+        memory('3f2a9c1e-7b44-4d0a-9e61-0c5d8a1b2f37', 'Prefers bullet points'),
+        memory('b81d04e6-52c9-4f7e-a3d2-6e9f0a7c4b15', 'Timezone: US/Pacific'),
+      ],
+    });
+    render(<MemoriesSection />);
+    await screen.findByText('Prefers bullet points');
+    expect(screen.queryByText('ID:')).toBeNull();
+
+    // A substring from the middle of the id, in any case.
+    fireEvent.change(screen.getByLabelText('Filter memories'), { target: { value: ' 52C9-4F7E ' } });
+    expect(rows()).toHaveLength(1);
+    expect(rowTexts()[0]).toContain('Timezone: US/Pacific');
+    expect(screen.getByText('b81d04e6-52c9-4f7e-a3d2-6e9f0a7c4b15')).not.toBeNull();
+
+    // Too short to be an id search: "3f2" is matched against the text only.
+    fireEvent.change(screen.getByLabelText('Filter memories'), { target: { value: '3f2' } });
+    expect(screen.getByText('No memories match "3f2". Archived memories are hidden.')).not.toBeNull();
+  });
+
+  it('shows the id of an expanded memory', async () => {
+    render(<MemoriesSection />);
+    fireEvent.click(await screen.findByText('Prefers bullet points'));
+    expect(screen.getByText('m1')).not.toBeNull();
   });
 
   it('expands a row on click to show the full content', async () => {
@@ -168,5 +196,22 @@ describe('MemoriesSection with a projectId', () => {
     fireEvent.click(within(rows()[0]).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(mocks.deleteProjectMemory).toHaveBeenCalledWith('proj-1', 'pm2'));
     expect(mocks.createMemory).not.toHaveBeenCalled();
+  });
+
+  it('shows why an archived memory was archived when a reason is recorded', async () => {
+    mocks.fetchMemories.mockResolvedValue({
+      memories: [
+        memory('m1', 'Reports to Dana', { archived: true, archive_reason: 'Dana left in October' }),
+        memory('m2', 'Old timezone', { archived: true, archive_reason: null }),
+        memory('m3', 'Prefers bullet points'),
+      ],
+    });
+    render(<MemoriesSection />);
+    await screen.findByText('Reports to Dana');
+    const [withReason, withoutReason, active] = rows();
+    expect(within(withReason).getByText('Dana left in October')).not.toBeNull();
+    expect(within(withReason).getByText('Reason:')).not.toBeNull();
+    expect(within(withoutReason).queryByText('Reason:')).toBeNull();
+    expect(within(active).queryByText('Reason:')).toBeNull();
   });
 });

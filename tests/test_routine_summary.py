@@ -23,7 +23,6 @@ def _make_routine(**overrides) -> types.SimpleNamespace:
         "user_id": 1,
         "name": "Test Routine",
         "prompt": "Run the report",
-        "guide_id": "guide-001",
         "model": "gemini-3.1-pro-preview",
     }
     defaults.update(overrides)
@@ -56,12 +55,11 @@ class TestRoutineSummaryIncludesAllFields:
             user_id=42,
             name="Daily Report",
             prompt="Generate report",
-            guide_id="guide-789",
             model="gemini-3.1-pro-preview",
         )
         result = _routine_summary(routine)
         expected_keys = {
-            "id", "project_id", "user_id", "name", "prompt", "guide_id", "model",
+            "id", "project_id", "user_id", "name", "prompt", "model",
             # Joined project field for the archived-project pause.
             "project_archived",
         }
@@ -71,7 +69,6 @@ class TestRoutineSummaryIncludesAllFields:
         assert result["user_id"] == 42
         assert result["name"] == "Daily Report"
         assert result["prompt"] == "Generate report"
-        assert result["guide_id"] == "guide-789"
         assert result["model"] == "gemini-3.1-pro-preview"
 
 
@@ -89,7 +86,6 @@ class TestRoutineSummaryFieldValues:
             user_id=42,
             name="Daily Report",
             prompt="Generate report",
-            guide_id="guide-789",
             model="gemini-3.1-pro-preview",
         )
         result = _routine_summary(routine)
@@ -98,7 +94,6 @@ class TestRoutineSummaryFieldValues:
         assert result["user_id"] == routine.user_id
         assert result["name"] == routine.name
         assert result["prompt"] == routine.prompt
-        assert result["guide_id"] == routine.guide_id
         assert result["model"] == routine.model
 
     @pytest.mark.parametrize(
@@ -119,6 +114,8 @@ class TestRoutineSummaryFieldValues:
             "gemini-3.7-flash",
             "gemini-3.8-flash",
             "gemini-4-argon",
+            "gemini-4-carbon",
+            "gemini-4-hydrogen",
             None,
         ],
     )

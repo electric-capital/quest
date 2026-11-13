@@ -1,7 +1,9 @@
 // The inbox view's Memories tab label counts pending suggestions of all
 // three kinds (usePendingSuggestionCounts: REST seed, then each per-user
 // global's total_pending, a re-fetch for an event without one), and a doc
-// link in the Memories tab closes the inbox before it opens the doc.
+// link in the Memories tab closes the inbox before it opens the doc. The
+// Other tab label counts open notifications (useOpenNotificationCount) and
+// its path shows the NotificationsInbox.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -14,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   fetchMemoryInboxCounts: vi.fn(),
   fetchMemoryInboxPending: vi.fn(),
   fetchMemoryInboxResolved: vi.fn(),
+  fetchNotifications: vi.fn(),
+  fetchNotificationsCount: vi.fn(),
   setShowRequestsView: vi.fn(),
   globalHandlers: new Set<(event: Record<string, unknown>) => void>(),
 }));
@@ -25,6 +29,8 @@ vi.mock('../api/client', async (importOriginal) => ({
   fetchMemoryInboxCounts: mocks.fetchMemoryInboxCounts,
   fetchMemoryInboxPending: mocks.fetchMemoryInboxPending,
   fetchMemoryInboxResolved: mocks.fetchMemoryInboxResolved,
+  fetchNotifications: mocks.fetchNotifications,
+  fetchNotificationsCount: mocks.fetchNotificationsCount,
 }));
 
 vi.mock('../services/PersistentWebSocket', () => ({
@@ -37,7 +43,11 @@ vi.mock('../services/PersistentWebSocket', () => ({
 }));
 
 vi.mock('../contexts/NavigationContext', () => ({
-  useNavigationState: () => ({ setShowRequestsView: mocks.setShowRequestsView }),
+  useNavigationState: () => ({
+    setShowRequestsView: mocks.setShowRequestsView,
+    setSettingsOpen: vi.fn(),
+    setSettingsInitialSection: vi.fn(),
+  }),
 }));
 
 function emit(event: Record<string, unknown>) {
@@ -62,6 +72,11 @@ function renderView(path: string) {
 
 function memoriesTabCount(): string | null {
   const tab = screen.getByRole('tab', { name: /Memories/ });
+  return tab.querySelector('.requests-view-tab-count')?.textContent ?? null;
+}
+
+function otherTabCount(): string | null {
+  const tab = screen.getByRole('tab', { name: /Other/ });
   return tab.querySelector('.requests-view-tab-count')?.textContent ?? null;
 }
 
@@ -95,7 +110,9 @@ beforeEach(() => {
   mocks.fetchActionRequestCounts.mockReset().mockResolvedValue({
     counts: { open: 0, executed: 0, denied: 0, stopped: 0, all: 0 },
   });
-  mocks.fetchMemoryInboxCounts.mockReset();
+  mocks.fetchMemoryInboxCounts.mockReset().mockResolvedValue({ user: 0, project: 0, doc: 0, pending_count: 0 });
+  mocks.fetchNotifications.mockReset().mockResolvedValue({ notifications: [], open_count: 0 });
+  mocks.fetchNotificationsCount.mockReset().mockResolvedValue({ open_count: 0 });
   mocks.fetchMemoryInboxPending.mockReset().mockResolvedValue({ suggestions: [], pending_count: 0 });
   mocks.fetchMemoryInboxResolved.mockReset().mockResolvedValue({ suggestions: [], next_cursor: null });
   mocks.setShowRequestsView.mockReset();
@@ -135,5 +152,34 @@ describe('RequestsView', () => {
     fireEvent.click(link);
     expect(mocks.setShowRequestsView).toHaveBeenCalledWith(false);
     expect(screen.getByTestId('location').textContent).toBe('/docs/doc-d1');
+  });
+
+  it('counts open notifications on the Other tab and shows them at /inbox/other', async () => {
+    mocks.fetchNotificationsCount.mockResolvedValue({ open_count: 2 });
+    mocks.fetchNotifications.mockResolvedValue({
+      notifications: [{
+        id: 'n1',
+        kind: 'guides_converted',
+        title: 'Your guides were converted to skills',
+        body: 'Details',
+        data: null,
+        created_at: '2026-11-06T10:00:00',
+        dismissed_at: null,
+      }],
+      open_count: 1,
+    });
+    renderView('/inbox');
+    await waitFor(() => expect(otherTabCount()).toBe('2'));
+    expect(mocks.fetchNotifications).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Other/ }));
+    expect(screen.getByTestId('location').textContent).toBe('/inbox/other');
+    expect(screen.getByRole('tab', { name: /Other/ }).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('article', { name: 'Your guides were converted to skills' })).not.toBeNull();
+    // The Requests tab's status filters belong to that tab only.
+    expect(screen.queryByText('Executed')).toBeNull();
+
+    emit({ type: 'notifications_changed', open_count: 0 });
+    expect(otherTabCount()).toBeNull();
   });
 });

@@ -46,8 +46,8 @@ def load_server_config() -> dict:
         # app_base_url, when set, takes precedence for OAuth callbacks.
         "oauth_hostname": "",
         # Optional email-domain override for sign-in (empty = the built-in
-        # ALLOWED_DOMAIN in auth/config.py). Set by the prod bootstrap
-        # wizard so deployments outside the default company domain work.
+        # ALLOWED_DOMAIN in auth/config.py). Set by the first-run setup
+        # flow so deployments outside the default company domain work.
         "allowed_login_domain": "",
         # Optional individual email addresses allowed to sign in in
         # addition to the allowed domain (see is_login_allowed in
@@ -57,8 +57,8 @@ def load_server_config() -> dict:
         # How users sign in: "google" (Google OAuth) or "password" (email +
         # password accounts, see auth/password_login.py). Exactly one method
         # is active. Absent means "google" so deployments that predate
-        # password sign-in keep working; the prod bootstrap wizard writes
-        # "password" for new deployments. See login_method() in
+        # password sign-in keep working; the first-run setup flow defaults
+        # new deployments to "password". See login_method() in
         # auth/config.py.
         "login_method": "",
         "gemini": {
@@ -232,20 +232,30 @@ def check_vertex_credentials_consistency() -> None:
             )
 
 
+def raw_server_config() -> dict:
+    """server_config.json exactly as stored (no defaults, no env overrides),
+    or {} when absent. For callers that merge a nested section before
+    ``update_server_config()``."""
+    if not SERVER_CONFIG_FILE.exists():
+        return {}
+    with open(SERVER_CONFIG_FILE, "r") as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        raise ValueError("server_config.json does not hold a JSON object")
+    return config
+
+
 def update_server_config(updates: dict) -> None:
     """Merge top-level *updates* into server_config.json, preserving other keys.
 
-    Used by the few admin actions that change deployment-level settings
-    from the app (the sign-in method switch, invite-driven additions to
-    ``allowed_login_emails``). Written atomically via a temp file + rename
-    so a crash never leaves a truncated config behind.
+    Used by the few actions that change deployment-level settings from the
+    app (first-run setup, the sign-in method switch, invite-driven
+    additions to ``allowed_login_emails``). A dict value replaces the
+    stored section wholesale, so callers merge nested sections themselves
+    (see ``raw_server_config()``). Written atomically via a temp file +
+    rename so a crash never leaves a truncated config behind.
     """
-    config = {}
-    if SERVER_CONFIG_FILE.exists():
-        with open(SERVER_CONFIG_FILE, "r") as f:
-            config = json.load(f)
-        if not isinstance(config, dict):
-            raise ValueError("server_config.json does not hold a JSON object")
+    config = raw_server_config()
     config.update(updates)
     tmp = SERVER_CONFIG_FILE.with_suffix(".json.tmp")
     with open(tmp, "w") as f:

@@ -844,7 +844,7 @@ def _naive(age_minutes):
 
 
 class TestReminder:
-    def test_collect_pending_merges_requests_and_suggestions(self):
+    def test_collect_pending_merges_requests_suggestions_and_unread(self):
         requests = [
             {"user_id": 1, "open_count": 2, "oldest_created_at": _naive(30)},
             {"user_id": 2, "open_count": 1, "oldest_created_at": _naive(90)},
@@ -853,23 +853,37 @@ class TestReminder:
             {"user_id": 1, "pending_count": 3, "oldest_created_at": _naive(120)},
             {"user_id": 3, "pending_count": 1, "oldest_created_at": _naive(5)},
         ]
+        unread = [
+            {"user_id": 2, "unread_count": 4, "oldest_unread_at": _naive(200)},
+            {"user_id": 4, "unread_count": 1, "oldest_unread_at": _naive(15)},
+        ]
         with patch(
             "db.action_request_store.list_open_request_summaries",
             AsyncMock(return_value=requests),
         ), patch(
             "chat.memory_inbox.list_pending_summaries",
             AsyncMock(return_value=suggestions),
+        ), patch(
+            "db.conversation_store.list_unread_summaries",
+            AsyncMock(return_value=unread),
         ):
             rows = {r["user_id"]: r for r in asyncio.run(slack_notifier._collect_pending())}
         assert rows[1]["open_count"] == 2 and rows[1]["suggestion_count"] == 3
         assert rows[1]["oldest_created_at"] == suggestions[0]["oldest_created_at"]
         assert rows[2] == {
             "user_id": 2, "open_count": 1, "suggestion_count": 0,
-            "oldest_created_at": requests[1]["oldest_created_at"],
+            "unread_count": 4,
+            "oldest_created_at": unread[0]["oldest_unread_at"],
         }
         assert rows[3] == {
             "user_id": 3, "open_count": 0, "suggestion_count": 1,
+            "unread_count": 0,
             "oldest_created_at": suggestions[1]["oldest_created_at"],
+        }
+        assert rows[4] == {
+            "user_id": 4, "open_count": 0, "suggestion_count": 0,
+            "unread_count": 1,
+            "oldest_created_at": unread[1]["oldest_unread_at"],
         }
 
     def test_doc_only_user_is_reminded_with_counts_merged_across_tables(self, env):
@@ -920,8 +934,8 @@ class TestReminder:
         finally:
             slack_notifier._last_notified.clear()
         assert sorted(call.args for call in send.await_args_list) == sorted([
-            ("xoxb-test", "UALICE", 0, 3),
-            ("xoxb-test", "UBOB", 0, 1),
+            ("xoxb-test", "UALICE", 0, 3, [], 0),
+            ("xoxb-test", "UBOB", 0, 1, [], 0),
         ])
 
     def test_wording_covers_each_combination(self):

@@ -387,14 +387,20 @@ async def _handle_subscribe(conn: _Connection, data: dict) -> None:
     # its streaming/stop state on (re)subscribe -- see ``is_run_active``.
     run_active = is_run_active(conv_id)
 
+    # Fields every ack mode carries. The unread seqs let a client whose
+    # socket was down when ``conversation_unread_changed`` was published
+    # still learn the conversation's unread state (chat/unread.py).
+    ack = {
+        "type": "subscribed",
+        "conversation_id": conv_id,
+        "current_seq": server_seq,
+        "run_active": run_active,
+        "unread_seq": int(meta.get("unread_seq") or 0),
+        "read_seq": int(meta.get("read_seq") or 0),
+    }
+
     if client_last_seq >= server_seq:
-        await _send_to_client(conn, {
-            "type": "subscribed",
-            "conversation_id": conv_id,
-            "current_seq": server_seq,
-            "mode": "up_to_date",
-            "run_active": run_active,
-        })
+        await _send_to_client(conn, {**ack, "mode": "up_to_date"})
         return
 
     # Try to fulfil from the per-conversation replay ring buffer. ``slice``
@@ -403,12 +409,7 @@ async def _handle_subscribe(conn: _Connection, data: dict) -> None:
     sliced = replay_buffer.slice(conv_id, client_last_seq)
     if sliced is None:
         await _send_to_client(conn, {
-            "type": "subscribed",
-            "conversation_id": conv_id,
-            "current_seq": server_seq,
-            "mode": "resync",
-            "reason": "buffer_evicted",
-            "run_active": run_active,
+            **ack, "mode": "resync", "reason": "buffer_evicted",
         })
         return
 
@@ -417,12 +418,7 @@ async def _handle_subscribe(conn: _Connection, data: dict) -> None:
     # In that case force a resync so the client refetches the body.
     if not sliced and server_seq > client_last_seq:
         await _send_to_client(conn, {
-            "type": "subscribed",
-            "conversation_id": conv_id,
-            "current_seq": server_seq,
-            "mode": "resync",
-            "reason": "buffer_unavailable",
-            "run_active": run_active,
+            **ack, "mode": "resync", "reason": "buffer_unavailable",
         })
         return
 
@@ -431,12 +427,7 @@ async def _handle_subscribe(conn: _Connection, data: dict) -> None:
         for (seq, msg) in sliced
     ]
     await _send_to_client(conn, {
-        "type": "subscribed",
-        "conversation_id": conv_id,
-        "current_seq": server_seq,
-        "mode": "catchup",
-        "messages": catchup_messages,
-        "run_active": run_active,
+        **ack, "mode": "catchup", "messages": catchup_messages,
     })
 
 
@@ -569,7 +560,6 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     thinking_effort = data.get("thinking_effort")
     if not isinstance(thinking_effort, str) or not thinking_effort:
         thinking_effort = None
-    guide_id = data.get("guide_id")
     skill_ids = data.get("skill_ids")
 
     # Out-of-band flag selection (composer Flags popover). Validated below and,
@@ -883,7 +873,6 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             timezone_str=timezone_str,
             selected_model=selected_model,
             thinking_effort=thinking_effort,
-            guide_id=guide_id,
             project_id=project_id,
             routine_id=routine_id,
             skill_ids=skill_ids,
@@ -970,7 +959,6 @@ async def _run_send_message(
     user_message: str,
     timezone_str: str,
     selected_model: Optional[str],
-    guide_id: Optional[str],
     project_id: Optional[str],
     routine_id: Optional[str],
     skill_ids: Optional[list[str]],
@@ -1037,7 +1025,6 @@ async def _run_send_message(
             model=selected_model,
             on_event=on_event,
             messages_out=shared_messages,
-            guide_id=guide_id,
             project_id=project_id,
             routine_id=routine_id,
             skill_ids=skill_ids,
@@ -1097,6 +1084,19 @@ async def _run_send_message(
             logger.exception(
                 "[realtime] final flush failed (conversation=%s)",
                 conversation_id,
+            )
+        # The run left something for the user to look at (a finished answer,
+        # an error, or a card it is waiting on): mark the conversation
+        # unread. A stopped run does not: the user was looking at it. Nor
+        # does a routine's own run, which ``user_started`` tells apart from
+        # the user's follow-ups. Must stay BEFORE the publish below, which
+        # may have no await between it and the task returning (see
+        # ``is_run_active``).
+        if not stop_requested_event.is_set():
+            # Imported here: chat.unread imports this package.
+            from chat.unread import mark_unread_after_run
+            await mark_unread_after_run(
+                conversation_id, user_started=not routine_run,
             )
         # Tell every subscribed client (sender + onlookers) that this run
         # is done so they can drain any remaining streaming-text buffer

@@ -421,7 +421,6 @@ def account_env(tmp_path, monkeypatch):
     import db.conversation_store as conversation_store
     import db.doc_note_suggestion_store as doc_note_suggestion_store
     import db.doc_store as doc_store
-    import db.guide_store as guide_store
     import db.memory_store as memory_store
     import db.models as models
     import db.project_store as project_store
@@ -432,7 +431,7 @@ def account_env(tmp_path, monkeypatch):
     models.Base.metadata.create_all(sync_engine)
     for mod in (
         action_request_store, conversation_store, doc_note_suggestion_store,
-        doc_store, guide_store, memory_store, project_store, routine_store,
+        doc_store, memory_store, project_store, routine_store,
         user_store, table_store,
     ):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)

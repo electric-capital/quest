@@ -203,15 +203,43 @@ Write concise, factual notes (e.g. "Prefers window seats on flights",
 not "User said they like window seats during our chat on Monday").
 Each note is capped at 4KB.
 
-`create_action_request(request_type="create_memory", ...)` is top-level
-only -- sub-agents cannot save memories (the create_action_request tool
-itself is restricted to the top-level agent).
+To retire a saved memory -- the user asks you to forget something, or is
+cleaning up their memories with you -- call:
+
+```
+create_action_request(
+    request_type="archive_memory",
+    params={
+        "memory_id": "<id from memory_list / memory_search / the prompt>",
+        "reason": "<one short line: why this memory is being archived>",
+        "scope": "personal",  # or "project" for a project memory
+    },
+    reasoning="<why you are proposing this, in plain English>",
+)
+```
+
+The card shows the memory's text and your `reason`; on Approve the memory
+is archived and `reason` is stored with it (the user sees it beside the
+archived memory in Settings, and `memory_get` returns it as
+`archive_reason`). Archiving is not deletion: the memory leaves the
+prompt, search and list, and the user can restore it from Settings.
+`reason` is required (max 500 characters) and should say what makes the
+memory obsolete ("superseded by the 2026-11 reorg", "duplicate of the
+memory about window seats"), not restate the request. One memory per
+request; in a cleanup, issue the requests for all the memories the user
+agreed to retire in ONE response so each gets its own card. An unknown or
+already-archived id is refused before any card. When a memory is wrong
+rather than obsolete, propose the corrected text with
+`replaces_memory_id` instead, which archives the old one on accept.
+
+`create_action_request` is top-level only -- sub-agents cannot save or
+archive memories (the tool itself is restricted to the top-level agent).
 
 In Slack-driven conversations `create_action_request` is disabled (the
 approval card lives in the Quest web app), so memory writes are
-unavailable there. If the user asks you to remember something in Slack,
-acknowledge it in your reply and mention that persisting memories
-requires the web UI.
+unavailable there. If the user asks you to remember or forget something
+in Slack, acknowledge it in your reply and mention that changing
+memories requires the web UI.
 
 ### Project memories (project conversations only)
 
@@ -232,10 +260,13 @@ in reach).
   the non-blocking proposal, exactly like `suggest_memory`, reviewed in a
   separate "suggested project memories" bubble (`replaces_memory_id` must
   be a project memory id). Top-level only, hidden in routine runs. It is
-  the ONLY way to write a project memory: there is no action-request card.
-  Call it proactively whenever you learn a durable project fact, and also
-  when the user asks you to remember something for the project (then tell
-  them it is waiting in the bubble).
+  the ONLY way to add a project memory: there is no action-request card
+  for saving one. Call it proactively whenever you learn a durable project
+  fact, and also when the user asks you to remember something for the
+  project (then tell them it is waiting in the bubble).
+- **Archiving a project memory** -- the `archive_memory` action request
+  above with `scope: "project"` and a project memory id. Not available in
+  public projects.
 
 **Which store?** Ask whether the fact would still be true, and useful, in
 a different project. Yes -> it is about the user (role, preferences,
@@ -251,7 +282,8 @@ record.
 ### When to load this skill
 
 - Before doing any memory-related operation the user asks for explicitly
-  ("remember that I…", "what do you know about me", "save a note").
+  ("remember that I…", "what do you know about me", "save a note",
+  "forget that", "clean up my memories").
 - Before answering questions where the user implies you should know
   something about them (preferences, recurring contacts, ongoing goals).
 
@@ -522,8 +554,6 @@ create_action_request(
 - If the routine changes while the approval card is open, the approve fails
   cleanly -- re-run `list_routines` and propose the edit again.
 - There is no agent-side delete: users delete routines in the project UI.
-  The deprecated per-routine guide override is not settable or editable
-  here either.
 
 ### When to load this skill
 
@@ -765,7 +795,7 @@ catalog** — exact `request_type` names and their required / optional
 - Google Drive uploads and folder creation (`upload_to_drive`, `create_drive_folder`) → `system:drive`
 - Google Sheets cell edits (`edit_google_spreadsheet`) → `system:sheets`
 - GCP VM hard resets (`reset_gcp_instance`) → `system:gcp`
-- User memory writes (`create_memory`) → `system:memory`
+- Memory writes (`create_memory`, `archive_memory`) → `system:memory`
 - Cross-user subagent runs (`run_user_subagent`) → `system:user_subagents`
 - Quest Doc changes to shared private docs (`write_doc`) → `system:quest_docs`
 
@@ -1917,7 +1947,7 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:memory",
     name="Memory",
-    description="Personal and project memories: search/list reads, non-blocking suggest_* proposals, create_memory action requests.",
+    description="Personal and project memories: search/list reads, suggest_* proposals, create_memory / archive_memory requests.",
     when_to_load="Load when the user refers to saved context, preferences, or asks you to remember.",
     requires=None,
     content_builder=_memory_content,

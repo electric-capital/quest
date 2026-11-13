@@ -496,7 +496,6 @@ async def run_conversation_turn(
     model: str | None,
     on_event: Callable[[dict], Awaitable[None]],
     messages_out: list[dict] | None = None,
-    guide_id: str | None = None,
     project_id: str | None = None,
     routine_id: str | None = None,
     skill_ids: list[str] | None = None,
@@ -530,7 +529,6 @@ async def run_conversation_turn(
             case the function unwinds without returning normally).
             Required for any caller that wants to flush ``chat_history.json``
             incrementally or persist a partial transcript on cancel.
-        guide_id: Optional guide ID for this conversation.
         project_id: Optional project ID. Set for a project conversation: it
             gets the project-only tools, the project workspace next to its own
             conversation workspace, and legacy-workspace detection (see
@@ -653,53 +651,9 @@ async def run_conversation_turn(
                 )
             subagent_caller = await _get_user_by_id(subagent_run["caller_user_id"])
 
-        # Resolve guide content (guides are deprecated and sit behind the
-        # admin ``guides`` feature gate): while the gate is open for this
-        # user an existing snapshot always wins so old conversations keep
-        # their instructions; otherwise only an EXPLICIT guide_id resolves
-        # (routine guide overrides -- the composer no longer offers guides
-        # and sends none). There is no default-guide fallback anymore: a
-        # new conversation without a guide_id runs with no custom prompt
-        # and snapshots nothing. While the gate is CLOSED guides are fully
-        # inert: no snapshot is read or written and an explicit guide_id is
-        # ignored (the snapshot stays on disk, so reopening the gate
-        # restores it). Cross-user subagent conversations run with NO
-        # guide: the target user is not driving, and their guide could
-        # leak personal instructions into a response destined for another
-        # user.
-        from config.feature_gates import guides_enabled_for
-        from db.guide_store import get_guide
-        custom_prompt = ""
-
-        # chat_history.json is read ONCE here; both the guide snapshot and
-        # the workspace notice flags (below) are derived from it.
+        # chat_history.json is read ONCE here; the workspace notice flags
+        # (below) are derived from it.
         chat_history_data = await _read_chat_history(conversation_id)
-
-        # Check if this conversation already has a snapshotted guide
-        existing_snapshot = ChatStorage.guide_snapshot_from(chat_history_data)
-        if is_user_subagent:
-            pass
-        elif not guides_enabled_for(user["email"]):
-            if guide_id or (existing_snapshot and existing_snapshot.get("guide_snapshot")):
-                logger.info(
-                    "Ignoring guide for conversation %s: guides feature disabled",
-                    conversation_id,
-                )
-        elif existing_snapshot and existing_snapshot.get("guide_snapshot"):
-            # Use the snapshotted content (preserves guide across edits/deletions)
-            custom_prompt = existing_snapshot["guide_snapshot"].get("content", "")
-        elif guide_id:
-            # First message with an explicit guide (routine override).
-            resolved_guide = await get_guide(user["id"], guide_id)
-            if resolved_guide:
-                custom_prompt = resolved_guide.get("content", "")
-                # Snapshot the guide into the conversation
-                ChatStorage.set_guide_snapshot(
-                    conversation_id=conversation_id,
-                    guide_id=resolved_guide["id"],
-                    guide_name=resolved_guide["name"],
-                    guide_content=custom_prompt,
-                )
 
         # Load project guide if this conversation belongs to a project
         resolved_project_guide = ""
@@ -893,8 +847,7 @@ async def run_conversation_turn(
         elif is_public:
             # Public-project prompt: NO proxy preamble (it embeds the
             # user's real API key), no skills, no memory instructions, no
-            # system-skills enumeration, no connector docs. Guide snapshots
-            # and custom prompts are also excluded.
+            # system-skills enumeration, no connector docs.
             from chat.gemini_api.system_prompt import (
                 get_public_project_system_prompt,
             )
@@ -924,7 +877,6 @@ async def run_conversation_turn(
             system_prompt = get_system_prompt(
                 user["api_key"],
                 base_url=get_proxy_base_url(),
-                custom_system_prompt=custom_prompt,
                 connected_services=connected_services,
                 user_name=user.get("name", ""),
                 user_email=user["email"],
@@ -1034,7 +986,6 @@ async def run_conversation_turn(
             user_subagents_gate_open=user_subagents_gate_open,
             subagent_run=subagent_run,
             subagent_caller=subagent_caller,
-            custom_prompt=custom_prompt,
             resolved_project_guide=resolved_project_guide,
             resolved_skills_content=resolved_skills_content,
             on_event=on_event,

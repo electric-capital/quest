@@ -268,7 +268,6 @@ def _make_ctx(user_id, events, messages, **overrides):
         user_subagents_gate_open=True,
         subagent_run=None,
         subagent_caller=None,
-        custom_prompt="",
         resolved_project_guide="",
         resolved_skills_content="",
         on_event=_on_event,

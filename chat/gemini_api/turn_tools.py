@@ -745,7 +745,6 @@ async def _handle_agent_task(
             model=agent_model,
             agent_name=agent_name,
             prompt=agent_prompt,
-            custom_prompt=ctx.custom_prompt,
             project_id=ctx.project_id,
             project_guide=ctx.resolved_project_guide,
             skills_content=ctx.resolved_skills_content,
@@ -788,7 +787,6 @@ async def _handle_agent_task_parallel(
             timezone=ctx.timezone,
             parent_model=ctx.model,
             tasks=tasks_list,
-            custom_prompt=ctx.custom_prompt,
             project_id=ctx.project_id,
             project_guide=ctx.resolved_project_guide,
             skills_content=ctx.resolved_skills_content,
@@ -828,7 +826,6 @@ async def _handle_agent_task_parallel_template(
             prompt_template=template_prompt,
             model=template_model,
             agents=template_agents,
-            custom_prompt=ctx.custom_prompt,
             project_id=ctx.project_id,
             project_guide=ctx.resolved_project_guide,
             skills_content=ctx.resolved_skills_content,
@@ -1233,6 +1230,16 @@ async def _handle_create_action_request(
             await skill_precard_check(
                 req_type, validated_params, ctx.user, ctx.project_id,
                 conversation_id=ctx.conversation_id,
+            )
+        # archive_memory pre-card check: the memory must exist in the named
+        # scope (personal, or the conversation's project) and still be
+        # active; its text is snapshotted for the card preview.
+        if req_type == "archive_memory":
+            from chat.action_request_types.archive_memory import (
+                archive_memory_precard_check,
+            )
+            await archive_memory_precard_check(
+                validated_params, ctx.user, ctx.project_id,
             )
         # Routine create/edit pre-card checks: project scoping, routine
         # existence, name collision, and skill access, plus preview

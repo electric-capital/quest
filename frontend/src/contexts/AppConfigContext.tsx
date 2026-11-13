@@ -36,6 +36,9 @@ export interface AppConfigContextValue {
   // Password sign-in only: whether the sign-in screen can offer self-service
   // sign-up / forgot-password (the server has outgoing email configured).
   passwordSelfService: boolean;
+  // The deployment has no admin / no way to sign in yet: the app shows the
+  // first-run setup screen instead of the sign-in screen (auth/first_run.py).
+  setupRequired: boolean;
   // Model IDs whose backend credentials are configured server-side (from
   // GET /app/api/config). null until the config fetch resolves; treat null
   // as "all models" so the picker doesn't flicker empty on load.
@@ -77,6 +80,7 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
   // flash the wrong form.
   const [loginMethod, setLoginMethod] = useState<LoginMethod | null>(null);
   const [passwordSelfService, setPasswordSelfService] = useState(false);
+  const [setupRequired, setSetupRequired] = useState(false);
   const [availableModelIds, setAvailableModelIds] = useState<string[] | null>(null);
   // Ref mirror of availableModelIds so async default-model resolution can
   // read the credentialed-model list right after awaiting the config fetch,
@@ -137,6 +141,7 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
           // Older backends have no login_method: Google sign-in.
           setLoginMethod(data.login_method === 'password' ? 'password' : 'google');
           setPasswordSelfService(data.password_self_service === true);
+          setSetupRequired(data.setup_required === true);
         } else {
           setLoginMethod('google');
         }
@@ -211,6 +216,7 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
     loginRestriction,
     loginMethod,
     passwordSelfService,
+    setupRequired,
     availableModelIds,
     getAvailableModelIds,
     whenConfigLoaded: configLoaded.promise,
@@ -223,6 +229,7 @@ export function AppConfigProvider({ children }: { children: React.ReactNode }) {
     loginRestriction,
     loginMethod,
     passwordSelfService,
+    setupRequired,
     availableModelIds,
     getAvailableModelIds,
     configLoaded.promise,

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Server-level credentials for upstream API integrations (OAuth client configs, API keys) are stored in a per-service credential store: one `<service>.json` file per service under `DATA_DIR / "service_credentials"` (file mode 0600, directory mode 0700, contents encrypted at rest as `{"encrypted": "qenc1:..."}` -- see [Encryption at Rest](encryption-at-rest.md); reads accept a plaintext JSON file, which is what the stdlib-only bootstrap wizard and local pre-baking write before the key is available, and `encrypt_plaintext_credential_files()` converts those at startup). Admins manage them from a Settings section instead of editing files on disk.
+Server-level credentials for upstream API integrations (OAuth client configs, API keys) are stored in a per-service credential store: one `<service>.json` file per service under `DATA_DIR / "service_credentials"` (file mode 0600, directory mode 0700, contents encrypted at rest as `{"encrypted": "qenc1:..."}` -- see [Encryption at Rest](encryption-at-rest.md); reads accept a plaintext JSON file, which is what stdlib-only local pre-baking in `run.py` writes before the key is available, and `encrypt_plaintext_credential_files()` converts those at startup). Admins manage them from a Settings section instead of editing files on disk.
 
 The core roster (`CORE_SERVICES`) covers:
 

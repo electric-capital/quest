@@ -252,7 +252,9 @@ def test_orm_reads_and_writes_the_migrated_schema(keyed):
     db_path = keyed.db_path
     keyed.alembic("upgrade", PREVIOUS)
     _seed(db_path)
-    keyed.alembic("upgrade", REV)
+    # To head, not REV: the ORM reads every column the models declare,
+    # including ones later migrations added (memories.archive_reason).
+    keyed.alembic("upgrade", "head")
 
     import db.dream_run_store as run_store
     import db.memory_suggestion_store as store

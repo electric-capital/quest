@@ -1,5 +1,6 @@
 // Settings > Memories: a compact table of the user's memories, filtered
-// inline by a search box, with click-to-expand rows and in-row editing so
+// inline by a search box (on the text or part of a memory's id), with
+// click-to-expand rows and in-row editing so
 // dozens of memories fit on one screen. Given a ``projectId`` the same table
 // manages that project's memories instead (Project Settings > Memories).
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -28,6 +29,8 @@ interface Memory {
   created_at: string;
   updated_at: string | null;
   archived: boolean;
+  /** Why it was archived, recorded by the archive_memory action request. */
+  archive_reason?: string | null;
 }
 
 /** The store the table edits: the user's memories or one project's. */
@@ -78,6 +81,18 @@ function fullDate(iso: string): string {
 function dateTooltip(memory: Memory): string {
   const created = `Created ${fullDate(memory.created_at)}`;
   return memory.updated_at ? `${created}\nUpdated ${fullDate(memory.updated_at)}` : created;
+}
+
+/** A filter shorter than this is matched against the text only: memory ids
+ *  are UUIDs, so two or three hex characters occur in most of them and would
+ *  flood a plain word search with unrelated rows. */
+const MIN_ID_FILTER_LENGTH = 4;
+
+/** Whether the (lowercased, trimmed) filter is part of the memory's id. The
+ *  model quotes ids in its replies, whole or shortened, so pasting one finds
+ *  the memory. */
+function idMatches(memory: Memory, needle: string): boolean {
+  return needle.length >= MIN_ID_FILTER_LENGTH && memory.id.toLowerCase().includes(needle);
 }
 
 interface MemoryEditorProps {
@@ -275,13 +290,15 @@ export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
     });
   }, []);
 
-  // Inline filter: case-insensitive substring on the loaded list, so typing
-  // narrows the table without a round trip.
+  // Inline filter: case-insensitive substring of the text or the id on the
+  // loaded list, so typing narrows the table without a round trip.
+  const needle = filter.trim().toLowerCase();
   const visibleMemories = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
     if (!needle) return memories;
-    return memories.filter(m => m.content.toLowerCase().includes(needle));
-  }, [memories, filter]);
+    return memories.filter(
+      m => m.content.toLowerCase().includes(needle) || idMatches(m, needle),
+    );
+  }, [memories, needle]);
 
   const countLabel = filter.trim()
     ? `${visibleMemories.length} of ${memories.length}`
@@ -305,7 +322,7 @@ export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
             type="search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter memories..."
+            placeholder="Filter by text or ID..."
             aria-label="Filter memories"
           />
           {filter && (
@@ -377,6 +394,7 @@ export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
                 <td colSpan={3} className="memories-empty">
                   {filter.trim()
                     ? `No memories match "${filter.trim()}".`
+                      + (showArchived ? '' : ' Archived memories are hidden.')
                     : showArchived
                       ? 'No memories found.'
                       : 'No memories yet. Click "+ New memory" to create one.'}
@@ -385,6 +403,9 @@ export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
             )}
             {visibleMemories.map((memory) => {
               const expanded = expandedIds.has(memory.id);
+              // The id is shown where it explains the row: when the filter
+              // found the memory by it, and in the expanded view.
+              const showId = expanded || idMatches(memory, needle);
               if (editingMemoryId === memory.id) {
                 return (
                   <tr key={memory.id} className="memory-row memory-row-editing">
@@ -425,6 +446,18 @@ export function MemoriesSection({ projectId }: MemoriesSectionProps = {}) {
                         <span className="memory-badge-archived">Archived</span>
                       )}
                     </div>
+                    {showId && (
+                      <div className="memory-row-id">
+                        <span className="memory-row-id-label">ID:</span>{' '}
+                        <code>{memory.id}</code>
+                      </div>
+                    )}
+                    {memory.archived && memory.archive_reason && (
+                      <div className="memory-archive-reason">
+                        <span className="memory-archive-reason-label">Reason:</span>{' '}
+                        {memory.archive_reason}
+                      </div>
+                    )}
                   </td>
                   <td className="memories-col-date" title={dateTooltip(memory)}>
                     {shortDate(memory.updated_at ?? memory.created_at)}

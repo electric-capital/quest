@@ -13,7 +13,8 @@ import { RightPanel } from './components/RightPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { SignInScreen } from './components/SignInScreen'
 import { SetPasswordScreen } from './components/SetPasswordScreen'
-import { RequestsView } from './components/RequestsView'
+import { SetupScreen } from './components/SetupScreen'
+import { RequestsView, isInboxPath } from './components/RequestsView'
 import { MobileShell } from './components/MobileShell'
 import { DocsListView } from './components/docs/DocsListView'
 import { DocViewer } from './components/docs/DocViewer'
@@ -24,6 +25,7 @@ import { TableViewer } from './components/tables/TableViewer'
 import { TablesListView } from './components/tables/TablesListView'
 import { TABLES_FEATURE } from './api/tablesApi'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useUnreadTracking } from './hooks/useConversationUnread'
 import { parseDocsRoute } from './utils/docsRoute'
 import { parseTablesRoute } from './utils/tablesRoute'
 import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
@@ -43,14 +45,18 @@ function AppContent() {
     showRequestsView,
     setShowRequestsView,
   } = useNavigationState()
-  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected, enabledFeatures } = useAuth()
-  const { appName } = useAppConfig()
+  const { isAuthenticated, isCheckingAuth, hasAnyServiceConnected, enabledFeatures, isImpersonating } = useAuth()
+  const { appName, setupRequired } = useAppConfig()
   const { setActiveProjectId } = useProjects()
 
   const params = useParams<{ conversationId?: string; projectId?: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const isMobile = useIsMobile()
+
+  // Unread dots: follow conversation_unread_changed and window focus. An
+  // impersonating admin never marks the user's conversations read.
+  useUnreadTracking(!isImpersonating)
 
   // Quest Docs views (/docs, /docs?project=<id>, /docs/<id>) take over the
   // main pane like the requests inbox. The URL is the only state: no
@@ -62,11 +68,12 @@ function AppContent() {
   const tablesRoute = parseTablesRoute(location.pathname, location.search)
   const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE)
 
-  // Sync URL -> inbox state. /inbox (Requests tab) and /inbox/memories
-  // (Memories tab) are the deep-linkable addresses of the RequestsView
-  // (linked from Slack pending-request reminder DMs); any navigation away
-  // (conversation click, new chat, browser back) closes it.
-  const isInboxRoute = location.pathname === '/inbox' || location.pathname === '/inbox/memories'
+  // Sync URL -> inbox state. /inbox (Requests tab), /inbox/memories
+  // (Memories tab) and /inbox/other (Other tab) are the deep-linkable
+  // addresses of the RequestsView (linked from Slack pending-request
+  // reminder DMs); any navigation away (conversation click, new chat,
+  // browser back) closes it.
+  const isInboxRoute = isInboxPath(location.pathname)
   useEffect(() => {
     setShowRequestsView(isInboxRoute)
   }, [isInboxRoute, setShowRequestsView])
@@ -138,6 +145,12 @@ function AppContent() {
         </div>
       </div>
     )
+  }
+
+  // An unconfigured deployment (no admin, no way to sign in) gets the
+  // first-run setup screen; nobody can be signed in on it yet.
+  if (setupRequired) {
+    return <SetupScreen />
   }
 
   // If not authenticated, show inline sign-in screen
@@ -226,7 +239,7 @@ function AppContent() {
 
 function AdminSystemReportsRoute() {
   const { isAuthenticated, isCheckingAuth } = useAuth();
-  const { appName } = useAppConfig();
+  const { appName, setupRequired } = useAppConfig();
 
   const screen = (body: ReactNode) => (
     <div className="app-container">
@@ -240,6 +253,10 @@ function AdminSystemReportsRoute() {
 
   if (isCheckingAuth) {
     return loading;
+  }
+
+  if (setupRequired) {
+    return <SetupScreen />;
   }
 
   if (!isAuthenticated) {
@@ -262,6 +279,7 @@ function App() {
         <Route path="/projects/:projectId/:conversationId" element={<AppContent />} />
         <Route path="/inbox" element={<AppContent />} />
         <Route path="/inbox/memories" element={<AppContent />} />
+        <Route path="/inbox/other" element={<AppContent />} />
         {/* Quest Docs: All Docs (?project=<id> filter) and the viewer. */}
         <Route path="/docs" element={<AppContent />} />
         <Route path="/docs/:docId" element={<AppContent />} />

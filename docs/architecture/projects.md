@@ -1,10 +1,10 @@
 # Projects Architecture
 
-This document describes the Projects feature, which allows users to group related conversations under a shared project workspace and optional project guide (custom instructions; labeled **"Project Instructions"** in the UI). The project guide is a plain text field on the project (`projects.guide`) -- it is unrelated to the deprecated per-conversation [Guides](guides.md) feature and is not deprecated with it; "guide" survives only as the backend field name.
+This document describes the Projects feature, which allows users to group related conversations under a shared project workspace and optional project guide (custom instructions; labeled **"Project Instructions"** in the UI). The project guide is a plain text field on the project (`projects.guide`); "guide" is only the backend field name.
 
 ## Overview
 
-A Project is a container that groups one or more related conversations. Every project conversation has two file spaces: its own **conversation workspace** (the default for everything it produces, exactly like a standalone conversation's) and the **project workspace** shared by all conversations of the project, used deliberately for deliverables that later conversations should find (see [Workspace Resolution](#workspace-resolution)). Each project can have an optional guide -- custom instructions injected into the system prompt for all conversations in the project, alongside the user's per-conversation guide.
+A Project is a container that groups one or more related conversations. Every project conversation has two file spaces: its own **conversation workspace** (the default for everything it produces, exactly like a standalone conversation's) and the **project workspace** shared by all conversations of the project, used deliberately for deliverables that later conversations should find (see [Workspace Resolution](#workspace-resolution)). Each project can have an optional guide -- custom instructions injected into the system prompt for all conversations in the project.
 
 Projects can also have Skills -- reusable instruction definitions scoped to the project, with auto-load capability so they are injected into the system prompt for all project conversations (see [Skill Library Architecture](skill-library.md) for the full skill library documentation).
 
@@ -107,28 +107,28 @@ Behavior that changed for data created before conversation workspaces existed (n
 
 ## Project Guide Injection
 
-The project guide is injected into the system prompt as a "Project-Specific Instructions" section, separate from the user's per-conversation guide. Both `get_system_prompt()` and `get_sub_agent_system_prompt()` in `chat/gemini_api/system_prompt.py` accept a `project_guide` parameter.
+The project guide is injected into the system prompt as a "Project-Specific Instructions" section. Both `get_system_prompt()` and `get_sub_agent_system_prompt()` in `chat/gemini_api/system_prompt.py` accept a `project_guide` parameter.
 
 **Guide resolution flow in `run_conversation_turn()`:**
 
 1. If the conversation has a `project_id`, look up the project via `get_project()` from `db/project_store.py`
 2. Extract the project's `guide` field
 3. Pass it as `project_guide` to `get_system_prompt()` and to sub-agent prompt builders
-4. The project guide appears after the user's custom instructions section and before the tool documentation
+4. The project guide appears after the enabled skills and before the tool documentation
 
 **System prompt structure:**
 ```
 Role description
 User identity line
 ---
-User's Custom Instructions (from per-conversation guide)
+Enabled Skills (auto-loaded)
 ---
 Project-Specific Instructions (from project guide)
 ---
 Tool documentation and instructions
 ```
 
-Both the per-conversation guide (resolved via the Guides system and snapshotted) and the project guide (resolved live from the database on each turn) can be active simultaneously. The project guide is always read live from the database (not snapshotted), so editing a project's guide takes effect on the next message in any of its conversations.
+The project guide is always read live from the database on each turn (not snapshotted into the conversation), so editing a project's guide takes effect on the next message in any of its conversations.
 
 ## WebSocket Integration
 
@@ -178,7 +178,7 @@ A back button at the top of the drill-down view calls `handleDrillDownBack()`, w
 
 When drilled into a project, the "Routines" section is always visible above the "Conversations" section (similar to how the "Projects" section is always visible in the main sidebar). When no routines exist, a "Create Routine" button is shown. When routines exist, a "+" button in the section header opens the `NewRoutineModal`. Each routine entry shows the routine name, a settings gear icon (opens `RoutineSettingsModal`), and a play button. If a routine has an active schedule, a clock icon indicator appears next to the routine name.
 
-Clicking the play button creates a new conversation in the project (linked to the routine via `routine_id`), optionally sets the guide override, and auto-sends the routine's prompt as the first message via the `pendingRoutineMessage` mechanism in `NavigationContext`.
+Clicking the play button creates a new conversation in the project (linked to the routine via `routine_id`), optionally sets the model, and auto-sends the routine's prompt as the first message via the `pendingRoutineMessage` mechanism in `NavigationContext`.
 
 In the Conversations section, conversations created by routines are grouped under collapsible entries per routine (showing the routine name, conversation count badge, and chevron toggle), while standalone conversations are listed individually. Groups and standalone conversations are interleaved by recency. See [Routines Architecture](routines.md) for the full run flow, conversation grouping details, and [Scheduling Architecture](scheduling.md) for the automatic scheduling system.
 
@@ -190,8 +190,8 @@ Projects are for related work that builds on itself across conversations, so the
 **Why does the project workspace keep the doubled `workspace/workspace` segment?**
 Renaming it would need a data migration touching every install for no user-visible gain. Only `ChatStorage.get_project_workspace_root()` knows about the doubling, and no caller appends `"workspace"` to a resolver result.
 
-**Why is the project guide read live instead of snapshotted like per-conversation guides?**
-Per-conversation guides are snapshotted on first message to preserve the exact instructions the conversation started with. Project guides serve a different purpose -- they provide shared context that the user may update as the project evolves (e.g., adding new requirements or API documentation). Reading the guide live from the database ensures all conversations in the project always use the latest project-level instructions.
+**Why is the project guide read live instead of snapshotted into each conversation?**
+A snapshot taken on the first message would preserve the exact instructions the conversation started with. Project guides serve a different purpose -- they provide shared context that the user may update as the project evolves (e.g., adding new requirements or API documentation). Reading the guide live from the database ensures all conversations in the project always use the latest project-level instructions.
 
 **Why `ON DELETE CASCADE` on `conversations.project_id`?**
 When a project is deleted, its conversations should be removed as well since they reference a project workspace that will be deleted. The CASCADE constraint handles this at the database level, preventing orphaned conversation rows.
@@ -211,7 +211,7 @@ Project names should be unique per user to avoid confusion in the sidebar and pr
 - The `projects` table and its indexes are created by the Alembic migration `f09302acbdf1`
 - The `conversations.project_id` FK and index are also created by the same migration
 - Deleting a project explicitly deletes project skills first (non-cascading FK on `skills.project_id`), then cascades to conversation metadata rows and routines. The caller must explicitly delete filesystem directories (project workspace and conversation chat directories)
-- The project guide is injected into the system prompt alongside (not replacing) the per-conversation guide
+- The project guide is injected into the system prompt alongside (not replacing) the auto-loaded skills
 - Project skills are managed via the Project Skills API (`/app/api/projects/{project_id}/skills`); see [Skill Library Architecture](skill-library.md) for skill constraints
 - Project routines are managed via the Routines API (`/app/api/projects/{project_id}/routines`); routine schedules via the Schedules API (`/app/api/projects/{project_id}/routines/{routine_id}/schedule`); see [Routines Architecture](routines.md) and [Scheduling Architecture](scheduling.md) for constraints
 - Workspace roots come only from `ChatStorage.get_conversation_workspace_root()` / `get_project_workspace_root()`; no caller appends `"workspace"` to a resolver result

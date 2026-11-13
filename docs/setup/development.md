@@ -34,7 +34,7 @@ Quest development environment setup on a local machine. The application is a Fas
 
 ```
 data/
-├── quest.db               # SQLite database (users, API keys, OAuth tokens, settings, memories, guides, projects, routines, schedules, conversation metadata)
+├── quest.db               # SQLite database (users, API keys, OAuth tokens, settings, memories, projects, routines, schedules, conversation metadata)
 ├── secret_key              # Cookie signing key (auto-generated)
 ├── encryption_key.json     # Password-wrapped data-encryption key for stored secrets (see architecture/encryption-at-rest.md)
 ├── service_credentials/    # Admin-managed per-service credential files (encrypted)

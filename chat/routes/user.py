@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 class UserSettingsUpdate(BaseModel):
-    custom_system_prompt: Optional[str] = None
     slack_default_model: Optional[str] = None
     default_model: Optional[str] = None
     # Last-used composer model for PUBLIC-project conversations, tracked
@@ -136,11 +135,16 @@ async def get_app_config():
     from config import environment
     from chat.llm.config import get_available_models, public_model_catalog
     from auth.config import allowed_login_domain, login_method, login_restriction_description
+    from auth.first_run import setup_required
     from auth.mailer import smtp_configured
     from config.limits import max_upload_bytes
 
     return {
         "quest_env": environment.get_quest_env(),
+        # True while the deployment has no admin / no way to sign in: the
+        # frontend shows the first-run setup screen (auth/first_run.py)
+        # instead of the sign-in screen.
+        "setup_required": await setup_required(),
         "available_models": get_available_models(),
         # Metadata for every known model (incl. deprecated / admin-disabled
         # ones so old conversations still label correctly); the frontend
@@ -413,19 +417,6 @@ async def update_settings(
 
     updated_user = await update_user_settings(user_email, update_data)
 
-    # Backward compatibility: when custom_system_prompt is updated via
-    # the settings API, also update the default guide's content so they
-    # stay in sync. A missing default guide is not recreated -- guides
-    # are deprecated and a converted (deleted) default must stay gone.
-    # Skipped entirely while the guides feature gate is closed for this
-    # user (guides are inert then, and must not be written to either).
-    from config.feature_gates import guides_enabled_for
-    if settings_update.custom_system_prompt is not None and guides_enabled_for(user_email):
-        from db.guide_store import get_default_guide, update_guide
-        default_guide = await get_default_guide(user_id)
-        if default_guide:
-            await update_guide(user_id, default_guide["id"], content=settings_update.custom_system_prompt)
-
     # Invalidate any cached chat sessions for this user so the new
     # system prompt takes effect on the next message
     from chat.gemini_api import invalidate_user_sessions
@@ -607,6 +598,8 @@ def build_connector_rows(user: dict) -> list[dict]:
                 "connect_url": f"{plugin_auth_prefix(plugin.id)}?popup=1",
                 "needs_reauth": needs_reauth,
             })
+            if spec.disconnect_url:
+                plugin_row["disconnect_url"] = spec.disconnect_url
         if multi:
             # Multi-connection api_key/oauth plugins keep their kind's
             # fields above and add the per-connection list; `connected`
@@ -673,7 +666,9 @@ async def logout_and_disconnect(
     # Remove per-user plugin service credentials (user_service_credentials
     # rows, incl. the Slack and Telegram plugins' oauth rows -- the plugin
     # analogue of the users columns cleared above).
+    from auth.connections import revoke_user_credentials
     from db.user_service_credential_store import delete_all_credentials
+    await revoke_user_credentials(user_id)
     await delete_all_credentials(user_id)
 
     # Invalidate cached chat sessions
@@ -730,13 +725,16 @@ async def delete_account(
         except Exception:
             pass
 
-    # Delete all user memories, guides, routines, and action requests before deleting the user record
+    # Let each plugin revoke its stored tokens at the provider (best-effort)
+    # while the credential rows still exist; delete_user() cascades them.
+    from auth.connections import revoke_user_credentials
+    await revoke_user_credentials(user_id)
+
+    # Delete all user memories, routines, and action requests before deleting the user record
     from db.memory_store import delete_all_user_memories
-    from db.guide_store import delete_all_user_guides
     from db.routine_store import delete_all_user_routines
     from db.action_request_store import delete_all_user_action_requests
     await delete_all_user_memories(user_id)
-    await delete_all_user_guides(user_id)
     await delete_all_user_routines(user_id)
     await delete_all_user_action_requests(user_id)
 

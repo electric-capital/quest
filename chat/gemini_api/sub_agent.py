@@ -52,7 +52,6 @@ async def _run_sub_agent(
     model: str,
     agent_name: str,
     prompt: str,
-    custom_prompt: str | None = None,
     project_id: str | None = None,
     project_guide: str = "",
     skills_content: str = "",
@@ -93,7 +92,6 @@ async def _run_sub_agent(
         model: Model name string.
         agent_name: Display name for this sub-agent.
         prompt: The task prompt to send to the sub-agent.
-        custom_prompt: Optional user custom system prompt.
         project_id: Optional project UUID (the parent's). Set in a project
             conversation: the sub-agent then gets the project-only tools, the
             project workspace and (with ``workspace_notice_flags``) the
@@ -187,10 +185,7 @@ async def _run_sub_agent(
             f"sub-agents; choose one of: {allowed})"
         )
 
-    # Build sub-agent system prompt (use passed custom_prompt from parent's
-    # resolved guide, falling back to user settings for backward compat)
-    if custom_prompt is None:
-        custom_prompt = user.get("settings", {}).get("custom_system_prompt", "")
+    # Build sub-agent system prompt
     from api.instructions import get_user_connected_services
     from chat.project_db import with_project_db_service
     from config.user_connections import build_connected_accounts_paragraph
@@ -204,7 +199,6 @@ async def _run_sub_agent(
     system_prompt = get_sub_agent_system_prompt(
         agent_name, user["api_key"],
         base_url=get_proxy_base_url(),
-        custom_system_prompt=custom_prompt,
         connected_services=connected_services,
         user_name=user.get("name", ""),
         user_email=user["email"],
@@ -486,7 +480,6 @@ async def _run_sub_agent(
                                 model=nested_model,
                                 agent_name=nested_name,
                                 prompt=nested_prompt,
-                                custom_prompt=custom_prompt,
                                 project_id=project_id,
                                 project_guide=project_guide,
                                 skills_content=skills_content,
@@ -671,7 +664,6 @@ async def _run_parallel_sub_agents(
     timezone: str,
     parent_model: str,
     tasks: list[dict[str, Any]],
-    custom_prompt: str | None = None,
     project_id: str | None = None,
     project_guide: str = "",
     skills_content: str = "",
@@ -700,7 +692,6 @@ async def _run_parallel_sub_agents(
         parent_model: The parent agent's model name (used as fallback).
         tasks: List of task specification dicts, each with 'id', 'name',
                'prompt', 'description', and optional 'model'.
-        custom_prompt: Optional user custom system prompt.
         project_id: Optional project UUID (the parent's), passed to every
             sub-agent (see ``_run_sub_agent``), as is
             ``workspace_notice_flags``.
@@ -793,7 +784,6 @@ async def _run_parallel_sub_agents(
                 model=agent_model,
                 agent_name=agent_name,
                 prompt=agent_prompt,
-                custom_prompt=custom_prompt,
                 project_id=project_id,
                 project_guide=project_guide,
                 skills_content=skills_content,
@@ -866,7 +856,6 @@ async def _run_parallel_sub_agents_template(
     prompt_template: str,
     model: str,
     agents: list[dict[str, Any]],
-    custom_prompt: str | None = None,
     project_id: str | None = None,
     project_guide: str = "",
     skills_content: str = "",
@@ -894,7 +883,6 @@ async def _run_parallel_sub_agents_template(
         prompt_template: Prompt template with {var}-style placeholders.
         model: Model name (must be in TEMPLATE_BATCH_ALLOWED_MODELS).
         agents: List of agent dicts, each with 'name' and template variables.
-        custom_prompt: Optional user custom system prompt.
         project_id: Optional project UUID.
         project_guide: Optional project-specific instructions.
         skills_content: Optional skills content.
@@ -967,7 +955,6 @@ async def _run_parallel_sub_agents_template(
         timezone=timezone,
         parent_model=model,
         tasks=tasks,
-        custom_prompt=custom_prompt,
         project_id=project_id,
         project_guide=project_guide,
         skills_content=skills_content,
