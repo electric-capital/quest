@@ -63,11 +63,13 @@ dev = [
 exclude-newer = "1 week"
 # Per-package exceptions to the one-week quarantine above, for security fixes
 # that cannot wait for it. Each entry lets that package resolve to releases
-# uploaded before the given date; delete it once the fix is a week old.
+# uploaded before the given time; delete it once the fix is a week old. Write
+# the cutoff as a UTC timestamp (2026-10-25T00:00:00Z): uv reads a bare date in
+# the local time zone, which moves the cutoff and breaks `uv lock --check`.
 # google-genai is not a security fix: 3.3.0 (2026-11-12) is admitted early as
 # the first release with the XHIGH thinking level Gemini 4 Hydrogen offers.
 # Delete its entry from 2026-11-20.
-exclude-newer-package = { certifi = "2026-10-24", pillow = "2026-10-24", google-genai = "2026-11-13" }
+exclude-newer-package = { certifi = "2026-10-25T00:00:00Z", pillow = "2026-10-25T00:00:00Z", google-genai = "2026-11-14T00:00:00Z" }
 
 [tool.pytest.ini_options]
 # Core tests plus every in-tree plugin's own tests/ directory; the
