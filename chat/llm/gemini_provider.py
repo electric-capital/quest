@@ -630,6 +630,12 @@ class GeminiApiProvider(GeminiProvider):
                 f"'{self.instance_id}'. Add it in Settings > Inference "
                 "Providers (admin only)."
             )
-        self._client = genai.Client(api_key=api_key)
+        # google-genai 3.x defaults the Developer API to ``v1``; stay on
+        # ``v1beta``, the version this provider and the instance catalog
+        # (chat/llm/gemini_catalog.py) were built and tested against.
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(api_version="v1beta"),
+        )
         return self._client
 

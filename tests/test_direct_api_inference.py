@@ -242,7 +242,10 @@ def test_gemini_api_provider_client_uses_the_stored_key(monkeypatch):
         provider._get_client()
     ip.write_inference_credentials("gemini", {"api_key": "AIza-secret"})
     client = provider._get_client()
-    assert built == [{"api_key": "AIza-secret"}]
+    assert len(built) == 1
+    assert built[0]["api_key"] == "AIza-secret"
+    # Pinned: google-genai 3.x would otherwise default this client to v1.
+    assert built[0]["http_options"].api_version == "v1beta"
     assert provider._get_client() is client
     assert gp._model_vertex_id("gemini:gemini-3.8-flash") == "gemini-3.8-flash"
     assert gp._model_vertex_id("gemini-3.8-flash") == "gemini-3.8-flash"

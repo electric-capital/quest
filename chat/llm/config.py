@@ -189,6 +189,28 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "thinking_effort": "medium",
         "thinking_efforts": ["low", "medium", "high"],
     },
+    # Generally available since 2026-11-12 (global endpoint and the us/eu
+    # multi-regions), a short-term GA release with a 45-day minimum
+    # retirement notice. The fast, low-cost Gemini 4 model, priced like
+    # the 3.x Flash line ($1.50/$7.50 -- see db/llm_pricing.py), so it
+    # sits in the Flash tiers: top-level, sub-agent and template-batch,
+    # not nested-sub-agent. Request contract as for Argon and Carbon: ONE
+    # 1,048,576-token window shared by input, thinking and output, up to
+    # 65,536 thinking + output tokens per streamed synchronous request
+    # (long decode not driven), thinking always on, sampling parameters
+    # ignored, implicit caching only. Unlike them it defaults to ``high``
+    # and adds an ``xhigh`` level (low/medium/high/xhigh; ``minimal`` and
+    # ``thinking_budget`` are rejected with a 400).
+    "gemini-4-hydrogen": {
+        "provider": "gemini",
+        "backend": "vertex",
+        "display_name": "Gemini 4 Hydrogen",
+        "vertex_model_id": "gemini-4-hydrogen",
+        "max_input_tokens": 1_000_000,
+        "max_output_tokens": 65_000,
+        "thinking_effort": "high",
+        "thinking_efforts": ["low", "medium", "high", "xhigh"],
+    },
     "claude-haiku-4.5": {
         "provider": "anthropic",
         "display_name": "Claude Haiku 4.5",

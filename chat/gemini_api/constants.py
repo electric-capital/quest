@@ -95,6 +95,7 @@ TEMPLATE_BATCH_ALLOWED_MODELS = {
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "gemini-3.8-flash",
+    "gemini-4-hydrogen",
 }
 
 # Models that may NOT be used by spawned sub-agents (agent_task /

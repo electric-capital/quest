@@ -54,6 +54,13 @@ class TestDisallowedConstant:
     def test_pro_not_in_template_allowlist(self):
         assert "gemini-3.1-pro-preview" not in TEMPLATE_BATCH_ALLOWED_MODELS
 
+    def test_template_allowlist_follows_price_not_family(self):
+        # Hydrogen is the Flash-priced Gemini 4 model; Argon and Carbon
+        # are frontier-priced and stay out of high-volume batches.
+        assert "gemini-4-hydrogen" in TEMPLATE_BATCH_ALLOWED_MODELS
+        assert "gemini-4-argon" not in TEMPLATE_BATCH_ALLOWED_MODELS
+        assert "gemini-4-carbon" not in TEMPLATE_BATCH_ALLOWED_MODELS
+
 
 # ---------------------------------------------------------------------------
 # Defense-in-depth guard inside _run_sub_agent()
