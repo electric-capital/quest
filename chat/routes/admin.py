@@ -1810,7 +1810,7 @@ async def admin_update_inference_instance(
 async def _catalog_snapshots(instance: dict, wire_ids: list[str]) -> dict[str, dict]:
     """Catalog metadata for ``wire_ids`` (defaults per unlisted id).
 
-    Cached catalogs (OpenRouter, Fireworks, NEAR AI, TrustedRouter and the
+    Cached catalogs (OpenRouter, Fireworks, NEAR AI, TrustedRouter, UberLLM and the
     direct-API vendor lists) are served without a refresh so a save never
     blocks on the network beyond the first fetch; self-hosted instances ask
     their server (a short live request). An unreachable catalog/server just
@@ -1859,7 +1859,7 @@ async def admin_instance_catalog(
       ``refresh=true`` re-fetches); a missing or rejected key sets
       ``error`` with the stale cache -- or an empty list -- so custom-id
       entry still works.
-    - NEAR AI and TrustedRouter instances: the router's public model list
+    - NEAR AI, TrustedRouter and UberLLM instances: the router's public model list
       (cached 24h, ``refresh=true`` re-fetches), served whether or not a
       key is saved yet; a failed fetch sets ``error`` with the stale cache
       or an empty list. NEAR AI rows carry their ``tee`` label.

@@ -695,6 +695,7 @@ def test_suggested_models_per_kind():
     assert suggested_models(_instance("openrouter"), router_models) == [legacy[0]]
     assert suggested_models(_instance("trustedrouter"), router_models) == [legacy[0]]
     assert suggested_models(_instance("trustedrouter"), []) == []
+    assert suggested_models(_instance("uberllm"), router_models) == [legacy[0]]
     # NEAR AI does not list the legacy OpenRouter ids; it has its own pair.
     assert suggested_models(_instance("nearai"), router_models) == []
     near_models = [{"id": "Qwen/Qwen3.8-27B"}, {"id": "z-ai/glm-5.3-flash"}, {"id": "other/model"}]
