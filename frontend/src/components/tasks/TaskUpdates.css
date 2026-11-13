@@ -216,12 +216,25 @@
 }
 
 .task-run-seq {
+  flex-shrink: 0;
   font-weight: 600;
+  white-space: nowrap;
   color: var(--text-secondary);
+}
+
+/* The time gives way first on a narrow row (an older update's date is
+   long); the label and the controls never wrap. */
+.task-run-time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* "View details" / "Close details": a quiet pill at the end of the header row. */
 .task-run-view {
+  flex-shrink: 0;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
