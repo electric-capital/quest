@@ -145,8 +145,8 @@ export function NewTaskPage() {
       <div className="task-new-page-inner">
         <h1 className="task-new-page-title">New task</h1>
         <p className="task-new-page-note">
-          Each prompt is worked on with a fresh context and comes back as an update; the task
-          keeps a brief that carries over between updates. You can rename the task afterwards.
+          Tasks are a new way to work with an agent across many iterations on very large pieces
+          of work. Notes and files about the task are accumulated automatically.
         </p>
         {error && (
           <div className="task-new-page-error">
@@ -159,7 +159,7 @@ export function NewTaskPage() {
             draftKey={TASK_DRAFT_KEY}
             onSubmit={onSubmit}
             busy={submitting}
-            placeholder={`What should ${appName} do?`}
+            placeholder={`Describe the goal of the task and what ${appName} should do first`}
             onModelChange={onModelChange}
           />
         </div>
