@@ -75,7 +75,8 @@ def publish_autoproject_changed(
         bus.publish_to_user(
             user_id,
             realtime_events.make_autoproject_changed(
-                autoproject["id"], autoproject["event_seq"], autoproject["brief_version"], active_run,
+                autoproject["id"], autoproject["event_seq"],
+                autoproject["brief_version"], active_run,
             ),
         )
     except Exception:

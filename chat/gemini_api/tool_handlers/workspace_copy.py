@@ -13,13 +13,13 @@ Every refusal comes back as JSON ``{"error": <message>, "code": <code>}``
 (never raised): ``invalid_path`` (unparseable ``src`` / ``dest``),
 ``no_project`` (``proj://`` outside a project, or in an AutoProject run),
 ``invalid_project`` (the project id does not resolve), ``no_autoproject``
-(``autoproject://`` outside an AutoProject run), ``invalid_autoproject`` (the AutoProject id does not
-resolve), ``forbidden_source`` (a ``.responses/``, ``.subagent_responses/``
-or ``pasted/`` source copied from ``chat://`` into ``proj://`` or
-``autoproject://``),
-``copy_failed`` (I/O error), or one of the ``CopyEntryError`` codes
-(``invalid_path``, ``not_found``, ``not_a_regular_file``,
-``destination_exists``, ``invalid_destination``).
+(``autoproject://`` outside an AutoProject run), ``invalid_autoproject``
+(the AutoProject id does not resolve), ``forbidden_source`` (a
+``.responses/``, ``.subagent_responses/`` or ``pasted/`` source copied
+from ``chat://`` into ``proj://`` or ``autoproject://``), ``copy_failed``
+(I/O error), or one of the ``CopyEntryError`` codes (``invalid_path``,
+``not_found``, ``not_a_regular_file``, ``destination_exists``,
+``invalid_destination``).
 """
 
 import asyncio

@@ -87,7 +87,9 @@ async def _owned_autoproject(ctx: "ToolContext") -> tuple[dict | None, str | Non
         return None, _error("autoprojects_disabled", autoprojects_disabled_message())
     autoproject = await autoproject_store.get_autoproject(ctx.user["id"], ctx.autoproject_id)
     if autoproject is None:
-        return None, _error("autoproject_not_found", autoproject_not_found_message(ctx.autoproject_id))
+        return None, _error(
+            "autoproject_not_found", autoproject_not_found_message(ctx.autoproject_id),
+        )
     return autoproject, None
 
 

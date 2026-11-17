@@ -1027,8 +1027,8 @@ async def resolve_space_root(
     """Root directory of ``space`` for this conversation (created if
     missing), or ``(None, error_json)``: ``no_project`` for ``proj://``
     outside a project, ``invalid_project`` for an unresolvable project id,
-    ``no_autoproject`` for ``autoproject://`` outside an AutoProject run, ``invalid_autoproject`` for an
-    unresolvable AutoProject id."""
+    ``no_autoproject`` for ``autoproject://`` outside an AutoProject run,
+    ``invalid_autoproject`` for an unresolvable AutoProject id."""
     if space == SPACE_CHAT:
         return await conversation_workspace_dir(conversation_id), None
     if space == SPACE_AUTOPROJECT:

@@ -45,11 +45,12 @@ def _build_script_podman_cmd(
     working directory) in every conversation, plus, for project
     conversations, the project workspace at ``/project`` with the SHARED
     ``:z`` relabel, since sibling conversations of one project can run
-    containers concurrently against the same host directory, and for runs of an AutoProject the AutoProject workspace at ``/autoproject``, also ``:z``
-    (runs of one AutoProject share it, and later parallel runs may use it at the
-    same time). All mounts are writable. With ``project_dir=None`` and
-    ``autoproject_dir=None`` (standalone conversations) the argv is exactly the
-    single-mount one.
+    containers concurrently against the same host directory, and for runs of
+    an AutoProject the AutoProject workspace at ``/autoproject``, also
+    ``:z`` (runs of one AutoProject share it, and later parallel runs may
+    use it at the same time). All mounts are writable. With
+    ``project_dir=None`` and ``autoproject_dir=None`` (standalone
+    conversations) the argv is exactly the single-mount one.
 
     Two profiles share the resource limits, workspace mounts, the
     root-entrypoint privilege-drop choreography (--user=0:0 +
@@ -284,7 +285,9 @@ async def _handle_run_script(
         project_dir = (
             await project_workspace_dir(project_id) if project_id else None
         )
-        autoproject_dir = await autoproject_workspace_dir(autoproject_id) if autoproject_id else None
+        autoproject_dir = (
+            await autoproject_workspace_dir(autoproject_id) if autoproject_id else None
+        )
 
         # Validate the path (same pattern as _handle_get_workspace_file)
         clean_path = path.lstrip("/").lstrip("\\")
@@ -473,7 +476,9 @@ async def _handle_run_python(
         project_dir = (
             await project_workspace_dir(project_id) if project_id else None
         )
-        autoproject_dir = await autoproject_workspace_dir(autoproject_id) if autoproject_id else None
+        autoproject_dir = (
+            await autoproject_workspace_dir(autoproject_id) if autoproject_id else None
+        )
 
         # Clamp timeout
         clamped_timeout = timeout if timeout is not None else SCRIPT_RUNNER_TIMEOUT

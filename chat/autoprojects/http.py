@@ -59,7 +59,9 @@ def autoproject_error_body(exc: AutoProjectStoreError) -> dict:
 
 def autoproject_http_exception(exc: AutoProjectStoreError) -> HTTPException:
     """The ``HTTPException`` for an AutoProject refusal; ``raise ... from exc``."""
-    return HTTPException(status_code=autoproject_error_status(exc), detail=autoproject_error_body(exc))
+    return HTTPException(
+        status_code=autoproject_error_status(exc), detail=autoproject_error_body(exc),
+    )
 
 
 async def require_autoproject_for_route(

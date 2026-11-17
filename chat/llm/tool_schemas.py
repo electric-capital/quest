@@ -1643,7 +1643,10 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "intent_message": {
                     "type": "string",
-                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'List earlier AutoProject runs'.",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'List earlier AutoProject runs'."
+                    ),
                 },
             },
             "required": [],
@@ -1673,7 +1676,10 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "intent_message": {
                     "type": "string",
-                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read AutoProject run #3'.",
+                    "description": (
+                        "A brief, user-friendly summary of your intent "
+                        "(max 50 characters). Example: 'Read AutoProject run #3'."
+                    ),
                 },
             },
             "required": ["run"],
@@ -4818,7 +4824,11 @@ def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
             "scheme ('autoproject://reports/q3.md') to pass them to the other file "
             "tools. Use this to discover files before reading them.",
             {
-                "path": "Scheme-qualified directory: 'chat://' or 'autoproject://' for a whole space, or e.g. 'chat://data', 'autoproject://reports'. The scheme is required.",
+                "path": (
+                    "Scheme-qualified directory: 'chat://' or 'autoproject://' for a "
+                    "whole space, or e.g. 'chat://data', 'autoproject://reports'. "
+                    "The scheme is required."
+                ),
             },
         ),
         "read_file": (
@@ -4833,7 +4843,10 @@ def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
             ".pptx): extract them with run_python. Use list_files first to see "
             "available files.",
             {
-                "path": "Scheme-qualified file path, e.g. 'chat://report.pdf', 'autoproject://data/input.csv'. Use paths from list_files.",
+                "path": (
+                    "Scheme-qualified file path, e.g. 'chat://report.pdf', "
+                    "'autoproject://data/input.csv'. Use paths from list_files."
+                ),
             },
         ),
         "write_file": (
@@ -4846,7 +4859,11 @@ def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
             "Maximum file size is 1MB. To promote an existing file (including "
             "binary files) from 'chat://' to 'autoproject://', use copy_file instead.",
             {
-                "path": "Scheme-qualified file path, e.g. 'chat://src/main.py', 'autoproject://reports/q3.md'. Parent directories are created automatically.",
+                "path": (
+                    "Scheme-qualified file path, e.g. 'chat://src/main.py', "
+                    "'autoproject://reports/q3.md'. Parent directories are created "
+                    "automatically."
+                ),
             },
         ),
         "edit_file": (
@@ -4861,7 +4878,10 @@ def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
             "the whole file with write_file when making small changes. Text "
             "files only.",
             {
-                "path": "Scheme-qualified file path, e.g. 'chat://report.md', 'autoproject://notes/plan.md'. The file must already exist.",
+                "path": (
+                    "Scheme-qualified file path, e.g. 'chat://report.md', "
+                    "'autoproject://notes/plan.md'. The file must already exist."
+                ),
             },
         ),
         "copy_file": (
@@ -4884,9 +4904,21 @@ def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
             "'.responses/', '.subagent_responses/' and 'pasted/' (chat://) "
             "cannot be copied to autoproject://.",
             {
-                "src": "Scheme-qualified source (a file or a directory), e.g. 'chat://out/report.pdf' or 'autoproject://data'. Use paths from list_files.",
-                "dest": "Scheme-qualified destination path, e.g. 'autoproject://reports/report.pdf' or 'chat://data'. Required; give the full destination path, not just a directory to copy into.",
-                "intent_message": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Save report to the AutoProject'.",
+                "src": (
+                    "Scheme-qualified source (a file or a directory), e.g. "
+                    "'chat://out/report.pdf' or 'autoproject://data'. Use paths "
+                    "from list_files."
+                ),
+                "dest": (
+                    "Scheme-qualified destination path, e.g. "
+                    "'autoproject://reports/report.pdf' or 'chat://data'. Required; "
+                    "give the full destination path, not just a directory to copy "
+                    "into."
+                ),
+                "intent_message": (
+                    "A brief, user-friendly summary of your intent (max 50 "
+                    "characters). Example: 'Save report to the AutoProject'."
+                ),
             },
         ),
     }

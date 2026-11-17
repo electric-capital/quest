@@ -181,7 +181,8 @@ async def _after_status_change(run: dict, *, mark_unread: bool) -> None:
             await autoproject_store.mark_autoproject_unread(autoproject_id)
         except Exception:
             logger.warning(
-                "[autoproject-run] marking AutoProject %s unread failed", autoproject_id, exc_info=True,
+                "[autoproject-run] marking AutoProject %s unread failed",
+                autoproject_id, exc_info=True,
             )
     await publish_autoproject_state(autoproject_id)
 
@@ -450,8 +451,8 @@ async def complete_autoproject_run(
     await _after_status_change(completed, mark_unread=True)
 
     logger.info(
-        "[autoproject-run] AutoProject run completed via complete_autoproject_run (autoproject=%s, run=%s, "
-        "seq=%s, brief_written=%s, title_set=%s)",
+        "[autoproject-run] AutoProject run completed via complete_autoproject_run "
+        "(autoproject=%s, run=%s, seq=%s, brief_written=%s, title_set=%s)",
         autoproject_id, run_id, completed["seq"], brief is not None, title_set,
     )
     payload: dict[str, Any] = {
@@ -695,7 +696,9 @@ async def drive_autoproject_run(
         )
     except asyncio.CancelledError:
         try:
-            stopped = await autoproject_store.set_run_status(run_id, AUTOPROJECT_RUN_STATUS_STOPPED)
+            stopped = await autoproject_store.set_run_status(
+                run_id, AUTOPROJECT_RUN_STATUS_STOPPED,
+            )
             if stopped is not None:
                 logger.info(
                     "%s AutoProject run %s stopped (conversation=%s)",

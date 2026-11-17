@@ -6,7 +6,9 @@ from typing import Optional
 from sqlalchemy import select, delete, func, update
 
 from db.engine import AsyncSessionLocal
-from db.models import ActionRequest, ActionRequestStatus, Conversation, Routine, Project, AutoProject
+from db.models import (
+    ActionRequest, ActionRequestStatus, Conversation, Routine, Project, AutoProject,
+)
 
 
 async def create_action_request(
@@ -339,7 +341,8 @@ async def list_action_requests_enriched(
         autoproject_map: dict[str, str] = {}
         if autoproject_ids:
             result = await db.execute(
-                select(AutoProject.id, AutoProject.title).where(AutoProject.id.in_(autoproject_ids))
+                select(AutoProject.id, AutoProject.title)
+                .where(AutoProject.id.in_(autoproject_ids))
             )
             autoproject_map = {t.id: t.title for t in result.all()}
 
@@ -352,8 +355,12 @@ async def list_action_requests_enriched(
                 d["routine_name"] = routine_map.get(conv.routine_id) if conv.routine_id else None
                 d["project_name"] = project_map.get(conv.project_id) if conv.project_id else None
                 d["project_id"] = conv.project_id
-                d["autoproject_id"] = conv.autoproject_id if conv.autoproject_id in autoproject_map else None
-                d["autoproject_title"] = autoproject_map.get(conv.autoproject_id) if conv.autoproject_id else None
+                d["autoproject_id"] = (
+                    conv.autoproject_id if conv.autoproject_id in autoproject_map else None
+                )
+                d["autoproject_title"] = (
+                    autoproject_map.get(conv.autoproject_id) if conv.autoproject_id else None
+                )
             else:
                 d["routine_name"] = None
                 d["project_name"] = None

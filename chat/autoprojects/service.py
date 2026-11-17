@@ -591,12 +591,17 @@ async def set_autoproject_archived(user: dict, autoproject_id: str, archived: bo
         AutoProjectCapReachedError (unarchive).
     """
     require_autoprojects_enabled(user)
-    autoproject = await autoproject_store.set_autoproject_archived(user["id"], autoproject_id, archived)
+    autoproject = await autoproject_store.set_autoproject_archived(
+        user["id"], autoproject_id, archived,
+    )
     if archived and autoproject["read_seq"] < autoproject["event_seq"]:
         await autoproject_store.mark_autoproject_read(
             user["id"], autoproject_id, up_to_seq=autoproject["event_seq"],
         )
-        autoproject = await autoproject_store.get_autoproject(user["id"], autoproject_id) or autoproject
+        autoproject = (
+            await autoproject_store.get_autoproject(user["id"], autoproject_id)
+            or autoproject
+        )
     logger.info(
         "AutoProject %s (autoproject=%s, user=%s)",
         "archived" if archived else "unarchived", autoproject_id, user["id"],
@@ -624,7 +629,9 @@ async def mark_autoproject_read(user: dict, autoproject_id: str, *, seq: int) ->
     autoproject = await _require_owned(user, autoproject_id)
     if "_impersonator_uid" in user:
         return autoproject
-    moved = await autoproject_store.mark_autoproject_read(user["id"], autoproject_id, up_to_seq=seq)
+    moved = await autoproject_store.mark_autoproject_read(
+        user["id"], autoproject_id, up_to_seq=seq,
+    )
     if not moved:
         return autoproject
     from chat.autoprojects.events import publish_autoproject_list_changed
@@ -786,10 +793,14 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
     except Exception:
         logger.exception("Removing the directory of AutoProject %s failed", autoproject_id)
 
-    from chat.autoprojects.events import publish_autoproject_changed, publish_autoproject_list_changed
+    from chat.autoprojects.events import (
+        publish_autoproject_changed, publish_autoproject_list_changed,
+    )
 
     # The delete bumped event_seq once more before removing the row.
-    publish_autoproject_changed(user_id, {**autoproject, "event_seq": autoproject["event_seq"] + 1}, None)
+    publish_autoproject_changed(
+        user_id, {**autoproject, "event_seq": autoproject["event_seq"] + 1}, None,
+    )
     publish_autoproject_list_changed(user_id)
     if closed:
         await _publish_request_count_changed(user_id)
@@ -850,7 +861,9 @@ async def fail_interrupted_runs_at_startup() -> list[dict]:
         try:
             await autoproject_store.mark_autoproject_unread(autoproject_id)
         except Exception:
-            logger.exception("Marking AutoProject %s unread after a restart failed", autoproject_id)
+            logger.exception(
+                "Marking AutoProject %s unread after a restart failed", autoproject_id,
+            )
     if runs:
         logger.info("Failed %d AutoProject run(s) interrupted by a restart", len(runs))
     return runs

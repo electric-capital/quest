@@ -83,7 +83,10 @@ class AutoProjectQuestionResolvedError(AutoProjectStoreError):
         if status == QUESTION_STATUS_ANSWERED:
             message = "This question has already been answered."
         else:
-            message = "This question was cancelled; its AutoProject run is no longer waiting for it."
+            message = (
+                "This question was cancelled; its AutoProject run is no longer "
+                "waiting for it."
+            )
         super().__init__(message, details={"status": status, "answer": answer})
 
 

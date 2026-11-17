@@ -1178,7 +1178,9 @@ async def autoproject_file_info(
 @router.delete("/autoprojects/{autoproject_id}/files")
 async def delete_autoproject_file(
     autoproject_id: str,
-    path: str = Query(..., description="File or folder path within the AutoProject workspace to delete"),
+    path: str = Query(
+        ..., description="File or folder path within the AutoProject workspace to delete",
+    ),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Delete an AutoProject-workspace file or folder: ``{name, type, deletedCount}``."""

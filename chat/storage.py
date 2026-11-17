@@ -299,8 +299,9 @@ class InvalidStorageIdError(ValueError):
     not a single canonical path segment (empty, ``.``, ``..``, containing a
     separator, absolute) or whose resolved directory would not live under
     ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` /
-    ``AUTOPROJECTS_DIR`` (e.g. a planted symlink). Subclasses ``ValueError`` so callers that already treat
-    a bad id as a cache miss or a 4xx keep working.
+    ``AUTOPROJECTS_DIR`` (e.g. a planted symlink). Subclasses ``ValueError``
+    so callers that already treat a bad id as a cache miss or a 4xx keep
+    working.
     """
 
 

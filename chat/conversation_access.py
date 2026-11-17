@@ -107,7 +107,10 @@ def _autoproject_not_found(autoproject_id: str) -> HTTPException:
 
     return HTTPException(
         status_code=404,
-        detail={"error": "autoproject_not_found", "message": autoproject_not_found_message(autoproject_id)},
+        detail={
+            "error": "autoproject_not_found",
+            "message": autoproject_not_found_message(autoproject_id),
+        },
     )
 
 
@@ -151,5 +154,7 @@ async def resolve_owned_autoproject_workspace(
     ``root`` is ``ChatStorage.get_autoproject_workspace_root``, the workspace
     shared by every run of the AutoProject. The directory is not created here.
     """
-    autoproject = await require_owned_autoproject(user, autoproject_id, allow_archived=allow_archived)
+    autoproject = await require_owned_autoproject(
+        user, autoproject_id, allow_archived=allow_archived,
+    )
     return autoproject, ChatStorage.get_autoproject_workspace_root(autoproject_id)

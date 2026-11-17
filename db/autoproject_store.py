@@ -303,7 +303,9 @@ def normalize_title(title) -> str:
             ``AUTOPROJECT_TITLE_MAX_CHARS`` after normalizing.
     """
     if not isinstance(title, str):
-        raise AutoProjectValidationError("invalid_title", "The AutoProject title must be a string.")
+        raise AutoProjectValidationError(
+            "invalid_title", "The AutoProject title must be a string.",
+        )
     clean = _collapse(title)
     if not clean:
         raise AutoProjectValidationError("invalid_title", "The AutoProject title cannot be empty.")
@@ -673,7 +675,10 @@ async def list_autoprojects(user_id: int, *, archived: bool = False) -> list[dic
         autoprojects = (await db.execute(
             select(AutoProject)
             .where(AutoProject.user_id == user_id, AutoProject.archived == bool(archived))
-            .order_by(AutoProject.last_activity_at.desc(), AutoProject.created_at.desc(), AutoProject.id)
+            .order_by(
+                AutoProject.last_activity_at.desc(), AutoProject.created_at.desc(),
+                AutoProject.id,
+            )
         )).scalars().all()
         active_runs = (await db.execute(
             select(AutoProjectRun)
@@ -684,7 +689,9 @@ async def list_autoprojects(user_id: int, *, archived: bool = False) -> list[dic
             .order_by(AutoProjectRun.seq.desc())
         )).scalars().all()
         # Lowest seq wins if an AutoProject ever has more than one (not in v1).
-        active_by_autoproject = {run.autoproject_id: _active_run_summary(run) for run in active_runs}
+        active_by_autoproject = {
+            run.autoproject_id: _active_run_summary(run) for run in active_runs
+        }
         rows = []
         for autoproject in autoprojects:
             row = _autoproject_to_dict(autoproject)
@@ -766,7 +773,10 @@ async def set_title_from_run(autoproject_id: str, title: str) -> bool:
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             update(AutoProject)
-            .where(AutoProject.id == autoproject_id, AutoProject.title_is_default == True)  # noqa: E712
+            .where(
+                AutoProject.id == autoproject_id,
+                AutoProject.title_is_default == True,  # noqa: E712
+            )
             .values({
                 AutoProject.title: clean,
                 AutoProject.title_is_default: False,
@@ -864,7 +874,8 @@ async def delete_autoproject(user_id: int, autoproject_id: str) -> list[str]:
             select(Conversation.id).where(Conversation.autoproject_id == autoproject_id)
         )).scalars().all())
         conversation_ids.update((await db.execute(
-            select(AutoProjectRun.conversation_id).where(AutoProjectRun.autoproject_id == autoproject_id)
+            select(AutoProjectRun.conversation_id)
+            .where(AutoProjectRun.autoproject_id == autoproject_id)
         )).scalars().all())
         # Delete the conversations explicitly too: a run whose conversation
         # somehow lacks the autoproject_id still loses its transcript row.
@@ -898,7 +909,8 @@ async def list_autoproject_conversation_ids(autoproject_id: str) -> list[str]:
             select(Conversation.id).where(Conversation.autoproject_id == autoproject_id)
         )).scalars().all())
         ids.update((await db.execute(
-            select(AutoProjectRun.conversation_id).where(AutoProjectRun.autoproject_id == autoproject_id)
+            select(AutoProjectRun.conversation_id)
+            .where(AutoProjectRun.autoproject_id == autoproject_id)
         )).scalars().all())
     return sorted(ids)
 
@@ -908,7 +920,9 @@ async def list_autoproject_ids_for_user(user_id: int) -> list[str]:
     sweep of ``AUTOPROJECTS_DIR``)."""
     async with AsyncSessionLocal() as db:
         return list((await db.execute(
-            select(AutoProject.id).where(AutoProject.user_id == user_id).order_by(AutoProject.created_at)
+            select(AutoProject.id)
+            .where(AutoProject.user_id == user_id)
+            .order_by(AutoProject.created_at)
         )).scalars().all())
 
 
@@ -1027,7 +1041,9 @@ async def get_run_by_seq(autoproject_id: str, seq: int) -> Optional[dict]:
     """Run number ``seq`` of the AutoProject, or None (never allocated, or deleted)."""
     async with AsyncSessionLocal() as db:
         run = (await db.execute(
-            select(AutoProjectRun).where(AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.seq == seq)
+            select(AutoProjectRun).where(
+                AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.seq == seq,
+            )
         )).scalar_one_or_none()
         return _run_to_dict(run) if run is not None else None
 
@@ -1280,7 +1296,10 @@ async def delete_run(user_id: int, autoproject_id: str, run_id: str) -> str:
             await db.rollback()
             raise AutoProjectNotFoundError(autoproject_id)
         run = (await db.execute(
-            select(AutoProjectRun).where(AutoProjectRun.id == run_id, AutoProjectRun.autoproject_id == autoproject_id)
+            select(AutoProjectRun).where(
+                AutoProjectRun.id == run_id,
+                AutoProjectRun.autoproject_id == autoproject_id,
+            )
         )).scalar_one_or_none()
         if run is None:
             await db.rollback()
@@ -1384,7 +1403,10 @@ async def list_context_runs(autoproject_id: str, *, before_seq: int, limit: int)
         runs = (await db.execute(
             select(AutoProjectRun)
             .options(defer(AutoProjectRun.result, raiseload=True))
-            .where(AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.seq < int(before_seq))
+            .where(
+                AutoProjectRun.autoproject_id == autoproject_id,
+                AutoProjectRun.seq < int(before_seq),
+            )
             .order_by(AutoProjectRun.seq.desc())
             .limit(limit)
         )).scalars().all()
@@ -1415,8 +1437,9 @@ async def list_run_index(
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(
-                AutoProjectRun.id, AutoProjectRun.seq, AutoProjectRun.status, AutoProjectRun.summary,
-                AutoProjectRun.handoff_missing, AutoProjectRun.started_at, AutoProjectRun.finished_at,
+                AutoProjectRun.id, AutoProjectRun.seq, AutoProjectRun.status,
+                AutoProjectRun.summary, AutoProjectRun.handoff_missing,
+                AutoProjectRun.started_at, AutoProjectRun.finished_at,
                 func.substr(AutoProjectRun.prompt, 1, max(0, int(prompt_chars))),
             )
             .where(AutoProjectRun.autoproject_id == autoproject_id)
@@ -1442,7 +1465,11 @@ async def list_run_index(
 async def count_runs(autoproject_id: str, *, before_seq: Optional[int] = None) -> int:
     """How many runs the AutoProject has (deleted runs not counted); with
     ``before_seq``, only those with ``seq < before_seq``."""
-    stmt = select(func.count()).select_from(AutoProjectRun).where(AutoProjectRun.autoproject_id == autoproject_id)
+    stmt = (
+        select(func.count())
+        .select_from(AutoProjectRun)
+        .where(AutoProjectRun.autoproject_id == autoproject_id)
+    )
     if before_seq is not None:
         stmt = stmt.where(AutoProjectRun.seq < int(before_seq))
     async with AsyncSessionLocal() as db:
@@ -1698,7 +1725,10 @@ async def mark_autoproject_unread(autoproject_id: str) -> bool:
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             update(AutoProject)
-            .where(AutoProject.id == autoproject_id, AutoProject.event_seq > AutoProject.unread_seq)
+            .where(
+                AutoProject.id == autoproject_id,
+                AutoProject.event_seq > AutoProject.unread_seq,
+            )
             .values({AutoProject.unread_seq: AutoProject.event_seq})
             .execution_options(synchronize_session=False)
         )
@@ -1721,7 +1751,10 @@ async def mark_autoproject_read(user_id: int, autoproject_id: str, *, up_to_seq:
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             update(AutoProject)
-            .where(AutoProject.id == autoproject_id, AutoProject.user_id == user_id, target > AutoProject.read_seq)
+            .where(
+                AutoProject.id == autoproject_id, AutoProject.user_id == user_id,
+                target > AutoProject.read_seq,
+            )
             .values({AutoProject.read_seq: target})
             .execution_options(synchronize_session=False)
         )

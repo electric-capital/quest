@@ -944,7 +944,9 @@ async def run_conversation_turn(
                 project_memories_content=project_memories_content,
                 # AutoProject runs only reach this branch: they have no project,
                 # so they are never public.
-                autoproject_context=run_autoproject_context.text if run_autoproject_context else "",
+                autoproject_context=(
+                    run_autoproject_context.text if run_autoproject_context else ""
+                ),
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a
@@ -1580,7 +1582,8 @@ async def run_conversation_turn(
                         # Routine runs keep run_kind "top_level" but may not
                         # suggest doc notes (the suggest_doc_note backstop).
                         is_routine=bool(ctx.routine_id),
-                        autoproject_id=ctx.autoproject_id, autoproject_run_id=ctx.autoproject_run_id,
+                        autoproject_id=ctx.autoproject_id,
+                        autoproject_run_id=ctx.autoproject_run_id,
                     )
 
                     # Emit conversation_updated event when the name was set

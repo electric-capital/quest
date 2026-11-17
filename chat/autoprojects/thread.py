@@ -61,7 +61,9 @@ def source_run_id(source: Optional[str]) -> Optional[str]:
     return None
 
 
-async def _brief_authorship(autoproject_id: str, brief_version: int) -> tuple[Optional[str], Optional[int]]:
+async def _brief_authorship(
+    autoproject_id: str, brief_version: int,
+) -> tuple[Optional[str], Optional[int]]:
     """``(brief_source, brief_run_seq)`` of the AutoProject's current brief version:
     both None for version 0 or a pruned row; the seq None unless the source
     is a run that still exists."""
@@ -112,7 +114,9 @@ async def build_autoproject_detail(autoproject: dict) -> dict:
     autoproject_id = autoproject["id"]
     active = await autoproject_store.get_active_run(autoproject_id)
     run_count = await autoproject_store.count_runs(autoproject_id)
-    brief_source, brief_run_seq = await _brief_authorship(autoproject_id, autoproject["brief_version"])
+    brief_source, brief_run_seq = await _brief_authorship(
+        autoproject_id, autoproject["brief_version"],
+    )
     return {
         "id": autoproject_id,
         "title": autoproject["title"],
@@ -319,7 +323,9 @@ async def build_runs_page(
          questions: [question_view, ...],          # oldest first
          open_requests: [transcript card row, ...]}
     """
-    page = await autoproject_store.list_runs_page(autoproject_id, before_seq=before_seq, limit=limit)
+    page = await autoproject_store.list_runs_page(
+        autoproject_id, before_seq=before_seq, limit=limit,
+    )
     runs = page["runs"]
     questions = await list_run_questions(runs)
     open_requests = await list_open_requests(runs)

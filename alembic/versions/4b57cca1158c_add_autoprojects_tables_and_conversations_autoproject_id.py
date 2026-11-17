@@ -4,10 +4,11 @@ Revision ID: 4b57cca1158c
 Revises: a3d9e5c7f2b4
 Create Date: 2026-11-10 12:00:00.000000
 
-AutoProjects: an ``autoprojects`` row holds an AutoProject's title, the brief (with its
-version counter) and the counters the thread and the unread dot run on. Each prompt is answered by a run, an
-``autoproject_runs`` row numbered per AutoProject by ``seq`` and tied one-to-one to its own
-conversation; ``autoproject_brief_versions`` keeps the recent brief texts. A run's
+AutoProjects: an ``autoprojects`` row holds an AutoProject's title, the brief
+(with its version counter) and the counters the thread and the unread dot run
+on. Each prompt is answered by a run, an ``autoproject_runs`` row numbered per
+AutoProject by ``seq`` and tied one-to-one to its own conversation;
+``autoproject_brief_versions`` keeps the recent brief texts. A run's
 conversation carries ``conversations.autoproject_id``.
 
 SQLite cannot add a constraint with ALTER TABLE, and a batch (copy and move)
@@ -106,10 +107,12 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index(
-        'ix_autoproject_runs_autoproject_id_seq', 'autoproject_runs', ['autoproject_id', 'seq'], unique=True,
+        'ix_autoproject_runs_autoproject_id_seq', 'autoproject_runs',
+        ['autoproject_id', 'seq'], unique=True,
     )
     op.create_index(
-        'ix_autoproject_runs_autoproject_id_status', 'autoproject_runs', ['autoproject_id', 'status'],
+        'ix_autoproject_runs_autoproject_id_status', 'autoproject_runs',
+        ['autoproject_id', 'status'],
     )
     op.create_index(
         'ix_autoproject_runs_conversation_id', 'autoproject_runs', ['conversation_id'],

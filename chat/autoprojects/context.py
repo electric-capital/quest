@@ -402,7 +402,10 @@ def build_autoproject_context(
             + len("\n\n") + len(_GAP_NOTE)
             + len("\n\n") + len(_count_line(10**9, listed=True))
         )
-        budget = min(AUTOPROJECT_LOG_INDEX_MAX_CHARS, AUTOPROJECT_CONTEXT_MAX_CHARS - len(text) - reserve)
+        budget = min(
+            AUTOPROJECT_LOG_INDEX_MAX_CHARS,
+            AUTOPROJECT_CONTEXT_MAX_CHARS - len(text) - reserve,
+        )
         used = 0
         for run in rest[:AUTOPROJECT_LOG_INDEX_MAX_ENTRIES]:
             line = _render_index_line(run)
@@ -436,7 +439,11 @@ def build_autoproject_context(
         tail.append(line)
     if tail:
         text += "\n\n" + "\n\n".join(tail)
-    return _bounded(text, f"AutoProject context (autoproject={autoproject.get('id')}, run={current_seq})")
+    return _bounded(
+        text,
+        f"AutoProject context (autoproject={autoproject.get('id')}, "
+        f"run={current_seq})",
+    )
 
 
 def build_autoproject_subagent_context(autoproject: dict) -> str:
@@ -447,7 +454,10 @@ def build_autoproject_subagent_context(autoproject: dict) -> str:
     parts = [
         _SUBAGENT_PREAMBLE, _title_lines(autoproject), _brief_section(autoproject, subagent=True),
     ]
-    return _bounded("\n\n".join(parts), f"AutoProject sub-agent context (autoproject={autoproject.get('id')})")
+    return _bounded(
+        "\n\n".join(parts),
+        f"AutoProject sub-agent context (autoproject={autoproject.get('id')})",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +480,9 @@ class AutoProjectContext:
     autoproject: dict
 
 
-async def load_autoproject_context(autoproject_id: str, *, current_seq: int) -> Optional[AutoProjectContext]:
+async def load_autoproject_context(
+    autoproject_id: str, *, current_seq: int,
+) -> Optional[AutoProjectContext]:
     """Load and render the AutoProject context of AutoProject run ``current_seq``.
 
     Reads the AutoProject, the window and index rows (``seq < current_seq``,
@@ -492,7 +504,9 @@ async def load_autoproject_context(autoproject_id: str, *, current_seq: int) -> 
     text = build_autoproject_context(
         autoproject, runs, current_seq=current_seq, earlier_run_count=earlier_run_count,
     )
-    return AutoProjectContext(text=text, brief_version=autoproject["brief_version"], autoproject=autoproject)
+    return AutoProjectContext(
+        text=text, brief_version=autoproject["brief_version"], autoproject=autoproject,
+    )
 
 
 @dataclass(frozen=True)

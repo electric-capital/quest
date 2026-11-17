@@ -2187,8 +2187,15 @@ _register(SystemSkill(
 _register(SystemSkill(
     id="system:autoprojects",
     name="AutoProjects",
-    description="How an AutoProject run keeps its brief, notes, result and files, and when to ask the user.",
-    when_to_load="Load before finishing an AutoProject run that changed the state of the work, or when unsure what belongs in the brief, the notes or autoproject://.",
+    description=(
+        "How an AutoProject run keeps its brief, notes, result and files, and "
+        "when to ask the user."
+    ),
+    when_to_load=(
+        "Load before finishing an AutoProject run that changed the state of the "
+        "work, or when unsure what belongs in the brief, the notes or "
+        "autoproject://."
+    ),
     requires=AUTOPROJECTS_SERVICE_KEY,
     requires_autoproject_run=True,
     content_builder=_autoprojects_content,
