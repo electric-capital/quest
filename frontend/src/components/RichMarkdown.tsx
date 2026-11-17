@@ -13,7 +13,7 @@
  * the chunk lands, then re-renders; ChatPanel re-pins its scroll then.
  *
  * URLs pass react-markdown's default sanitiser, except the workspace
- * references (`chat://`, `proj://`, `task://`, utils/workspaceRefs.ts),
+ * references (`chat://`, `proj://`, `autoproject://`, utils/workspaceRefs.ts),
  * which it would blank as unknown protocols: they reach the `a` / `img`
  * renderers as written, and MarkdownLink / MarkdownImage resolve them.
  */

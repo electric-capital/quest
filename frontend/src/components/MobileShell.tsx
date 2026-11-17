@@ -19,8 +19,8 @@ import { TablesGateClosed } from './tables/TablesGateClosed'
 import { TableViewer } from './tables/TableViewer'
 import { TablesListView } from './tables/TablesListView'
 import type { TablesRoute } from '../utils/tablesRoute'
-import { TasksMain } from './tasks/TasksMain'
-import type { TasksRoute } from '../utils/tasksRoute'
+import { AutoProjectsMain } from './autoprojects/AutoProjectsMain'
+import type { AutoProjectsRoute } from '../utils/autoprojectsRoute'
 
 interface MobileShellProps {
   activeConversationId: string | null
@@ -28,8 +28,8 @@ interface MobileShellProps {
   onConversationSelect: (id: string, projectId?: string | null) => void
   onNewConversation: (id: string, projectId?: string | null) => void
   onProjectIdLoaded: (conversationId: string, projectId: string) => void
-  /** A conversation opened by its URL turned out to be a Quest Task run. */
-  onTaskIdLoaded: (conversationId: string, taskId: string) => void
+  /** A conversation opened by its URL turned out to be an AutoProject run. */
+  onAutoProjectIdLoaded: (conversationId: string, autoprojectId: string) => void
   /** Parsed /docs URL (parseDocsRoute), or null off the docs routes. */
   docsRoute: DocsRoute | null
   /** Whether the `docs` feature gate is open for the current user. */
@@ -38,10 +38,10 @@ interface MobileShellProps {
   tablesRoute: TablesRoute | null
   /** Whether the `tables` feature gate is open for the current user. */
   tablesEnabled: boolean
-  /** Parsed /tasks URL (parseTasksRoute), or null off the tasks routes. */
-  tasksRoute: TasksRoute | null
-  /** Whether the `tasks` feature gate is open for the current user. */
-  tasksEnabled: boolean
+  /** Parsed /autoprojects URL (parseAutoProjectsRoute), or null off the AutoProjects routes. */
+  autoprojectsRoute: AutoProjectsRoute | null
+  /** Whether the `autoprojects` feature gate is open for the current user. */
+  autoprojectsEnabled: boolean
 }
 
 interface ConversationSelectOpts {
@@ -53,10 +53,10 @@ interface ConversationSelectOpts {
  * Sidebar/ChatPanel/RightPanel row when useIsMobile() matches. Same routes,
  * same data layer — only the layout tree differs: a fixed top bar, a slide-in
  * drawer hosting the existing Sidebar, and a single main pane (chat, home
- * composer, requests, or a Quest Docs, Tables or Tasks view). The
+ * composer, requests, or a Quest Docs, Tables or AutoProjects view). The
  * RightPanel lives in the workspace drawer behind the top bar's folder
- * button, for a chat; the docs, tables and tasks views have no workspace
- * (a task page shows its files in its main column, and a run's Chat Files
+ * button, for a chat; the docs, tables and AutoProjects views have no workspace
+ * (an AutoProject page shows its files in its main column, and a run's Chat Files
  * in its full-screen run view).
  */
 export function MobileShell({
@@ -65,13 +65,13 @@ export function MobileShell({
   onConversationSelect,
   onNewConversation,
   onProjectIdLoaded,
-  onTaskIdLoaded,
+  onAutoProjectIdLoaded,
   docsRoute,
   docsEnabled,
   tablesRoute,
   tablesEnabled,
-  tasksRoute,
-  tasksEnabled,
+  autoprojectsRoute,
+  autoprojectsEnabled,
 }: MobileShellProps) {
   const { appName } = useAppConfig()
   const {
@@ -173,23 +173,23 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tablesRouteKey])
 
-  // Same for a tasks view (a list, New Task, a task page or one of its runs).
-  const tasksRouteKey = tasksRoute
-    ? tasksRoute.kind === 'list'
-      ? `list:${tasksRoute.archived ? 'archived' : 'active'}`
-      : tasksRoute.kind === 'new'
+  // Same for an AutoProjects view (a list, New AutoProject, an AutoProject page or one of its runs).
+  const autoprojectsRouteKey = autoprojectsRoute
+    ? autoprojectsRoute.kind === 'list'
+      ? `list:${autoprojectsRoute.archived ? 'archived' : 'active'}`
+      : autoprojectsRoute.kind === 'new'
         ? 'new'
-        : tasksRoute.kind === 'thread'
-          ? `thread:${tasksRoute.taskId}`
-          : `run:${tasksRoute.taskId}:${tasksRoute.conversationId}`
+        : autoprojectsRoute.kind === 'thread'
+          ? `thread:${autoprojectsRoute.autoprojectId}`
+          : `run:${autoprojectsRoute.autoprojectId}:${autoprojectsRoute.conversationId}`
     : null
   useEffect(() => {
-    if (tasksRouteKey === null) return
+    if (autoprojectsRouteKey === null) return
     setDrawerOpen(false)
     setWorkspaceOpen(false)
-  }, [tasksRouteKey])
+  }, [autoprojectsRouteKey])
 
-  const hasWorkspace = !docsRoute && !tablesRoute && !tasksRoute
+  const hasWorkspace = !docsRoute && !tablesRoute && !autoprojectsRoute
 
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
@@ -254,7 +254,7 @@ export function MobileShell({
             <span className="mobile-topbar-title-text">{appName}</span>
           )}
         </div>
-        {/* No workspace beside a docs, tables or tasks view (desktop hides
+        {/* No workspace beside a docs, tables or AutoProjects view (desktop hides
             the RightPanel there too); keep the slot so the title stays put. */}
         {!hasWorkspace ? (
           <span className="mobile-topbar-button mobile-topbar-button-end" aria-hidden="true" />
@@ -299,15 +299,15 @@ export function MobileShell({
               />
             )}
           </div>
-        ) : tasksRoute ? (
-          <div className="main-content docs-main tasks-main">
-            <TasksMain route={tasksRoute} enabled={tasksEnabled} />
+        ) : autoprojectsRoute ? (
+          <div className="main-content docs-main autoprojects-main">
+            <AutoProjectsMain route={autoprojectsRoute} enabled={autoprojectsEnabled} />
           </div>
         ) : activeConversationId ? (
           <ChatPanel
             conversationId={activeConversationId}
             onProjectIdLoaded={onProjectIdLoaded}
-            onTaskIdLoaded={onTaskIdLoaded}
+            onAutoProjectIdLoaded={onAutoProjectIdLoaded}
           />
         ) : (
           <HomeComposer onNewConversation={handleNewConversation} />

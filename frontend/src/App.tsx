@@ -24,13 +24,13 @@ import { TablesGateClosed } from './components/tables/TablesGateClosed'
 import { TableViewer } from './components/tables/TableViewer'
 import { TablesListView } from './components/tables/TablesListView'
 import { TABLES_FEATURE } from './api/tablesApi'
-import { TasksMain } from './components/tasks/TasksMain'
-import { TASKS_FEATURE } from './api/tasksApi'
+import { AutoProjectsMain } from './components/autoprojects/AutoProjectsMain'
+import { AUTOPROJECTS_FEATURE } from './api/autoprojectsApi'
 import { useIsMobile } from './hooks/useIsMobile'
 import { useUnreadTracking } from './hooks/useConversationUnread'
 import { parseDocsRoute } from './utils/docsRoute'
 import { parseTablesRoute } from './utils/tablesRoute'
-import { parseTasksRoute, taskRunPath } from './utils/tasksRoute'
+import { parseAutoProjectsRoute, autoprojectRunPath } from './utils/autoprojectsRoute'
 import { LazyBoundary, lazyNamed } from './components/LazyBoundary'
 
 // Admin-only page: a separate chunk, fetched on the first visit.
@@ -70,12 +70,12 @@ function AppContent() {
   // same URL-only main-pane takeover as the docs views.
   const tablesRoute = parseTablesRoute(location.pathname, location.search)
   const tablesEnabled = enabledFeatures.includes(TABLES_FEATURE)
-  // Quest Tasks views (/tasks, /tasks/new, /tasks/<id>, and a run open in
-  // the task page's detail panel /tasks/<id>/runs/<conversation id>): the
+  // AutoProjects views (/autoprojects, /autoprojects/new, /autoprojects/<id>, and a run open in
+  // the AutoProject page's detail panel /autoprojects/<id>/runs/<conversation id>): the
   // same URL-only takeover. A run's conversation id is not mirrored into
   // activeConversationId.
-  const tasksRoute = parseTasksRoute(location.pathname, location.search)
-  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE)
+  const autoprojectsRoute = parseAutoProjectsRoute(location.pathname, location.search)
+  const autoprojectsEnabled = enabledFeatures.includes(AUTOPROJECTS_FEATURE)
 
   // Sync URL -> inbox state. /inbox (Requests tab), /inbox/memories
   // (Memories tab) and /inbox/other (Other tab) are the deep-linkable
@@ -144,16 +144,16 @@ function AppContent() {
     }
   }, [params.projectId, params.conversationId, navigate])
 
-  // A Quest Task run opened by its conversation URL (/chats/<id>, e.g. an
+  // An AutoProject run opened by its conversation URL (/chats/<id>, e.g. an
   // inbox "Go to conversation" or a doc's "written by" link): show it on its
-  // task's page, open in the detail panel, instead. With the tasks gate
-  // closed the run stays on /chats/<id> as a read-only transcript (the task
+  // AutoProject's page, open in the detail panel, instead. With the AutoProjects gate
+  // closed the run stays on /chats/<id> as a read-only transcript (the AutoProject
   // page would only say the feature is off).
-  const handleTaskIdLoaded = useCallback((conversationId: string, taskId: string) => {
-    if (tasksEnabled && params.conversationId === conversationId) {
-      navigate(taskRunPath(taskId, conversationId), { replace: true })
+  const handleAutoProjectIdLoaded = useCallback((conversationId: string, autoprojectId: string) => {
+    if (autoprojectsEnabled && params.conversationId === conversationId) {
+      navigate(autoprojectRunPath(autoprojectId, conversationId), { replace: true })
     }
-  }, [tasksEnabled, params.conversationId, navigate])
+  }, [autoprojectsEnabled, params.conversationId, navigate])
 
   // Show loading state while checking session auth
   if (isCheckingAuth) {
@@ -188,13 +188,13 @@ function AppContent() {
         onConversationSelect={handleConversationSelect}
         onNewConversation={handleNewConversation}
         onProjectIdLoaded={handleProjectIdLoaded}
-        onTaskIdLoaded={handleTaskIdLoaded}
+        onAutoProjectIdLoaded={handleAutoProjectIdLoaded}
         docsRoute={docsRoute}
         docsEnabled={docsEnabled}
         tablesRoute={tablesRoute}
         tablesEnabled={tablesEnabled}
-        tasksRoute={tasksRoute}
-        tasksEnabled={tasksEnabled}
+        autoprojectsRoute={autoprojectsRoute}
+        autoprojectsEnabled={autoprojectsEnabled}
       />
     )
   }
@@ -234,12 +234,12 @@ function AppContent() {
             />
           )}
         </div>
-      ) : tasksRoute ? (
-        // Full takeover: no RightPanel beside the task views. The task page
+      ) : autoprojectsRoute ? (
+        // Full takeover: no RightPanel beside the AutoProject views. The AutoProject page
         // opens its own detail panel (a run, the brief History, the
         // instructions) beside its main column.
-        <div className="main-content docs-main tasks-main">
-          <TasksMain route={tasksRoute} enabled={tasksEnabled} />
+        <div className="main-content docs-main autoprojects-main">
+          <AutoProjectsMain route={autoprojectsRoute} enabled={autoprojectsEnabled} />
         </div>
       ) : (
         <>
@@ -248,7 +248,7 @@ function AppContent() {
               <ChatPanel
                 conversationId={activeConversationId}
                 onProjectIdLoaded={handleProjectIdLoaded}
-                onTaskIdLoaded={handleTaskIdLoaded}
+                onAutoProjectIdLoaded={handleAutoProjectIdLoaded}
               />
             ) : (
               <HomeComposer onNewConversation={handleNewConversation} />
@@ -317,15 +317,15 @@ function App() {
         {/* Quest Tables: All Tables (?project=<id> filter) and the viewer. */}
         <Route path="/tables" element={<AppContent />} />
         <Route path="/tables/:tableId" element={<AppContent />} />
-        {/* Quest Tasks: the list (?archived=true), New Task, the task page
-            and the task page with one run open in its detail panel. The run
+        {/* AutoProjects: the list (?archived=true), New AutoProject, the AutoProject page
+            and the AutoProject page with one run open in its detail panel. The run
             param is deliberately not `conversationId`:
             AppContent mirrors that into activeConversationId, and a run
             conversation never becomes the active sidebar conversation. */}
-        <Route path="/tasks" element={<AppContent />} />
-        <Route path="/tasks/new" element={<AppContent />} />
-        <Route path="/tasks/:taskId" element={<AppContent />} />
-        <Route path="/tasks/:taskId/runs/:runConversationId" element={<AppContent />} />
+        <Route path="/autoprojects" element={<AppContent />} />
+        <Route path="/autoprojects/new" element={<AppContent />} />
+        <Route path="/autoprojects/:autoprojectId" element={<AppContent />} />
+        <Route path="/autoprojects/:autoprojectId/runs/:runConversationId" element={<AppContent />} />
         {/* Set-password links (invites, sign-up, resets); works signed out. */}
         <Route path="/set-password" element={<SetPasswordScreen />} />
         <Route path="/admin/system-reports" element={<AdminSystemReportsRoute />} />

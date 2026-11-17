@@ -10,15 +10,15 @@
 
 export const HOME_DRAFT_KEY = '__home_draft__';
 
-// The Quest Tasks composers (components/tasks/TaskComposer.tsx) never send on
+// The AutoProjects composers (components/autoprojects/AutoProjectComposer.tsx) never send on
 // a conversation they are bound to: every send creates a fresh run
-// conversation. The New Task page binds its composer to TASK_DRAFT_KEY; a
-// task thread binds its own to taskDraftKey(taskId), so a model pick, a
-// queued skill or unsent text (store/taskDrafts.ts) stays with that task.
+// conversation. The New AutoProject page binds its composer to AUTOPROJECT_DRAFT_KEY; a
+// AutoProject thread binds its own to autoprojectDraftKey(autoprojectId), so a model pick, a
+// queued skill or unsent text (store/autoprojectDrafts.ts) stays with that AutoProject.
 // Like HOME_DRAFT_KEY these keys must never
 // get a provider lock (the composer runs with skipSendLocks).
-export const TASK_DRAFT_KEY = '__task_draft__';
+export const AUTOPROJECT_DRAFT_KEY = '__autoproject_draft__';
 
-export function taskDraftKey(taskId: string): string {
-  return `${TASK_DRAFT_KEY}:${taskId}`;
+export function autoprojectDraftKey(autoprojectId: string): string {
+  return `${AUTOPROJECT_DRAFT_KEY}:${autoprojectId}`;
 }

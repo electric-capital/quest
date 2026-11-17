@@ -200,9 +200,9 @@ interface UseConversationResult {
   slackChannelId: string | null;
   slackThreadTs: string | null;
   slackTeamId: string | null;
-  /** The Quest Task this conversation is a run of (its detail's `task_id`);
+  /** The AutoProject this conversation is a run of (its detail's `autoproject_id`);
    *  null for any other conversation and until the detail loaded. */
-  taskId: string | null;
+  autoprojectId: string | null;
   /** Raw model value from the conversation record. `null` means "no model
    *  set on the conversation" (server default applies at run time). Distinct
    *  from the in-context selected model which always falls back to a local
@@ -271,8 +271,8 @@ export function useConversation(conversationId: string, options?: UseConversatio
   const [slackThreadTs, setSlackThreadTs] = useState<string | null>(null);
   const [slackTeamId, setSlackTeamId] = useState<string | null>(null);
   // Tagged with the conversation it was loaded for, so a switch never shows
-  // the previous conversation's task while the new detail loads.
-  const [loadedTask, setLoadedTask] = useState<{ conversationId: string; taskId: string | null } | null>(null);
+  // the previous conversation's AutoProject while the new detail loads.
+  const [loadedAutoProject, setLoadedAutoProject] = useState<{ conversationId: string; autoprojectId: string | null } | null>(null);
   const [conversationModel, setConversationModel] = useState<string | null>(null);
   const [conversationFlags, setConversationFlags] = useState<string[]>([]);
   // Header title unit state: hydrated from GET /conversations/{id}, then
@@ -405,13 +405,13 @@ export function useConversation(conversationId: string, options?: UseConversatio
         }
 
         // Track origin so the composer can be locked for Slack-driven,
-        // cross-user subagent, inference API and Quest Task run
+        // cross-user subagent, inference API and AutoProject run
         // conversations.
         const nextOrigin: ConversationOrigin =
           response.origin === 'slack'
             || response.origin === 'user_subagent'
             || response.origin === 'inference_api'
-            || response.origin === 'task'
+            || response.origin === 'autoproject'
             ? response.origin
             : 'web';
         setOrigin(nextOrigin);
@@ -419,7 +419,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
         setSlackChannelId(response.slack_channel_id ?? null);
         setSlackThreadTs(response.slack_thread_ts ?? null);
         setSlackTeamId(response.slack_team_id ?? null);
-        setLoadedTask({ conversationId, taskId: response.task_id ?? null });
+        setLoadedAutoProject({ conversationId, autoprojectId: response.autoproject_id ?? null });
         if (options?.onOriginLoaded) {
           options.onOriginLoaded(conversationId, nextOrigin);
         }
@@ -802,7 +802,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
     slackChannelId,
     slackThreadTs,
     slackTeamId,
-    taskId: loadedTask?.conversationId === conversationId ? loadedTask.taskId : null,
+    autoprojectId: loadedAutoProject?.conversationId === conversationId ? loadedAutoProject.autoprojectId : null,
     conversationModel,
     conversationFlags,
     customName,

@@ -32,8 +32,8 @@
  * user drags it, derives its shares from the two-card key so an existing
  * Tables height carries over. The two file cards without Tables use
  * ``quest_project_files_split_<pid>`` (Chat Files' percentage), derived
- * from the three-card shares until dragged. (A task run's files live on
- * the task page instead: its Chat Files in the run panel, the task's files
+ * from the three-card shares until dragged. (An AutoProject run's files live on
+ * the AutoProject page instead: its Chat Files in the run panel, the AutoProject's files
  * in the page's main column.)
  */
 

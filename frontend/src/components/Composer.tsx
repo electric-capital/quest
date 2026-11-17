@@ -226,7 +226,7 @@ export interface ComposerProps {
   isPublicProject?: boolean;
   /**
    * Non-Slack read-only banner copy (cross-user subagent, inference API and
-   * task run conversations; may carry a link). When set, the read-only
+   * AutoProject run conversations; may carry a link). When set, the read-only
    * banner shows it instead of the Slack copy/link.
    */
   readOnlyNotice?: React.ReactNode;
@@ -240,7 +240,7 @@ export interface ComposerProps {
   onModelChange?: (model: string, thinkingEffort: string | null) => void;
   /**
    * Hide the Flags button / popover and the read-only flags label. Set by
-   * the Quest Tasks composer: a task run takes no conversation flags (the
+   * the AutoProjects composer: an AutoProject run takes no conversation flags (the
    * server ignores them). Defaults to false.
    */
   hideFlags?: boolean;
@@ -252,7 +252,7 @@ export interface ComposerProps {
   placeholder?: string;
   /**
    * Seeds the input text on mount only (a later change is ignored). Set by
-   * the Quest Tasks composer to restore a per-task draft. Defaults to empty.
+   * the AutoProjects composer to restore a per-AutoProject draft. Defaults to empty.
    */
   initialText?: string;
   /**
@@ -568,7 +568,7 @@ export function Composer({
   // "pre-focused on load" case and a freshly-created empty conversation).
   // Never on mobile: programmatic focus would pop the software keyboard (and
   // expand the floating bar) without a user tap. Never scrolling: a host
-  // that places the composer inside a scrolling page (the task page) must
+  // that places the composer inside a scrolling page (the AutoProject page) must
   // not be scrolled back to it when a run ends.
   useEffect(() => {
     if (!isMobile && !isStreaming && prevStreamingRef.current) {

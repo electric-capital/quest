@@ -14,7 +14,7 @@ import { useConversationSkills } from '../contexts/ConversationSkillsContext';
 import { useNavigationState } from '../contexts/NavigationContext';
 import { webSocketManager } from '../services/WebSocketManager';
 import { compactConversation, duplicateConversationWorkspace, fetchProject } from '../api/client';
-import { TASKS_FEATURE } from '../api/tasksApi';
+import { AUTOPROJECTS_FEATURE } from '../api/autoprojectsApi';
 import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, ComposerAttachmentRef } from '../api/types';
 import { MessageContentRenderer, markdownComponents, MarkdownWorkspaceContext } from './Message';
 import { ToolCallGroup } from './ToolCallGroup';
@@ -33,19 +33,19 @@ import { isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile } from '.
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
 import { seedNewConversation } from '../utils/newConversation';
-import { taskThreadPath } from '../utils/tasksRoute';
+import { autoprojectThreadPath } from '../utils/autoprojectsRoute';
 import './ChatPanel.css';
 
 interface ChatPanelProps {
   conversationId: string;
   onConversationUpdate?: () => void;
   onProjectIdLoaded?: (conversationId: string, projectId: string) => void;
-  /** The loaded detail names the Quest Task this conversation is a run of
-   *  (App redirects /chats/<run id> to the task page with that run open). */
-  onTaskIdLoaded?: (conversationId: string, taskId: string) => void;
+  /** The loaded detail names the AutoProject this conversation is a run of
+   *  (App redirects /chats/<run id> to the AutoProject page with that run open). */
+  onAutoProjectIdLoaded?: (conversationId: string, autoprojectId: string) => void;
   /** Shown in place of the conversation's title unit (ConversationHeader),
    *  inside the panel's column above the message list; `null` shows none.
-   *  The task page's run panel supplies its own (a failed run's error) or
+   *  The AutoProject page's run panel supplies its own (a failed run's error) or
    *  none, its panel header naming the run. */
   header?: ReactNode;
 }
@@ -133,12 +133,12 @@ function groupConsecutiveToolCalls(messages: MessageContent[]): GroupedMessage[]
  * Since conversationId is the only meaningful prop, this prevents re-renders
  * caused by parent re-renders that don't change the active conversation.
  */
-export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProjectIdLoaded, onTaskIdLoaded, header }: ChatPanelProps) {
+export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProjectIdLoaded, onAutoProjectIdLoaded, header }: ChatPanelProps) {
   const [wasNearBottom, setWasNearBottom] = useState(true);
   // A workspace file open in the in-app viewer: a composer attachment, an
   // inline markdown image, or a markdown link in an assistant reply, with
   // the space it is in (the conversation's own workspace, or the project or
-  // task space a `proj://` / `task://` reference names).
+  // AutoProject space a `proj://` / `autoproject://` reference names).
   // `isImage` is pinned for composer attachments, whose display name (the
   // pasted file's original name) may carry no extension to sniff.
   const [attachmentViewer, setAttachmentViewer] = useState<{ source: FileSource; workspace_path: string; filename: string; isImage?: boolean } | null>(null);
@@ -168,7 +168,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   } = useNavigationState();
   const { setQueuedSkillsForConversation, setLoadedSkillsForConversation } = useConversationSkills();
   const { enabledFeatures } = useAuth();
-  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE);
+  const autoprojectsEnabled = enabledFeatures.includes(AUTOPROJECTS_FEATURE);
   const selectedModel = getModelForConversation(conversationId);
 
   // Callback to hydrate loaded skills when conversation is loaded from the server
@@ -223,7 +223,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     slackChannelId,
     slackThreadTs,
     slackTeamId,
-    taskId,
+    autoprojectId,
     conversationModel,
     conversationFlags,
     hasPendingWait,
@@ -246,10 +246,10 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // focused it counts as read (the sidebar's unread dot).
   useMarkConversationViewed(conversationId, isLoaded);
 
-  // Report a Quest Task run to the host (URL correction to its task page).
+  // Report an AutoProject run to the host (URL correction to its AutoProject page).
   useEffect(() => {
-    if (taskId) onTaskIdLoaded?.(conversationId, taskId);
-  }, [conversationId, taskId, onTaskIdLoaded]);
+    if (autoprojectId) onAutoProjectIdLoaded?.(conversationId, autoprojectId);
+  }, [conversationId, autoprojectId, onAutoProjectIdLoaded]);
 
   // Slack-driven conversations are read-only in the web UI; the user is
   // conversing via Slack DMs and the model replies through the
@@ -257,10 +257,10 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // conversations are read-only too: the owner watches the headless run and
   // only interacts through the subagent_return approval card. Inference API
   // conversations are one-shot transcripts driven by POST /api/inference.
-  // A Quest Task run takes exactly one user message (its prompt); the user
-  // continues in the task's thread, which starts the next run.
+  // An AutoProject run takes exactly one user message (its prompt); the user
+  // continues in the AutoProject's thread, which starts the next run.
   const isReadOnly = origin === 'slack' || origin === 'user_subagent' || origin === 'inference_api'
-    || origin === 'task';
+    || origin === 'autoproject';
 
   // Build a deep link to the driving Slack thread, when we have all three
   // identifiers. When default_team_id is missing we simply omit the link
@@ -281,17 +281,17 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     ? `Subagent run by ${subagentCallerDisplay} — read-only. Interact via the approval card when it appears.`
     : origin === 'inference_api'
       ? 'Inference API run — a read-only transcript of a one-shot request made by an application with your API key.'
-      : origin === 'task'
-        // The link only while the tasks gate is open for the user: with it
-        // closed the task page would only say the feature is off.
-        ? (taskId && tasksEnabled
+      : origin === 'autoproject'
+        // The link only while the AutoProjects gate is open for the user: with it
+        // closed the AutoProject page would only say the feature is off.
+        ? (autoprojectId && autoprojectsEnabled
           ? (
             <>
-              This is the work behind one update of a task.{' '}
-              <Link to={taskThreadPath(taskId)}>Continue in the task.</Link>
+              This is the work behind one update of an AutoProject.{' '}
+              <Link to={autoprojectThreadPath(autoprojectId)}>Continue in the AutoProject.</Link>
             </>
           )
-          : 'This is the work behind one update of a task.')
+          : 'This is the work behind one update of an AutoProject.')
         : null;
 
   // (The composer's disabled state and placeholder copy now live in
@@ -671,7 +671,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   }, [conversationId]);
 
   // Files the model references in a reply (inline images, `[name](path)`
-  // links, `task://` / `proj://` references) open in the viewer when it has
+  // links, `autoproject://` / `proj://` references) open in the viewer when it has
   // a view for the type; anything else goes through the regular download
   // flow with its warning dialog. Both read from the file's own space.
   const handleOpenMarkdownFile = useCallback((workspacePath: string, filename: string, source: FileSource) => {
@@ -686,17 +686,17 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
   // Lets the shared markdown renderer resolve `![alt](path.png)` image refs
   // and `[name](path)` links against this conversation's workspace, and
-  // `proj://` / `task://` references against its project or its task (a
-  // task run) -- see MarkdownImage / MarkdownLink in Message.tsx.
+  // `proj://` / `autoproject://` references against its project or its AutoProject (a
+  // AutoProject run) -- see MarkdownImage / MarkdownLink in Message.tsx.
   const conversationProjectId = loadedProject?.conversationId === conversationId ? loadedProject.projectId : null;
   const markdownWorkspaceCtx = useMemo(
     () => ({
       conversationId,
       projectId: conversationProjectId ?? undefined,
-      taskId: taskId ?? undefined,
+      autoprojectId: autoprojectId ?? undefined,
       onOpenFile: handleOpenMarkdownFile,
     }),
-    [conversationId, conversationProjectId, taskId, handleOpenMarkdownFile]
+    [conversationId, conversationProjectId, autoprojectId, handleOpenMarkdownFile]
   );
 
   const handleCloseAttachmentViewer = useCallback(() => {
@@ -780,8 +780,8 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       // Regular streaming message
       const msg = entry.message;
 
-      // Handle action_request / connect_request cards and task questions
-      if (msg.type === 'action_request' || msg.type === 'connect_request' || msg.type === 'task_question') {
+      // Handle action_request / connect_request cards and AutoProject questions
+      if (msg.type === 'action_request' || msg.type === 'connect_request' || msg.type === 'autoproject_question') {
         return (
           <MessageContentRenderer
             key={`streaming-${msg.type}-${entry.index}`}
@@ -846,7 +846,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
     <div className="chat-panel">
       <MarkdownWorkspaceContext.Provider value={markdownWorkspaceCtx}>
       {/* Title unit + rename / archive menu (Claude-style), unless the
-          host supplies its own header or none (the task run panel). */}
+          host supplies its own header or none (the AutoProject run panel). */}
       {header !== undefined ? header : (
         <ConversationHeader
           conversationId={conversationId}
@@ -953,11 +953,11 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
       {/* Shared composer footer (textarea + Send/Stop + model selector +
           Skill button + Flags popover + attachments + ContextIndicator).
-          Reused by the root home screen via HomeComposer. A Quest Task run
+          Reused by the root home screen via HomeComposer. An AutoProject run
           shows only its notice line instead: it never takes another
-          message, and the task page shows it in a side panel where a
+          message, and the AutoProject page shows it in a side panel where a
           disabled input box would only look like a chat. */}
-      {origin === 'task' ? (
+      {origin === 'autoproject' ? (
         <div className="chat-panel-notice-footer">
           <p className="slack-thread-link-note">{readOnlyNotice}</p>
         </div>

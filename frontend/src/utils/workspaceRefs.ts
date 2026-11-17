@@ -1,6 +1,6 @@
 /**
  * Space-qualified workspace references in rendered markdown: the `chat://`,
- * `proj://` and `task://` paths the model's file tools take
+ * `proj://` and `autoproject://` paths the model's file tools take
  * (chat/gemini_api/tool_handlers/file_paths.py), written by the model into
  * replies, results and briefs as link targets and image sources.
  *
@@ -10,7 +10,7 @@
  * nothing the routes would accept is refused here.
  */
 
-export type WorkspaceRefScheme = 'chat' | 'proj' | 'task';
+export type WorkspaceRefScheme = 'chat' | 'proj' | 'autoproject';
 
 /** A parsed reference: its space and the path relative to that space's root ('' for the root). */
 export interface WorkspaceRef {
@@ -18,8 +18,8 @@ export interface WorkspaceRef {
   path: string;
 }
 
-/** `chat://`, `proj://` or `task://` (any case), then the space path. */
-const WORKSPACE_REF_RE = /^(chat|proj|task):\/\/(.*)$/is;
+/** `chat://`, `proj://` or `autoproject://` (any case), then the space path. */
+const WORKSPACE_REF_RE = /^(chat|proj|autoproject):\/\/(.*)$/is;
 
 /** Whether `url` is a space-qualified workspace reference. */
 export function isWorkspaceRef(url: string): boolean {
@@ -29,8 +29,8 @@ export function isWorkspaceRef(url: string): boolean {
 /**
  * Split a reference into its space and path: percent-decoded (markdown
  * destinations arrive encoded), with leading "/" and "./" dropped, so
- * `task://reports/q3.md`, `task:///reports/q3.md` and
- * `task://reports/q3%20final.md` all name a path under the task root.
+ * `autoproject://reports/q3.md`, `autoproject:///reports/q3.md` and
+ * `autoproject://reports/q3%20final.md` all name a path under the AutoProject root.
  * Null for anything else.
  */
 export function parseWorkspaceRef(url: string): WorkspaceRef | null {

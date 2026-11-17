@@ -1,6 +1,6 @@
 /**
  * React hook for file browser functionality over one file space (a
- * conversation's workspace, a project's shared workspace or a task's
+ * conversation's workspace, a project's shared workspace or an AutoProject's
  * workspace, see `FileSource` in api/fileApi.ts).
  */
 
@@ -91,7 +91,7 @@ export function useFileBrowser(source: FileSource | null): UseFileBrowserResult 
     [sourceKind, sourceId],
   );
   // State key of the active file space (`conversation:<id>` /
-  // `project:<id>` / `task:<id>`); the guards compare keys, API calls use `activeSource`.
+  // `project:<id>` / `autoproject:<id>`); the guards compare keys, API calls use `activeSource`.
   const sourceKey = activeSource ? fileSourceKey(activeSource) : null;
 
   // Get state from context (file-space-specific)

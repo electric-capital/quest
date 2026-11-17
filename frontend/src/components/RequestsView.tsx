@@ -20,8 +20,8 @@ import {
 import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/types';
 import { useNavigationState } from '../contexts/NavigationContext';
 import { useAuth } from '../contexts/AuthContext';
-import { TASKS_FEATURE } from '../api/tasksApi';
-import { taskRunPath, taskThreadPath } from '../utils/tasksRoute';
+import { AUTOPROJECTS_FEATURE } from '../api/autoprojectsApi';
+import { autoprojectRunPath, autoprojectThreadPath } from '../utils/autoprojectsRoute';
 import {
   totalPendingSuggestions,
   usePendingSuggestionCounts,
@@ -89,7 +89,7 @@ function formatTimestamp(isoTimestamp: string): string {
 export function RequestsView() {
   const { setShowRequestsView } = useNavigationState();
   const { enabledFeatures } = useAuth();
-  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE);
+  const autoprojectsEnabled = enabledFeatures.includes(AUTOPROJECTS_FEATURE);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -372,15 +372,15 @@ export function RequestsView() {
     }
   };
 
-  // A request a Quest Task run proposed (tasks gate open): an open one is
-  // answered in the task's thread, which shows the run's open cards; a
+  // A request an AutoProject run proposed (AutoProjects gate open): an open one is
+  // answered in the AutoProject's thread, which shows the run's open cards; a
   // resolved one opens its run's transcript.
-  const handleGoToTask = (taskId: string, request: EnrichedActionRequest) => {
+  const handleGoToAutoProject = (autoprojectId: string, request: EnrichedActionRequest) => {
     setShowRequestsView(false);
     navigate(
       request.status === 'open'
-        ? taskThreadPath(taskId)
-        : taskRunPath(taskId, request.conversation_id),
+        ? autoprojectThreadPath(autoprojectId)
+        : autoprojectRunPath(autoprojectId, request.conversation_id),
     );
   };
 
@@ -571,15 +571,15 @@ export function RequestsView() {
                   </div>
                 )}
 
-                {/* Conversation link (the task, for a task run's request) */}
-                {request.task_id && tasksEnabled ? (
+                {/* Conversation link (the AutoProject, for an AutoProject run's request) */}
+                {request.autoproject_id && autoprojectsEnabled ? (
                   <span
                     className="request-conversation-link"
-                    onClick={() => handleGoToTask(request.task_id!, request)}
+                    onClick={() => handleGoToAutoProject(request.autoproject_id!, request)}
                   >
                     {request.status === 'open'
-                      ? `Go to task: ${request.task_title || 'Untitled task'}`
-                      : `Go to task: ${request.task_title || 'Untitled task'}`}
+                      ? `Go to AutoProject: ${request.autoproject_title || 'Untitled AutoProject'}`
+                      : `Go to AutoProject: ${request.autoproject_title || 'Untitled AutoProject'}`}
                   </span>
                 ) : (
                   <span

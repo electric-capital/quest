@@ -1,8 +1,8 @@
 /**
  * File browser panel component for workspace file management. One card per
  * file space (`source`): a conversation's own workspace ("Chat Files"), a
- * project's shared workspace ("Project Files") or a task's workspace ("Task
- * files", shared by every run of the task). Every operation -- listing,
+ * project's shared workspace ("Project Files") or an AutoProject's workspace ("AutoProject
+ * files", shared by every run of the AutoProject). Every operation -- listing,
  * upload, new folder, delete, downloads, the viewer and its Save to Drive --
  * goes through that source's routes, and the card refreshes only on
  * `file_list_changed` events for its own space.
@@ -87,19 +87,19 @@ interface FileBrowserProps {
   /**
    * The file space browsed: a conversation's own workspace (card titled
    * "Chat Files"), a project's shared workspace ("Project Files") or a
-   * task's workspace ("Task files"). Null renders the no-conversation empty
+   * AutoProject's workspace ("AutoProject files"). Null renders the no-conversation empty
    * state.
    */
   source: FileSource | null;
   /**
    * Leave out the card's title, for a host that heads the card itself (the
-   * task page's "Task files" section, a task run's Chat Files tab). The
+   * AutoProject page's "AutoProject files" section, an AutoProject run's Chat Files tab). The
    * hidden-files toggle and Refresh then sit at the end of the navigation
    * row.
    */
   hideTitle?: boolean;
   /**
-   * The dense variant for a card inside a page column (the task page):
+   * The dense variant for a card inside a page column (the AutoProject page):
    * Upload and New folder become icon buttons beside the hidden-files
    * toggle and Refresh instead of the full-width button row, the toolbar
    * row shows Up and the path only inside a folder (no Back / Forward),
@@ -108,7 +108,7 @@ interface FileBrowserProps {
    */
   compact?: boolean;
   /**
-   * Compact only: content at the start of the toolbar row (the task page's
+   * Compact only: content at the start of the toolbar row (the AutoProject page's
    * card title and item count), so a host card's header and the browser's
    * toolbar are one row.
    */
@@ -144,7 +144,7 @@ export interface FileBrowserListing {
 const CARD_TITLE: Record<FileSource['kind'], string> = {
   conversation: 'Chat Files',
   project: 'Project Files',
-  task: 'Task files',
+  autoproject: 'AutoProject files',
 };
 
 /** A host-owned card message: `error` in the error style, `warning` in the accent tint. */
@@ -163,8 +163,8 @@ export function fileBrowserTitle(source: FileSource | null): string {
  * Whether a ``file_list_changed`` event concerns the space a card shows:
  * conversation routes/tools publish scope "conversation" with the
  * conversation id, project routes publish scope "project" with the project
- * id (and a null conversation id), task routes and a run's task:// writes
- * publish scope "task" with the task id; copy routes and sandbox runs
+ * id (and a null conversation id), AutoProject routes and a run's autoproject:// writes
+ * publish scope "autoproject" with the AutoProject id; copy routes and sandbox runs
  * publish one event per scope.
  */
 export function fileListEventMatchesSource(
@@ -176,8 +176,8 @@ export function fileListEventMatchesSource(
       return event.scope === 'conversation' && event.conversation_id === source.id;
     case 'project':
       return event.scope === 'project' && event.project_id === source.id;
-    case 'task':
-      return event.scope === 'task' && event.task_id === source.id;
+    case 'autoproject':
+      return event.scope === 'autoproject' && event.autoproject_id === source.id;
   }
 }
 
@@ -186,8 +186,8 @@ function emptyHint(source: FileSource): React.ReactNode {
   switch (source.kind) {
     case 'project':
       return 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.';
-    case 'task':
-      return 'Shared across the updates of this task, as task:// paths. You can drop or upload files and folders here.';
+    case 'autoproject':
+      return 'Shared across the updates of this AutoProject, as autoproject:// paths. You can drop or upload files and folders here.';
     case 'conversation':
       return <>You can drop or upload files and folders here for the agent to work on.
         Files created by the agent will also appear here.</>;

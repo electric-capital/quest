@@ -1,15 +1,15 @@
 /**
- * Sidebar shell: brand bar, the two sliding panels (projects + tasks + docs
+ * Sidebar shell: brand bar, the two sliding panels (projects + AutoProjects + docs
  * + tables + standalone conversations, and the drilled project), the update
  * banner, the user bar and the modals. Owns the cross-list flows -- drilling
- * in and out of a project, creating chats, running routines, opening tasks,
+ * in and out of a project, creating chats, running routines, opening AutoProjects,
  * docs and tables, project/routine CRUD follow-ups -- and delegates:
  *
  * - data fetching / paging / polling / realtime refresh to
  *   hooks/useTopLevelConversations, useProjectConversations,
- *   useProjectRoutines, useTasks, useDocs, useTables
+ *   useProjectRoutines, useAutoProjects, useDocs, useTables
  * - list derivation (filters, routine grouping, ordering) to
- *   utils/sidebarItems, utils/sidebarTasks, utils/sidebarDocs and
+ *   utils/sidebarItems, utils/sidebarAutoProjects, utils/sidebarDocs and
  *   utils/allTablesGrouping
  * - section rendering to components/sidebar/*
  */
@@ -24,7 +24,7 @@ import {
 } from '../api/client';
 import { DOCS_FEATURE } from '../api/docsApi';
 import { TABLES_FEATURE } from '../api/tablesApi';
-import { TASKS_FEATURE } from '../api/tasksApi';
+import { AUTOPROJECTS_FEATURE } from '../api/autoprojectsApi';
 import type { Conversation, Routine } from '../api/types';
 import { useAppConfig } from '../contexts/AppConfigContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -49,13 +49,13 @@ import { SIDEBAR_DOC_LIMIT } from '../utils/sidebarDocs';
 import { useTables } from '../hooks/useTables';
 import { parseTablesRoute, tableViewerPath, tablesListPath } from '../utils/tablesRoute';
 import { SIDEBAR_TABLE_LIMIT } from '../utils/allTablesGrouping';
-import { useTasks } from '../hooks/useTasks';
-import { newTaskPath, parseTasksRoute, taskThreadPath, tasksListPath } from '../utils/tasksRoute';
+import { useAutoProjects } from '../hooks/useAutoProjects';
+import { newAutoProjectPath, parseAutoProjectsRoute, autoprojectThreadPath, autoprojectsListPath } from '../utils/autoprojectsRoute';
 import { SearchModal } from './SearchModal';
 import { QuestLogo } from './QuestLogo';
 import { RequestsBadge } from './sidebar/RequestsBadge';
 import { ProjectsSection } from './sidebar/ProjectsSection';
-import { TasksSection } from './sidebar/TasksSection';
+import { AutoProjectsSection } from './sidebar/AutoProjectsSection';
 import { DocsSection } from './sidebar/DocsSection';
 import { TablesSection } from './sidebar/TablesSection';
 import { ConversationsSection } from './sidebar/ConversationsSection';
@@ -70,7 +70,7 @@ interface SidebarProps {
   onConversationSelect: (id: string, projectId?: string | null, opts?: { implicit?: boolean }) => void;
   onNewConversation: (id: string, projectId?: string | null) => void;
   // Called after the Sidebar navigates to a view that is not a conversation
-  // (a task, doc or table, a tasks list, the All Docs / All Tables list): the host closes its
+  // (an AutoProject, doc or table, an AutoProjects list, the All Docs / All Tables list): the host closes its
   // drawer on phone. The desktop layout passes nothing.
   onNavigateAway?: () => void;
 }
@@ -148,15 +148,15 @@ export const Sidebar = React.memo(function Sidebar({
   // undefined when no All Tables view is showing.
   const tablesListProjectId = tablesRoute?.kind === 'list' ? tablesRoute.projectId : undefined;
 
-  // Quest Tasks: the user's unarchived tasks on the main panel only (tasks
-  // are top-level, no drill-down block), while the `tasks` feature gate is
-  // open. The URL says which task / tasks list is showing; a task page with
-  // a run open highlights its task's row too.
-  const tasksEnabled = enabledFeatures.includes(TASKS_FEATURE);
-  const userTasks = useTasks({ enabled: tasksEnabled });
-  const tasksRoute = parseTasksRoute(location.pathname, location.search);
-  const activeTaskId =
-    tasksRoute?.kind === 'thread' || tasksRoute?.kind === 'run' ? tasksRoute.taskId : null;
+  // AutoProjects: the user's unarchived AutoProjects on the main panel only (AutoProjects
+  // are top-level, no drill-down block), while the `autoprojects` feature gate is
+  // open. The URL says which AutoProject / AutoProjects list is showing; an AutoProject page with
+  // a run open highlights its AutoProject's row too.
+  const autoprojectsEnabled = enabledFeatures.includes(AUTOPROJECTS_FEATURE);
+  const userAutoProjects = useAutoProjects({ enabled: autoprojectsEnabled });
+  const autoprojectsRoute = parseAutoProjectsRoute(location.pathname, location.search);
+  const activeAutoProjectId =
+    autoprojectsRoute?.kind === 'thread' || autoprojectsRoute?.kind === 'run' ? autoprojectsRoute.autoprojectId : null;
 
   // Per-project conversation filters. Default to false (hide archived, hide
   // Slack conversations) on every page load; no persistence. Independent of
@@ -382,9 +382,9 @@ export const Sidebar = React.memo(function Sidebar({
     onNavigateAway?.();
   }
 
-  // Tasks views are URL routes too (/tasks, /tasks?archived=true,
-  // /tasks/new, /tasks/<id>), handled exactly like the docs ones above.
-  function handleOpenTasksPath(path: string) {
+  // AutoProjects views are URL routes too (/autoprojects, /autoprojects?archived=true,
+  // /autoprojects/new, /autoprojects/<id>), handled exactly like the docs ones above.
+  function handleOpenAutoProjectsPath(path: string) {
     setError(null);
     setShowRequestsView(false);
     navigate(path);
@@ -551,18 +551,18 @@ export const Sidebar = React.memo(function Sidebar({
               />
             )}
 
-            {tasksEnabled && (
-              <TasksSection
-                tasks={userTasks.tasks}
-                loading={userTasks.loading}
-                error={userTasks.error}
-                activeTaskId={activeTaskId}
-                onOpenTask={(id) => handleOpenTasksPath(taskThreadPath(id))}
-                onOpenAll={() => handleOpenTasksPath(tasksListPath())}
-                onOpenArchived={() => handleOpenTasksPath(tasksListPath({ archived: true }))}
-                onNewTask={() => handleOpenTasksPath(newTaskPath())}
-                headerActive={tasksRoute?.kind === 'list' && !tasksRoute.archived}
-                archivedActive={tasksRoute?.kind === 'list' && tasksRoute.archived}
+            {autoprojectsEnabled && (
+              <AutoProjectsSection
+                autoprojects={userAutoProjects.autoprojects}
+                loading={userAutoProjects.loading}
+                error={userAutoProjects.error}
+                activeAutoProjectId={activeAutoProjectId}
+                onOpenAutoProject={(id) => handleOpenAutoProjectsPath(autoprojectThreadPath(id))}
+                onOpenAll={() => handleOpenAutoProjectsPath(autoprojectsListPath())}
+                onOpenArchived={() => handleOpenAutoProjectsPath(autoprojectsListPath({ archived: true }))}
+                onNewAutoProject={() => handleOpenAutoProjectsPath(newAutoProjectPath())}
+                headerActive={autoprojectsRoute?.kind === 'list' && !autoprojectsRoute.archived}
+                archivedActive={autoprojectsRoute?.kind === 'list' && autoprojectsRoute.archived}
               />
             )}
 

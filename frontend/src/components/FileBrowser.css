@@ -574,7 +574,7 @@
 }
 
 /* Light mode support */
-/* Compact variant (`compact`, the task page's cards): Upload and New
+/* Compact variant (`compact`, the AutoProject page's cards): Upload and New
    folder are icon buttons in the toolbar row, rows are one line (name, then
    size and date), the empty state is one line with an upload link. */
 .file-browser--compact .file-browser-nav {

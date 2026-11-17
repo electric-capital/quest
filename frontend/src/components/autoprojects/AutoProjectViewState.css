@@ -1,0 +1,73 @@
+/* AutoProjectViewState -- centered loading / not-found / error notices of the
+ * AutoProjects views, the same look as the doc viewer's states. */
+
+.autoproject-view-state {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 16px;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+/* Loading states: invisible for the first 300ms, then a short fade in, so a
+ * fast load (switching AutoProjects) shows an empty frame rather than a flash of
+ * "Loading..." text. `both` holds the 0% keyframe through the delay. */
+.autoproject-view-state--delayed {
+  animation: autoproject-view-state-appear 150ms ease-out 300ms both;
+}
+
+@keyframes autoproject-view-state-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Reduced motion: the same delay, then the text appears without a fade. */
+@media (prefers-reduced-motion: reduce) {
+  .autoproject-view-state--delayed {
+    animation-duration: 0s;
+  }
+}
+
+.autoproject-view-state-text {
+  margin: 0;
+}
+
+.autoproject-view-state-link {
+  color: var(--accent-text);
+}
+
+.autoproject-view-state-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.autoproject-view-retry {
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.autoproject-view-retry:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background-color: var(--hover);
+}
+
+.autoproject-view-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

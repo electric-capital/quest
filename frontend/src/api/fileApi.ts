@@ -5,15 +5,15 @@
  * conversation's workspace (`/conversations/{cid}/files...`, the "Chat
  * Files" card, and every inline-image / attachment path in chat), a
  * project's shared workspace (`/projects/{pid}/files...`, the "Project
- * Files" card) and a Quest Task's workspace, shared by every run of the
- * task (`/tasks/{tid}/files...`, the "Task files" card). Every function
+ * Files" card) and an AutoProject's workspace, shared by every run of the
+ * AutoProject (`/autoprojects/{tid}/files...`, the "AutoProject files" card). Every function
  * takes a `FileTarget`: a `FileSource`, or a bare string meaning a
  * conversation id -- the historical signature the many conversation-space
  * callers (Composer, HomeComposer, MarkdownImage, previews) keep using. The
  * `*Project*` twins are thin wrappers over a project source.
  * `copyFileToProject` / `copyFileFromProject` move entries between the two
- * spaces of a project conversation, `copyFileToTask` / `copyFileFromTask`
- * between a task run's workspace and its task's.
+ * spaces of a project conversation, `copyFileToAutoProject` / `copyFileFromAutoProject`
+ * between an AutoProject run's workspace and its AutoProject's.
  */
 
 import { API_BASE_URL } from './config';
@@ -141,16 +141,16 @@ function xhrUpload(
 
 /**
  * Which file space a call addresses: a conversation's own workspace, a
- * project's shared workspace, or a task's workspace (shared by its runs).
+ * project's shared workspace, or an AutoProject's workspace (shared by its runs).
  */
 export type FileSource =
   | { kind: 'conversation'; id: string }
   | { kind: 'project'; id: string }
-  | { kind: 'task'; id: string };
+  | { kind: 'autoproject'; id: string };
 
 /**
  * A space a conversation workspace copies to and from (the copy routes): a
- * project conversation's project, or a task run's task.
+ * project conversation's project, or an AutoProject run's AutoProject.
  */
 export type SharedFileSource = Exclude<FileSource, { kind: 'conversation' }>;
 
@@ -158,7 +158,7 @@ export type SharedFileSource = Exclude<FileSource, { kind: 'conversation' }>;
  * A `FileSource`, or a bare conversation id. The bare-string form exists
  * only so the legacy conversation-space callers keep working unchanged; new
  * code should pass a `FileSource` (`conversationSource()` / `projectSource()` /
- * `taskSource()`).
+ * `autoprojectSource()`).
  */
 export type FileTarget = FileSource | string;
 
@@ -170,15 +170,15 @@ export function projectSource(projectId: string): SharedFileSource {
   return { kind: 'project', id: projectId };
 }
 
-export function taskSource(taskId: string): SharedFileSource {
-  return { kind: 'task', id: taskId };
+export function autoprojectSource(autoprojectId: string): SharedFileSource {
+  return { kind: 'autoproject', id: autoprojectId };
 }
 
 function toSource(target: FileTarget): FileSource {
   return typeof target === 'string' ? conversationSource(target) : target;
 }
 
-/** Stable per-space key (`conversation:<id>` / `project:<id>` / `task:<id>`) for UI state maps. */
+/** Stable per-space key (`conversation:<id>` / `project:<id>` / `autoproject:<id>`) for UI state maps. */
 export function fileSourceKey(source: FileSource): string {
   return `${source.kind}:${source.id}`;
 }
@@ -187,7 +187,7 @@ export function fileSourceKey(source: FileSource): string {
 const ROUTE_SEGMENT: Record<FileSource['kind'], string> = {
   conversation: 'conversations',
   project: 'projects',
-  task: 'tasks',
+  autoproject: 'autoprojects',
 };
 
 /**
@@ -521,7 +521,7 @@ export function saveProjectFileToDrive(
 // Copy / move between a conversation's workspace and the shared space it
 // belongs to: a project conversation and its project
 // (POST /conversations/{cid}/files/copy-to-project|copy-from-project), a
-// task run and its task (.../copy-to-task|copy-from-task).
+// AutoProject run and its AutoProject (.../copy-to-autoproject|copy-from-autoproject).
 // ---------------------------------------------------------------------------
 
 export interface CopyEntryOptions {
@@ -545,7 +545,7 @@ export function isDestinationExistsError(err: unknown): err is FileApiError {
   return err instanceof FileApiError && err.statusCode === 409 && err.errorCode === DESTINATION_EXISTS;
 }
 
-type CopyDirection = 'copy-to-project' | 'copy-from-project' | 'copy-to-task' | 'copy-from-task';
+type CopyDirection = 'copy-to-project' | 'copy-from-project' | 'copy-to-autoproject' | 'copy-from-autoproject';
 
 async function copyBetweenSpaces(
   conversationId: string,
@@ -583,15 +583,15 @@ export function copyFileFromProject(conversationId: string, options: CopyEntryOp
 }
 
 /**
- * Copy (or move) an entry from a task run's conversation workspace into its
- * task's workspace; the same contract as `copyFileToProject`, plus 400
- * `not_a_task_run_conversation` and the task gate (403 `tasks_disabled`).
+ * Copy (or move) an entry from an AutoProject run's conversation workspace into its
+ * AutoProject's workspace; the same contract as `copyFileToProject`, plus 400
+ * `not_an_autoproject_run_conversation` and the AutoProject gate (403 `autoprojects_disabled`).
  */
-export function copyFileToTask(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
-  return copyBetweenSpaces(conversationId, 'copy-to-task', options);
+export function copyFileToAutoProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
+  return copyBetweenSpaces(conversationId, 'copy-to-autoproject', options);
 }
 
-/** The reverse of `copyFileToTask`: task workspace -> the run's conversation workspace. */
-export function copyFileFromTask(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
-  return copyBetweenSpaces(conversationId, 'copy-from-task', options);
+/** The reverse of `copyFileToAutoProject`: AutoProject workspace -> the run's conversation workspace. */
+export function copyFileFromAutoProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
+  return copyBetweenSpaces(conversationId, 'copy-from-autoproject', options);
 }

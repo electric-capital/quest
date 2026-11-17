@@ -1,6 +1,6 @@
 /** Who drives a conversation (GET /conversations/{id} `origin`). Every
  *  origin but `web` is shown read-only in the chat panel. */
-export type ConversationOrigin = 'web' | 'slack' | 'user_subagent' | 'inference_api' | 'task';
+export type ConversationOrigin = 'web' | 'slack' | 'user_subagent' | 'inference_api' | 'autoproject';
 
 export interface Conversation {
   id: string;
@@ -198,11 +198,11 @@ export interface RoutineNudgeMessage {
   seq?: number;
 }
 
-/** A question a Quest Task run asked with `ask_task_question`, as its
- *  durable transcript row (chat/tasks/questions.py). Rewritten in place
+/** A question an AutoProject run asked with `ask_autoproject_question`, as its
+ *  durable transcript row (chat/autoprojects/questions.py). Rewritten in place
  *  when the question is answered (adds `answer`) or cancelled. */
-export interface TaskQuestionTranscriptMessage {
-  type: 'task_question';
+export interface AutoProjectQuestionTranscriptMessage {
+  type: 'autoproject_question';
   wait_handle_id: string;
   status: 'pending' | 'answered' | 'cancelled';
   question: string;
@@ -212,12 +212,12 @@ export interface TaskQuestionTranscriptMessage {
   seq?: number;
 }
 
-/** Notice appended to a task run's transcript when the run's turn ended
- *  without `complete_task_run` and the server sent one follow-up turn asking
- *  the model to finish (chat/tasks/runs.py). `content` is the exact text the
+/** Notice appended to an AutoProject run's transcript when the run's turn ended
+ *  without `complete_autoproject_run` and the server sent one follow-up turn asking
+ *  the model to finish (chat/autoprojects/runs.py). `content` is the exact text the
  *  model received. */
-export interface TaskNudgeMessage {
-  type: 'task_nudge';
+export interface AutoProjectNudgeMessage {
+  type: 'autoproject_nudge';
   role?: string;
   content?: string;
   attempt?: number;
@@ -477,10 +477,10 @@ export interface EnrichedActionRequest extends ActionRequest {
   routine_name?: string | null;
   project_name?: string | null;
   project_id?: string | null;
-  /** The Quest Task whose run proposed the request, and its title; null
-   *  outside task runs. Present even while the tasks gate is closed. */
-  task_id?: string | null;
-  task_title?: string | null;
+  /** The AutoProject whose run proposed the request, and its title; null
+   *  outside AutoProject runs. Present even while the AutoProjects gate is closed. */
+  autoproject_id?: string | null;
+  autoproject_title?: string | null;
 }
 
 export interface EnrichedActionRequestsListResponse {
@@ -543,7 +543,7 @@ export interface SubAgentToolCallInfo {
 export type MessageContent = Message | ToolUseMessage | ToolResultMessage | StatsMessage
   | ErrorMessage | InterruptedMessage | ActionRequestMessage | ConnectRequestMessage
   | CompactionMessage | ModelFallbackMessage | RoutineNudgeMessage
-  | TaskQuestionTranscriptMessage | TaskNudgeMessage;
+  | AutoProjectQuestionTranscriptMessage | AutoProjectNudgeMessage;
 
 /** Server verdict that resuming this conversation is expensive (long-idle,
  *  long-context, costly model). Mirrors the dict built by
@@ -586,9 +586,9 @@ export interface ConversationDetail {
   thinking_effort?: string | null;
   routine_id?: string | null;
   project_id?: string | null;
-  /** The Quest Task this conversation is a run of; null for any other conversation. */
-  task_id?: string | null;
-  /** `task` exactly when `task_id` is set (a Quest Task run). */
+  /** The AutoProject this conversation is a run of; null for any other conversation. */
+  autoproject_id?: string | null;
+  /** `autoproject` exactly when `autoproject_id` is set (an AutoProject run). */
   origin?: ConversationOrigin;
   slack_channel_id?: string;
   slack_thread_ts?: string;
@@ -2055,27 +2055,27 @@ export interface ShareTableRequest {
   permission: TableSharePermission;
 }
 
-// Quest Tasks types (/app/api/tasks). Field names match the response
-// builders of chat/tasks/thread.py (`task_list_row`, `build_task_detail`,
+// AutoProjects types (/app/api/autoprojects). Field names match the response
+// builders of chat/autoprojects/thread.py (`autoproject_list_row`, `build_autoproject_detail`,
 // `build_brief_state`, `build_runs_page`, `read_state`) exactly.
 
 /** A run's state: `running` / `waiting` (on a question or approval) are active. */
-export type TaskRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'stopped';
+export type AutoProjectRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'stopped';
 
-/** The task's one active run, on list rows, the detail and `task_changed`. */
-export interface TaskActiveRun {
+/** The AutoProject's one active run, on list rows, the detail and `autoproject_changed`. */
+export interface AutoProjectActiveRun {
   id: string;
   seq: number;
   status: 'running' | 'waiting';
 }
 
-/** One row of GET /tasks (newest activity first). */
-export interface TaskListRow {
+/** One row of GET /autoprojects (newest activity first). */
+export interface AutoProjectListRow {
   id: string;
   title: string;
   archived: boolean;
   last_activity_at: string | null;
-  active_run: TaskActiveRun | null;
+  active_run: AutoProjectActiveRun | null;
   // unread_seq > read_seq; the seqs feed store/unreadStore.ts.
   unread: boolean;
   event_seq: number;
@@ -2084,27 +2084,27 @@ export interface TaskListRow {
 }
 
 /** Who wrote the current brief: 'ui', `run:<run id>`, `restore:<version>`, or null (never written). */
-export type TaskBriefSource = string | null;
+export type AutoProjectBriefSource = string | null;
 
-/** GET /tasks/{id} (also returned by create, PATCH, archive and unarchive). */
-export interface Task {
+/** GET /autoprojects/{id} (also returned by create, PATCH, archive and unarchive). */
+export interface AutoProject {
   id: string;
   title: string;
   // True while the title is still the one cut from the first prompt (the
-  // first run may rename the task).
+  // first run may rename the AutoProject).
   title_is_default: boolean;
   archived: boolean;
   brief: string;
   brief_version: number;
   brief_updated_at: string | null;
-  brief_source: TaskBriefSource;
+  brief_source: AutoProjectBriefSource;
   // Seq of the run that wrote the current brief, when a run did.
   brief_run_seq: number | null;
   // Default model and thinking level for new runs; null = the server default.
   model: string | null;
   thinking_effort: string | null;
   run_count: number;
-  active_run: TaskActiveRun | null;
+  active_run: AutoProjectActiveRun | null;
   event_seq: number;
   unread_seq: number;
   read_seq: number;
@@ -2114,17 +2114,17 @@ export interface Task {
   last_activity_at: string | null;
 }
 
-/** PUT /tasks/{id}/brief and the restore route. */
-export interface TaskBriefState {
+/** PUT /autoprojects/{id}/brief and the restore route. */
+export interface AutoProjectBriefState {
   brief: string;
   brief_version: number;
   brief_updated_at: string | null;
-  brief_source: TaskBriefSource;
+  brief_source: AutoProjectBriefSource;
   brief_run_seq: number | null;
 }
 
-/** One stored brief version (GET /tasks/{id}/brief/versions, newest first). */
-export interface TaskBriefVersion {
+/** One stored brief version (GET /autoprojects/{id}/brief/versions, newest first). */
+export interface AutoProjectBriefVersion {
   version: number;
   source: string;
   run_seq: number | null;
@@ -2132,8 +2132,8 @@ export interface TaskBriefVersion {
   excerpt: string;
 }
 
-/** GET /tasks/{id}/brief/versions/{version}. */
-export interface TaskBriefVersionDetail {
+/** GET /autoprojects/{id}/brief/versions/{version}. */
+export interface AutoProjectBriefVersionDetail {
   version: number;
   source: string;
   run_seq: number | null;
@@ -2141,8 +2141,8 @@ export interface TaskBriefVersionDetail {
   content: string;
 }
 
-/** A question a run asked the user (`ask_user` in a task run). */
-export interface TaskQuestion {
+/** A question a run asked the user (`ask_user` in an AutoProject run). */
+export interface AutoProjectQuestion {
   handle_id: string;
   question: string;
   options: string[];
@@ -2152,74 +2152,74 @@ export interface TaskQuestion {
   answered_at: string | null;
 }
 
-/** One entry of the task thread (GET /tasks/{id}/runs). */
-export interface TaskRun {
+/** One entry of the AutoProject thread (GET /autoprojects/{id}/runs). */
+export interface AutoProjectRun {
   id: string;
-  // 1-based run number within the task ("Run N").
+  // 1-based run number within the AutoProject ("Run N").
   seq: number;
   conversation_id: string;
   prompt: string;
-  status: TaskRunStatus;
+  status: AutoProjectRunStatus;
   // summary / result / notes are always null while the run is active.
   summary: string | null;
   result: string | null;
   notes: string | null;
-  // The run finished without calling complete_task_run.
+  // The run finished without calling complete_autoproject_run.
   handoff_missing: boolean;
   error: string | null;
   model: string | null;
   started_at: string;
   finished_at: string | null;
   // Oldest first.
-  questions: TaskQuestion[];
+  questions: AutoProjectQuestion[];
   // The run's open approval / connect cards as stored in its transcript
   // (with `seq` and `wait_handle_id`); [] for finished runs.
   open_requests: Array<ActionRequestMessage | ConnectRequestMessage>;
 }
 
 /** One page of the thread, newest first; page on with `next_before_seq`. */
-export interface TaskRunsPage {
-  runs: TaskRun[];
+export interface AutoProjectRunsPage {
+  runs: AutoProjectRun[];
   next_before_seq: number | null;
 }
 
-export interface ListTasksResponse {
-  tasks: TaskListRow[];
+export interface ListAutoProjectsResponse {
+  autoprojects: AutoProjectListRow[];
 }
 
 /**
- * POST /tasks. With no `title` the server cuts one from `prompt` (which is
+ * POST /autoprojects. With no `title` the server cuts one from `prompt` (which is
  * not stored) and keeps `title_is_default`.
  */
-export interface CreateTaskRequest {
+export interface CreateAutoProjectRequest {
   title?: string;
   prompt?: string;
   model?: string | null;
   thinking_effort?: string | null;
 }
 
-/** PATCH /tasks/{id}: absent keeps a field, null clears model / thinking_effort. */
-export interface UpdateTaskRequest {
+/** PATCH /autoprojects/{id}: absent keeps a field, null clears model / thinking_effort. */
+export interface UpdateAutoProjectRequest {
   title?: string;
   model?: string | null;
   thinking_effort?: string | null;
 }
 
-/** POST /tasks/{id}/read. */
-export interface TaskReadState {
+/** POST /autoprojects/{id}/read. */
+export interface AutoProjectReadState {
   event_seq: number;
   unread_seq: number;
   read_seq: number;
   unread: boolean;
 }
 
-/** The payload of a `task_changed` realtime global. */
-export interface TaskChangedEvent {
-  task_id: string;
+/** The payload of an `autoproject_changed` realtime global. */
+export interface AutoProjectChangedEvent {
+  autoproject_id: string;
   event_seq: number;
   brief_version: number;
   // Null also on the last event of a delete.
-  active_run: TaskActiveRun | null;
+  active_run: AutoProjectActiveRun | null;
 }
 
 // Project table types

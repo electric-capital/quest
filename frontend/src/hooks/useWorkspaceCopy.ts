@@ -2,7 +2,7 @@
  * Copy / Move between the two file spaces of a conversation that belongs to
  * a shared space: its own workspace (the "Chat Files" card) and the shared
  * space (`shared`) -- a project conversation's project ("Project Files") or
- * a task run's task ("Task files"). Supplies the `rowActions` of both cards,
+ * an AutoProject run's AutoProject ("AutoProject files"). Supplies the `rowActions` of both cards,
  * the overwrite prompt for a 409 `destination_exists`, and a per-card notice
  * for failures and for a move whose source could not be removed.
  *
@@ -21,9 +21,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   copyFileFromProject,
-  copyFileFromTask,
+  copyFileFromAutoProject,
   copyFileToProject,
-  copyFileToTask,
+  copyFileToAutoProject,
   isDestinationExistsError,
   type CopyEntryOptions,
   type FileSource,
@@ -55,7 +55,7 @@ export interface OverwritePrompt {
 export interface WorkspaceCopy {
   /** Row actions for the Chat Files card; undefined without both spaces. */
   chatRowActions?: (row: FileRowContext) => FileRowAction[];
-  /** Row actions for the shared space's card (Project Files / Task files); undefined without both spaces. */
+  /** Row actions for the shared space's card (Project Files / AutoProject files); undefined without both spaces. */
   sharedRowActions?: (row: FileRowContext) => FileRowAction[];
   notices: Record<CopyCard, WorkspaceCopyNotice | null>;
   dismissNotice: (card: CopyCard) => void;
@@ -71,20 +71,20 @@ export interface WorkspaceCopy {
 const SPACE_LABEL: Record<CopyCard, string> = {
   conversation: 'Chat Files',
   project: 'Project Files',
-  task: 'Task files',
+  autoproject: 'AutoProject files',
 };
 
 /** Row action wording per destination ("Copy to project", "Move to chat"). */
 const ACTION_NOUN: Record<CopyCard, string> = {
   conversation: 'chat',
   project: 'project',
-  task: 'task',
+  autoproject: 'autoproject',
 };
 
 const NO_NOTICES: Record<CopyCard, WorkspaceCopyNotice | null> = {
   conversation: null,
   project: null,
-  task: null,
+  autoproject: null,
 };
 
 type CopyCall = (conversationId: string, options: CopyEntryOptions) => Promise<CopyEntryResponse>;
@@ -92,7 +92,7 @@ type CopyCall = (conversationId: string, options: CopyEntryOptions) => Promise<C
 /** The copy clients of each shared space: into it, and out of it into the conversation. */
 const COPY_CALLS: Record<SharedFileSource['kind'], { into: CopyCall; out: CopyCall }> = {
   project: { into: copyFileToProject, out: copyFileFromProject },
-  task: { into: copyFileToTask, out: copyFileFromTask },
+  autoproject: { into: copyFileToAutoProject, out: copyFileFromAutoProject },
 };
 
 function errorMessage(err: unknown): string {
@@ -101,7 +101,7 @@ function errorMessage(err: unknown): string {
 
 /**
  * Top-level conversation scratch folders the copy-to-project and
- * copy-to-task routes refuse as a source (`is_scratch_source()` in
+ * copy-to-autoproject routes refuse as a source (`is_scratch_source()` in
  * chat/file_storage.py, mirrored).
  */
 const SCRATCH_ROOTS: ReadonlySet<string> = new Set(['.responses', '.subagent_responses', 'pasted']);

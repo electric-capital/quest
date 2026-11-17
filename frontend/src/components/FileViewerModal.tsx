@@ -2,8 +2,8 @@
  * Modal for viewing text file content, images, and PDFs from workspace files.
  * Reads from one file space: a conversation's workspace (`conversationId`,
  * the chat-side hosts -- attachments, doc image cards, subagent returns) or
- * any `source` (the FileBrowser cards, incl. Project Files and Task files,
- * and markdown references into another space such as `task://`).
+ * any `source` (the FileBrowser cards, incl. Project Files and AutoProject files,
+ * and markdown references into another space such as `autoproject://`).
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -87,15 +87,15 @@ export function FileViewerModal({ isOpen, source: sourceProp, conversationId, fi
 
   // Resolves workspace-relative markdown image refs and links in the .md
   // preview against the file's own space (and that space's scheme refs,
-  // e.g. `task://` inside a Task files entry).
+  // e.g. `autoproject://` inside an AutoProject files entry).
   const markdownCtx = useMemo((): MarkdownWorkspaceContextValue => {
     switch (source.kind) {
       case 'conversation':
         return { conversationId: source.id };
       case 'project':
         return { projectId: source.id };
-      case 'task':
-        return { taskId: source.id };
+      case 'autoproject':
+        return { autoprojectId: source.id };
     }
   }, [source]);
 

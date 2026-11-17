@@ -8,13 +8,13 @@ import { Copy, Check } from 'lucide-react';
 import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
-import { conversationSource, fileDownloadUrl, projectSource, taskSource, type FileSource } from '../api/fileApi';
+import { conversationSource, fileDownloadUrl, projectSource, autoprojectSource, type FileSource } from '../api/fileApi';
 import { isWorkspaceRef, parseWorkspaceRef, type WorkspaceRef } from '../utils/workspaceRefs';
-import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, TaskQuestionTranscriptMessage, TaskNudgeMessage as TaskNudgeMessageType, ComposerAttachmentRef } from '../api/types';
+import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, AutoProjectQuestionTranscriptMessage, AutoProjectNudgeMessage as AutoProjectNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
 import { ConnectRequestMessage } from './ConnectRequestMessage';
-import { TaskQuestionMessage } from './tasks/TaskQuestionMessage';
+import { AutoProjectQuestionMessage } from './autoprojects/AutoProjectQuestionMessage';
 import { webSocketManager } from '../services/WebSocketManager';
 import './Message.css';
 
@@ -170,11 +170,11 @@ export function CopyableTable({ children, ...props }: React.HTMLAttributes<HTMLT
  * route:
  * - a bare relative path (`![alt](chart.png)`, `[r](reports/q3.pdf)`)
  *   resolves against the host's own space: `conversationId`, else
- *   `projectId`, else `taskId` (one is set by the FileViewerModal .md
- *   preview of a Project files / Task files entry);
+ *   `projectId`, else `autoprojectId` (one is set by the FileViewerModal .md
+ *   preview of a Project files / AutoProject files entry);
  * - a space reference in the file tools' grammar (utils/workspaceRefs.ts)
  *   resolves against its own id: `chat://` against `conversationId`,
- *   `proj://` against `projectId`, `task://` against `taskId`. Without that
+ *   `proj://` against `projectId`, `autoproject://` against `autoprojectId`. Without that
  *   id it resolves nothing: the link keeps its href as written, the image
  *   shows as a missing ref and is never fetched.
  *
@@ -199,11 +199,11 @@ export interface MarkdownWorkspaceContextValue {
    */
   projectId?: string;
   /**
-   * A task's workspace: `task://` refs, and bare paths when neither
-   * `conversationId` nor `projectId` is set (the .md preview of a Task files
-   * entry). A task run's markdown sets it beside the run's `conversationId`.
+   * An AutoProject's workspace: `autoproject://` refs, and bare paths when neither
+   * `conversationId` nor `projectId` is set (the .md preview of an AutoProject files
+   * entry). An AutoProject run's markdown sets it beside the run's `conversationId`.
    */
-  taskId?: string;
+  autoprojectId?: string;
   assetBase?: string;
   /**
    * Open a workspace file in the host's viewer: inline images on click,
@@ -249,19 +249,19 @@ function docAssetUrl(path: string, assetBase: string): string | null {
 function bareSource(ctx: MarkdownWorkspaceContextValue): FileSource | null {
   if (ctx.conversationId) return conversationSource(ctx.conversationId);
   if (ctx.projectId) return projectSource(ctx.projectId);
-  if (ctx.taskId) return taskSource(ctx.taskId);
+  if (ctx.autoprojectId) return autoprojectSource(ctx.autoprojectId);
   return null;
 }
 
-/** The space a `chat://` / `proj://` / `task://` reference names, when the context knows its id. */
+/** The space a `chat://` / `proj://` / `autoproject://` reference names, when the context knows its id. */
 function refSource(ref: WorkspaceRef, ctx: MarkdownWorkspaceContextValue): FileSource | null {
   switch (ref.scheme) {
     case 'chat':
       return ctx.conversationId ? conversationSource(ctx.conversationId) : null;
     case 'proj':
       return ctx.projectId ? projectSource(ctx.projectId) : null;
-    case 'task':
-      return ctx.taskId ? taskSource(ctx.taskId) : null;
+    case 'autoproject':
+      return ctx.autoprojectId ? autoprojectSource(ctx.autoprojectId) : null;
   }
 }
 
@@ -298,7 +298,7 @@ function fileName(path: string): string {
 
 /**
  * Markdown `img` renderer: workspace-relative srcs and space references
- * (`task://chart.png`) are rewritten to the cookie-authed files/download
+ * (`autoproject://chart.png`) are rewritten to the cookie-authed files/download
  * endpoint of their space (MarkdownWorkspaceContext), so the model can
  * embed workspace images inline with plain markdown. Inside a doc
  * (`assetBase` set) only `assets/<name>` srcs resolve, to the doc's
@@ -386,7 +386,7 @@ function ExternalImageLink({ src, alt }: { src: string; alt?: string }) {
  * rule as images; every other href is left as written.
  *
  * Outside a doc, a relative href (`[note](note.txt)`, `[r](reports/q3.pdf)`)
- * and a space reference (`[notes](task://notes.md)`) are workspace paths,
+ * and a space reference (`[notes](autoproject://notes.md)`) are workspace paths,
  * resolved like image srcs: the href becomes the cookie-authed
  * files/download URL of their space so copy-link and modifier-clicks still
  * work, and a plain click opens the file through `onOpenFile` instead of a
@@ -540,9 +540,9 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
     return <ConnectRequestMessage message={message as ConnectRequestMessageType} />;
   }
 
-  // A Quest Task run's question to the user (ask_task_question)
-  if (message.type === 'task_question') {
-    return <TaskQuestionMessage message={message as TaskQuestionTranscriptMessage} />;
+  // An AutoProject run's question to the user (ask_autoproject_question)
+  if (message.type === 'autoproject_question') {
+    return <AutoProjectQuestionMessage message={message as AutoProjectQuestionTranscriptMessage} />;
   }
 
   // Handle tool_use messages
@@ -750,20 +750,20 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
     );
   }
 
-  // Handle task-nudge notices - a Quest Task run's turn ended without
-  // complete_task_run (or with its brief conflict unsettled) and the server
+  // Handle autoproject-nudge notices - an AutoProject run's turn ended without
+  // complete_autoproject_run (or with its brief conflict unsettled) and the server
   // ran one follow-up turn asking the model to finish the run and hand off
-  // (see chat/tasks/runs.py). The exact text the model received is in the
+  // (see chat/autoprojects/runs.py). The exact text the model received is in the
   // tooltip.
-  if (message.type === 'task_nudge') {
-    const nudgeMsg = message as TaskNudgeMessageType;
+  if (message.type === 'autoproject_nudge') {
+    const nudgeMsg = message as AutoProjectNudgeMessageType;
     return (
-      <div className="message-task-nudge" title={nudgeMsg.content || undefined}>
-        <span className="task-nudge-icon" aria-hidden="true">&#8635;</span>
-        <span className="task-nudge-text">
-          The update did not finish — asked the model to call complete_task_run and hand off
+      <div className="message-autoproject-nudge" title={nudgeMsg.content || undefined}>
+        <span className="autoproject-nudge-icon" aria-hidden="true">&#8635;</span>
+        <span className="autoproject-nudge-text">
+          The update did not finish — asked the model to call complete_autoproject_run and hand off
         </span>
-        <span className="task-nudge-timestamp">
+        <span className="autoproject-nudge-timestamp">
           {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
         </span>
       </div>

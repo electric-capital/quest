@@ -1,0 +1,367 @@
+/* AutoProjectsListView (/autoprojects, /autoprojects?archived=true) -- inside .docs-main.autoprojects-main
+ * (App.css), which is the scrolling column; the header sticks to its top.
+ * Rows are pills separated by spacing and hover, like the tables list. */
+
+.autoprojects-list {
+  flex: 1 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.autoprojects-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  padding: 1.25rem 2rem 0.75rem;
+  background-color: var(--surface);
+}
+
+.autoprojects-list-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.autoprojects-list-title-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.autoprojects-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.autoprojects-list-switch {
+  font-size: 0.875rem;
+  color: var(--accent-text);
+}
+
+.autoprojects-list-switch:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.autoprojects-list-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 2.125rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.autoprojects-list-new:hover {
+  background-color: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+.autoprojects-list-content {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 0.5rem 2rem 2.5rem;
+}
+
+.autoprojects-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 4rem 1rem;
+  text-align: center;
+}
+
+.autoprojects-list-empty-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.autoprojects-list-empty-hint {
+  margin: 0 0 0.25rem;
+  max-width: 28rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.autoprojects-list-error {
+  margin: 0 0 0.75rem;
+}
+
+.autoprojects-list-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+/* One row: the thread link (title, state, time, unread dot) and the row's
+ * action buttons beside it (buttons cannot sit inside the link). The item
+ * carries the hover background so link and buttons read as one pill. */
+.autoprojects-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  padding-right: 0.4rem;
+  border-radius: 10px;
+  transition: background-color 0.12s;
+}
+
+.autoprojects-list-item:hover,
+.autoprojects-list-item:focus-within {
+  background-color: var(--hover);
+}
+
+.autoprojects-list-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.55rem 0.35rem 0.55rem 0.75rem;
+  border-radius: 10px;
+  color: var(--text);
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.autoprojects-list-row:hover {
+  color: var(--text);
+}
+
+.autoprojects-list-row:active {
+  background-color: var(--pressed);
+}
+
+.autoprojects-list-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9375rem;
+}
+
+.autoprojects-list-row-title.unread {
+  font-weight: 600;
+}
+
+.autoprojects-list-item.archived .autoprojects-list-row-title {
+  color: var(--text-secondary);
+}
+
+.autoprojects-list-row-state {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.autoprojects-list-row-state.waiting {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+/* Same quiet spinning LoaderCircle as the sidebar's working mark. */
+.autoprojects-list-row-spinner {
+  flex-shrink: 0;
+  animation: autoprojects-list-spin 1s linear infinite;
+}
+
+@keyframes autoprojects-list-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .autoprojects-list-row-spinner {
+    animation: none;
+  }
+}
+
+.autoprojects-list-row-time {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  text-align: right;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* Fixed slot so the times line up whether or not a row is unread. */
+.autoprojects-list-row-dot-slot {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+}
+
+.autoprojects-list-row-unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--accent);
+}
+
+.autoprojects-list-row-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.autoprojects-list-row-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  height: 1.875rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.autoprojects-list-row-button:hover:not(:disabled) {
+  background-color: var(--pressed);
+}
+
+.autoprojects-list-row-button.danger:hover:not(:disabled) {
+  border-color: rgba(220, 38, 38, 0.5);
+  color: #fca5a5;
+}
+
+.autoprojects-list-row-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Archive on an active row: a borderless icon button. */
+.autoprojects-list-row-button.icon-only {
+  width: 1.875rem;
+  padding: 0;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.autoprojects-list-row-button.icon-only:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* With a pointer, the active rows' Archive shows on hover / focus only;
+ * touch screens always show it. */
+@media (hover: hover) {
+  .autoprojects-list-item:not(.archived) .autoprojects-list-row-actions {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .autoprojects-list-item:not(.archived):hover .autoprojects-list-row-actions,
+  .autoprojects-list-item:not(.archived):focus-within .autoprojects-list-row-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .autoprojects-list-row-button.danger:hover:not(:disabled) {
+    border-color: rgba(220, 38, 38, 0.45);
+    color: #b91c1c;
+  }
+}
+
+@media (max-width: 768px) {
+  .autoprojects-list-header,
+  .autoprojects-list-content {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .autoprojects-list-row {
+    gap: 0.5rem;
+    padding-left: 0.5rem;
+  }
+
+  .autoprojects-list-row-time {
+    min-width: 0;
+  }
+
+  /* The archived rows' buttons go icon-only (their aria-labels name the
+   * action). */
+  .autoprojects-list-row-button-label {
+    display: none;
+  }
+
+  .autoprojects-list-row-button {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+  }
+}
+
+/* Touch screens: the row buttons and the Archived / Active switch are at
+ * least 40px tall (and the icon buttons 40px wide); after the phone block
+ * so it wins there too. */
+@media (pointer: coarse) {
+  .autoprojects-list-switch {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+  }
+
+  .autoprojects-list-row-button {
+    height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
+  .autoprojects-list-row-button.icon-only {
+    width: 2.5rem;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 768px) {
+  .autoprojects-list-row-button {
+    width: 2.5rem;
+  }
+}

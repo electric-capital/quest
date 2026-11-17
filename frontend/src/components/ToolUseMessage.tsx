@@ -40,9 +40,9 @@ function innerToolArgs(toolName: string, toolInput: Record<string, unknown>): Re
   return args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {};
 }
 
-/** The text fields of a Quest Task run's log entry (complete_task_run), in reading order. */
-const TASK_ENTRY_FIELDS: Array<[key: string, label: string]> = [
-  ['task_title', 'Task title'],
+/** The text fields of an AutoProject run's log entry (complete_autoproject_run), in reading order. */
+const AUTOPROJECT_ENTRY_FIELDS: Array<[key: string, label: string]> = [
+  ['autoproject_title', 'AutoProject title'],
   ['summary', 'Summary'],
   ['result', 'Result'],
   ['notes', 'Handoff notes'],
@@ -50,20 +50,20 @@ const TASK_ENTRY_FIELDS: Array<[key: string, label: string]> = [
 ];
 
 /**
- * For complete_task_run calls (direct or through tool_call), the entry's
+ * For complete_autoproject_run calls (direct or through tool_call), the entry's
  * text fields as labelled blocks, since a markdown result or brief reads
  * badly as an escaped JSON string; any other argument (e.g.
  * brief_expected_version) stays in `otherParams`. Null for every other tool.
  */
-function extractTaskEntryFields(
+function extractAutoProjectEntryFields(
   toolName: string,
   toolInput: Record<string, unknown>,
 ): { fields: Array<{ label: string; text: string }>; otherParams: Record<string, unknown> } | null {
   const effectiveName = toolName === 'tool_call' ? toolInput.tool_name : toolName;
-  if (effectiveName !== 'complete_task_run') return null;
+  if (effectiveName !== 'complete_autoproject_run') return null;
   const otherParams = { ...innerToolArgs(toolName, toolInput) };
   const fields: Array<{ label: string; text: string }> = [];
-  for (const [key, label] of TASK_ENTRY_FIELDS) {
+  for (const [key, label] of AUTOPROJECT_ENTRY_FIELDS) {
     const value = otherParams[key];
     if (typeof value !== 'string') continue;
     fields.push({ label, text: value });
@@ -73,13 +73,13 @@ function extractTaskEntryFields(
 }
 
 /**
- * Header label of a Quest Task run's own loop tools (complete_task_run,
- * ask_task_question; see chat/gemini_api/turn_tools.py), which read better
+ * Header label of an AutoProject run's own loop tools (complete_autoproject_run,
+ * ask_autoproject_question; see chat/gemini_api/turn_tools.py), which read better
  * as steps of the run than as tool names. Null for every other tool.
  */
-function taskLoopToolLabel(toolName: string, toolResult?: ToolResultMessageType): string | null {
-  if (toolName === 'ask_task_question') return 'Asked a question';
-  if (toolName !== 'complete_task_run') return null;
+function autoprojectLoopToolLabel(toolName: string, toolResult?: ToolResultMessageType): string | null {
+  if (toolName === 'ask_autoproject_question') return 'Asked a question';
+  if (toolName !== 'complete_autoproject_run') return null;
   if (!toolResult) return 'Finishing the run';
   // An accepted call returns {status: "completed", ...}; a refusal (a
   // validation error, brief_conflict) leaves the run open for a retry.
@@ -98,7 +98,7 @@ function ToolInputContent({ toolName, toolInput }: { toolName: string; toolInput
   const extracted = extractPythonScript(toolName, toolInput);
   const codeAndMath = useCodeAndMath(extracted !== null);
   if (!extracted) {
-    const entry = extractTaskEntryFields(toolName, toolInput);
+    const entry = extractAutoProjectEntryFields(toolName, toolInput);
     if (entry) {
       return (
         <>
@@ -472,13 +472,13 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
   let displayName: string;
   let displayIntent: string;
 
-  // A task run's ask_task_question suspends the run; its result goes back
+  // An AutoProject run's ask_autoproject_question suspends the run; its result goes back
   // to the model on resume but is never written to the transcript, so the
-  // call would read "running..." forever. The task_question card that
+  // call would read "running..." forever. The autoproject_question card that
   // follows it shows whether the question is pending, answered or cancelled.
-  const isTaskQuestionCall = (toolUse.tool_name === 'tool_call'
+  const isAutoProjectQuestionCall = (toolUse.tool_name === 'tool_call'
     ? toolUse.tool_input.tool_name
-    : toolUse.tool_name) === 'ask_task_question';
+    : toolUse.tool_name) === 'ask_autoproject_question';
 
   if (isAgentTask) {
     displayName = (toolUse.tool_input.name as string) || 'Sub-Agent';
@@ -515,13 +515,13 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
       }
     }
 
-    const taskLabel = taskLoopToolLabel(effectiveToolName, toolResult);
+    const autoprojectLabel = autoprojectLoopToolLabel(effectiveToolName, toolResult);
 
     if (waitReason) {
       displayName = `Waiting for: ${waitReason}`;
       displayIntent = '';
-    } else if (taskLabel && !toolUse.intent_message) {
-      displayName = taskLabel;
+    } else if (autoprojectLabel && !toolUse.intent_message) {
+      displayName = autoprojectLabel;
       displayIntent = effectiveToolName;
     } else if (toolUse.intent_message) {
       // Show intent_message as primary if available; fall back to tool name
@@ -666,7 +666,7 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
               {toolResult && (
                 <span className="tool-status completed">completed</span>
               )}
-              {!toolResult && !isTaskQuestionCall && (
+              {!toolResult && !isAutoProjectQuestionCall && (
                 <span className="tool-status running">running...</span>
               )}
             </>
