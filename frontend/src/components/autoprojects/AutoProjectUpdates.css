@@ -524,3 +524,28 @@
     padding: 0 0.25rem;
   }
 }
+
+/* ---- Live arrivals (autoprojectArrival.ts) ---------------------------------- */
+
+/* A result that just arrived: a soft accent tint behind it (spread a little
+   past the text by the matching shadow) that fades out, so the eye finds
+   it. Colour only, so it also plays under reduced motion. */
+.autoproject-run-arrival {
+  border-radius: 8px;
+}
+
+.autoproject-arrived {
+  animation: autoproject-arrival-highlight 1.6s ease-out both;
+}
+
+@keyframes autoproject-arrival-highlight {
+  0%,
+  20% {
+    background-color: var(--accent-soft);
+    box-shadow: 0 0 0 8px var(--accent-soft);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 8px transparent;
+  }
+}

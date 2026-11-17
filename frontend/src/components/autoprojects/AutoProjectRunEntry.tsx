@@ -12,6 +12,7 @@ import { ConnectRequestMessage } from '../ConnectRequestMessage'
 import { MarkdownWorkspaceContext, markdownComponents } from '../Message'
 import { RichMarkdown } from '../RichMarkdown'
 import { AutoProjectActivityLine } from './AutoProjectActivityLine'
+import { playArrival } from './autoprojectArrival'
 import { AutoProjectQuestionCard } from './AutoProjectQuestionCard'
 import { AutoProjectRunError } from './AutoProjectRunError'
 import { isActiveRunStatus } from './autoprojectThreadComposer'
@@ -33,13 +34,13 @@ export interface AutoProjectRunActivityView {
 }
 
 /**
- * One update of the AutoProject page: one run (AutoProjectUpdates lists them oldest
- * first), top to bottom:
+ * One update of the AutoProject page: one run (AutoProjectUpdates lists them
+ * in the viewer's sort order), top to bottom:
  *
- * - a header: "Run N", its start time, "View run" (opens the run's
- *   transcript in the page's detail panel; "Close run" while it is the one
- *   showing there, `isOpen`, which also marks the update) and, on a
- *   finished run, the row menu ("Delete entry", confirmed by the page);
+ * - a header: "Update N", its start time, "View details" (opens the run's
+ *   transcript in the page's detail panel; "Close details" while it is the
+ *   one showing there, `isOpen`, which also marks the update) and, on a
+ *   finished run, the row menu ("Delete update", confirmed by the page);
  * - the prompt as the request (AutoProjectRunRequest: "You asked", a quiet left
  *   rule, clamped with a "Show full prompt" toggle when it is long);
  * - its questions (AutoProjectQuestionCard, oldest first; answered / cancelled
@@ -51,6 +52,11 @@ export interface AutoProjectRunActivityView {
  *   plain body text in the column, no bubble, and the handoff-missing,
  *   failed (AutoProjectRunError: one line plus "Show details") or stopped line.
  *   The handoff notes are in the run's details (AutoProjectRunPanel).
+ *
+ * Arrivals the page observed live (`claimArrival`, autoprojectArrival.ts):
+ * a new update's row opens in when it mounts, and the outcome opens in from
+ * the activity line's height when the run finishes, with a short highlight
+ * on a result. Each is claimed once, so a remount never replays it.
  *
  * Everything is inside a MarkdownWorkspaceContext for the RUN's
  * conversation and its AutoProject, so workspace images and relative links in the
@@ -70,6 +76,7 @@ export const AutoProjectRunEntry = memo(function AutoProjectRunEntry({
   onDelete,
   isOpen,
   onView,
+  claimArrival,
 }: {
   autoprojectId: string
   run: AutoProjectRun
@@ -85,6 +92,8 @@ export const AutoProjectRunEntry = memo(function AutoProjectRunEntry({
   isOpen: boolean
   /** View details / Close details: the page toggles the run's panel. */
   onView: (conversationId: string) => void
+  /** True once for an arrival the page observed live (`row:<id>`, `result:<id>`). */
+  claimArrival: (key: string) => boolean
 }) {
   const conversationId = run.conversation_id
   const workspaceCtx = useMemo(
@@ -92,10 +101,33 @@ export const AutoProjectRunEntry = memo(function AutoProjectRunEntry({
     [conversationId, autoprojectId, onOpenFile],
   )
   const finished = activity === null && !isActiveRunStatus(run.status)
+  const runId = run.id
+  const hasResult = Boolean(run.result?.trim())
+
+  // Arrivals: the row on mount, the outcome when it replaces the activity
+  // line (from that line's last height, so nothing jumps).
+  const articleRef = useRef<HTMLElement>(null)
+  const activityRef = useRef<HTMLDivElement>(null)
+  const outcomeRef = useRef<HTMLDivElement>(null)
+  const activityHeightRef = useRef(0)
+  const showsActivity = activity !== null
+  useLayoutEffect(() => {
+    if (showsActivity) activityHeightRef.current = activityRef.current?.offsetHeight ?? 0
+  })
+  useLayoutEffect(() => {
+    const el = articleRef.current
+    if (el && claimArrival(`row:${runId}`)) playArrival(el)
+  }, [claimArrival, runId])
+  useLayoutEffect(() => {
+    const el = outcomeRef.current
+    if (showsActivity || !el || !claimArrival(`result:${runId}`)) return
+    playArrival(el, { fromHeight: activityHeightRef.current, highlight: hasResult })
+  }, [showsActivity, claimArrival, runId, hasResult])
 
   return (
     <MarkdownWorkspaceContext.Provider value={workspaceCtx}>
       <article
+        ref={articleRef}
         className={`autoproject-run${isOpen ? ' is-open' : ''}`}
         data-run-id={run.id}
         data-conversation-id={conversationId}
@@ -142,16 +174,20 @@ export const AutoProjectRunEntry = memo(function AutoProjectRunEntry({
         )}
 
         {activity ? (
-          <AutoProjectActivityLine
-            label={activity.label}
-            waiting={activity.waiting}
-            startedAt={run.started_at}
-            onStop={() => onStop(conversationId)}
-            stopping={activity.stopping}
-            stopError={activity.stopError}
-          />
+          <div ref={activityRef}>
+            <AutoProjectActivityLine
+              label={activity.label}
+              waiting={activity.waiting}
+              startedAt={run.started_at}
+              onStop={() => onStop(conversationId)}
+              stopping={activity.stopping}
+              stopError={activity.stopError}
+            />
+          </div>
         ) : (
-          <AutoProjectRunOutcome run={run} />
+          <div ref={outcomeRef} className="autoproject-run-arrival">
+            <AutoProjectRunOutcome run={run} />
+          </div>
         )}
       </article>
     </MarkdownWorkspaceContext.Provider>

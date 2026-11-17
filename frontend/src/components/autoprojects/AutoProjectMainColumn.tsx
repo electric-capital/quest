@@ -212,6 +212,40 @@ export function AutoProjectMainColumn({
       runList.some((run) => run.conversation_id === pendingStart.conversationId)
     )
 
+  // --- Live arrivals (autoprojectArrival.ts) ---------------------------------
+  // Only what this page saw happen plays an arrival: a run it saw active
+  // (running or waiting) that is now finished gets `result:<id>`; a new
+  // active run that shows up after the first load and is not the one this
+  // page is starting gets `row:<id>`; a send gets `pending:<key>` (in
+  // startRun). Nothing on the first load, for older pages (finished runs
+  // never seen active), for runs that finished unseen (a refetch after a
+  // reconnect), or across AutoProjects (the page is keyed by id). Statuses
+  // are folded in during render so the entries' layout effects of the same
+  // commit can claim them; each key is claimed once.
+  const seenStatusRef = useRef(new Map<string, AutoProjectRun['status']>())
+  const arrivalsRef = useRef(new Set<string>())
+  const firstLoadSeenRef = useRef(false)
+  if (!runs.loading) {
+    const seen = seenStatusRef.current
+    for (const run of runList) {
+      const prev = seen.get(run.id)
+      if (prev === undefined) {
+        if (
+          firstLoadSeenRef.current &&
+          isActiveRunStatus(run.status) &&
+          pendingStart === null
+        ) {
+          arrivalsRef.current.add(`row:${run.id}`)
+        }
+      } else if (isActiveRunStatus(prev) && !isActiveRunStatus(run.status)) {
+        arrivalsRef.current.add(`result:${run.id}`)
+      }
+      seen.set(run.id, run.status)
+    }
+    firstLoadSeenRef.current = true
+  }
+  const claimArrival = useCallback((key: string) => arrivalsRef.current.delete(key), [])
+
   const composer = deriveAutoProjectThreadComposer({
     archived: autoproject.archived,
     runs: runList,
@@ -495,6 +529,7 @@ export function AutoProjectMainColumn({
       }
       submittingRef.current = true
       const key = ++pendingKeyRef.current
+      arrivalsRef.current.add(`pending:${key}`)
       setNotice(null)
       setPendingStart({
         key,
@@ -771,6 +806,7 @@ export function AutoProjectMainColumn({
             onOpenFile={onOpenFile}
             onDelete={openDelete}
             onView={onViewRun}
+            claimArrival={claimArrival}
           />
         </div>
       </div>

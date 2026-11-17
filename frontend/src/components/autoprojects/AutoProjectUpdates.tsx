@@ -1,9 +1,10 @@
-import { forwardRef, useId } from 'react'
+import { forwardRef, useId, useLayoutEffect, useRef } from 'react'
 import './AutoProjectUpdates.css'
 import type { FileSource } from '../../api/fileApi'
 import type { AutoProjectRun } from '../../api/types'
 import type { AutoProjectRunsView } from '../../hooks/useAutoProjectRuns'
 import { AutoProjectActivityLine } from './AutoProjectActivityLine'
+import { playArrival } from './autoprojectArrival'
 import { AutoProjectRunEntry, AutoProjectRunRequest, type AutoProjectRunActivityView, type AutoProjectRunCard } from './AutoProjectRunEntry'
 import { isActiveRunStatus } from './autoprojectThreadComposer'
 import type { AutoProjectUpdatesOrder } from './autoprojectUpdatesOrder'
@@ -61,6 +62,8 @@ export const AutoProjectUpdates = forwardRef<
     onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
     onDelete: (run: AutoProjectRun) => void
     onView: (conversationId: string) => void
+    /** True once for an arrival the page observed live (autoprojectArrival.ts). */
+    claimArrival: (key: string) => boolean
   }
 >(function AutoProjectUpdates(
   {
@@ -82,6 +85,7 @@ export const AutoProjectUpdates = forwardRef<
     onOpenFile,
     onDelete,
     onView,
+    claimArrival,
   },
   ref,
 ) {
@@ -130,32 +134,16 @@ export const AutoProjectUpdates = forwardRef<
         onDelete={onDelete}
         isOpen={run.conversation_id === openRunConversationId}
         onView={onView}
+        claimArrival={claimArrival}
       />
     ))
     const pending = pendingStart && (
-      <article key="pending" className="autoproject-run pending" aria-label="New update">
-        <div className="autoproject-run-meta">
-          <span className="autoproject-run-seq">New update</span>
-        </div>
-        <AutoProjectRunRequest prompt={pendingStart.prompt} />
-        <AutoProjectActivityLine label="Starting" startedAt={pendingStart.startedAt} />
-      </article>
+      <AutoProjectPendingEntry key="pending" pendingStart={pendingStart} claimArrival={claimArrival} />
     )
-    body = (
-      <div className="autoproject-updates-list">
-        {order === 'oldest' ? (
-          <>
-            {entries}
-            {pending}
-          </>
-        ) : (
-          <>
-            {pending}
-            {entries.reverse()}
-          </>
-        )}
-      </div>
-    )
+    // One keyed array either way, so switching the order moves the rows
+    // instead of remounting them.
+    const rows = order === 'oldest' ? [...entries, pending] : [pending, ...entries.reverse()]
+    body = <div className="autoproject-updates-list">{rows}</div>
   }
 
   const earlier = runs.hasOlder && runList.length > 0 && (
@@ -207,3 +195,33 @@ export const AutoProjectUpdates = forwardRef<
     </section>
   )
 })
+
+/**
+ * The optimistic entry of a run being started from the composer: the
+ * prompt and a "Starting" line until the runs list holds the run. Always a
+ * live arrival (it exists only right after a send), claimed once per start
+ * so a remount does not replay it.
+ */
+function AutoProjectPendingEntry({
+  pendingStart,
+  claimArrival,
+}: {
+  pendingStart: PendingStart
+  claimArrival: (key: string) => boolean
+}) {
+  const ref = useRef<HTMLElement>(null)
+  const key = pendingStart.key
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el && claimArrival(`pending:${key}`)) playArrival(el)
+  }, [claimArrival, key])
+  return (
+    <article ref={ref} className="autoproject-run pending" aria-label="New update">
+      <div className="autoproject-run-meta">
+        <span className="autoproject-run-seq">New update</span>
+      </div>
+      <AutoProjectRunRequest prompt={pendingStart.prompt} />
+      <AutoProjectActivityLine label="Starting" startedAt={pendingStart.startedAt} />
+    </article>
+  )
+}
