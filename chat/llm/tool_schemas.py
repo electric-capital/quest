@@ -26,16 +26,16 @@ from chat.tables.constants import (
     TABLE_WRITE_MAX_ROWS,
     TABLES_SERVICE_KEY,
 )
-from chat.tasks.constants import (
-    TASK_BRIEF_MAX_CHARS,
-    TASK_QUESTION_MAX_CHARS,
-    TASK_QUESTION_MAX_OPTIONS,
-    TASK_RUN_LIST_PAGE_SIZE,
-    TASK_RUN_NOTES_MAX_CHARS,
-    TASK_RUN_RESULT_MAX_CHARS,
-    TASK_RUN_SUMMARY_MAX_CHARS,
-    TASK_TITLE_MAX_CHARS,
-    TASKS_SERVICE_KEY,
+from chat.autoprojects.constants import (
+    AUTOPROJECT_BRIEF_MAX_CHARS,
+    AUTOPROJECT_QUESTION_MAX_CHARS,
+    AUTOPROJECT_QUESTION_MAX_OPTIONS,
+    AUTOPROJECT_RUN_LIST_PAGE_SIZE,
+    AUTOPROJECT_RUN_NOTES_MAX_CHARS,
+    AUTOPROJECT_RUN_RESULT_MAX_CHARS,
+    AUTOPROJECT_RUN_SUMMARY_MAX_CHARS,
+    AUTOPROJECT_TITLE_MAX_CHARS,
+    AUTOPROJECTS_SERVICE_KEY,
 )
 from chat.llm.base import ToolSpec
 from chat.workspace_hints import PROJECT_COPY_FIRST_SENTENCE
@@ -1611,29 +1611,29 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "required": ["src", "dest"],
         },
     },
-    # The run log of the Quest Task this conversation is a task run of
-    # (spec 00012 section 6.2; chat/gemini_api/tool_handlers/task_runs.py).
-    # Listed only in task runs and their sub-agents (TASK_ONLY_TOOL_CALL_TOOLS
-    # below keeps them out of every other prompt) and gated on the ``tasks``
-    # pseudo-key; outside a task run the handlers refuse with not_task_run.
-    # Reads of the caller's own task only, so not mutating.
-    "list_task_runs": {
-        "name": "list_task_runs",
+    # The run log of the AutoProject this conversation is an AutoProject run of
+    # (spec 00012 section 6.2; chat/gemini_api/tool_handlers/autoproject_runs.py).
+    # Listed only in AutoProject runs and their sub-agents (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
+    # below keeps them out of every other prompt) and gated on the ``autoprojects``
+    # pseudo-key; outside an AutoProject run the handlers refuse with not_autoproject_run.
+    # Reads of the caller's own AutoProject only, so not mutating.
+    "list_autoproject_runs": {
+        "name": "list_autoproject_runs",
         "description": (
-            "List the task runs of this Quest Task, newest first, "
-            f"{TASK_RUN_LIST_PAGE_SIZE} per page: the whole log, including "
-            "the runs the `## Task` section of your prompt shows only as "
+            "List the runs of this AutoProject, newest first, "
+            f"{AUTOPROJECT_RUN_LIST_PAGE_SIZE} per page: the whole log, including "
+            "the runs the `## AutoProject` section of your prompt shows only as "
             "index lines or leaves out. Each entry has the run number ('run', "
-            "the #N of the `## Task` section), date, status ('running', 'waiting', "
+            "the #N of the `## AutoProject` section), date, status ('running', 'waiting', "
             "'completed', 'failed' or 'stopped') and one-line summary; a run "
             "without a summary shows the start of its prompt instead, a run "
             "that ended without a handoff is marked handoff_missing, and a "
             "run still in progress (yours is marked current) has no summary "
             "yet. Returns {runs, offset, next_offset, total}; pass "
             "next_offset as offset for the next page (null on the last). "
-            "Use read_task_run for one run's full result and notes."
+            "Use read_autoproject_run for one run's full result and notes."
         ),
-        "requires_service": TASKS_SERVICE_KEY,
+        "requires_service": AUTOPROJECTS_SERVICE_KEY,
         "parameters": {
             "type": "object",
             "properties": {
@@ -1643,37 +1643,37 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "intent_message": {
                     "type": "string",
-                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'List earlier task runs'.",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'List earlier AutoProject runs'.",
                 },
             },
             "required": [],
         },
     },
-    "read_task_run": {
-        "name": "read_task_run",
+    "read_autoproject_run": {
+        "name": "read_autoproject_run",
         "description": (
-            "Read one task run of this Quest Task by its run number (the #N "
-            "of the `## Task` section or list_task_runs): its prompt (the "
+            "Read one run of this AutoProject by its run number (the #N "
+            "of the `## AutoProject` section or list_autoproject_runs): its prompt (the "
             "user's message), status, start and finish times, summary, result "
-            "(the answer the user was shown, which the `## Task` section leaves out), "
+            "(the answer the user was shown, which the `## AutoProject` section leaves out), "
             "notes (that run's handoff to later runs), handoff_missing, "
             "error (a failed run) and the questions it asked the user with "
             "their answers. A run still in progress (yours is marked "
             "current) has no summary, result or notes yet. Only runs of "
-            "this Quest Task can be read; a number with no run (never used, "
+            "this AutoProject can be read; a number with no run (never used, "
             "or its entry was deleted) returns run_not_found."
         ),
-        "requires_service": TASKS_SERVICE_KEY,
+        "requires_service": AUTOPROJECTS_SERVICE_KEY,
         "parameters": {
             "type": "object",
             "properties": {
                 "run": {
                     "type": "integer",
-                    "description": "The task run number N (as in #N), 1 or more",
+                    "description": "The AutoProject run number N (as in #N), 1 or more",
                 },
                 "intent_message": {
                     "type": "string",
-                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read task run #3'.",
+                    "description": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Read AutoProject run #3'.",
                 },
             },
             "required": ["run"],
@@ -4106,18 +4106,18 @@ _ROUTINE_COMPLETED: ToolSpec = {
 }
 
 # ---------------------------------------------------------------------------
-# Quest Task runs
+# AutoProject runs
 # ---------------------------------------------------------------------------
 
-# Loop-level tools of a task run of a Quest Task (a conversation with a
-# ``task_id``; issue #213, spec 6.2). Both act on the run of the calling
+# Loop-level tools of a run of an AutoProject (a conversation with an
+# ``autoproject_id``; issue #213, spec 6.2). Both act on the run of the calling
 # conversation, resolved server-side (chat/gemini_api/turn_tools.py); they
-# take no task or run id. Model-facing text says "Quest Task" and "task run"
-# because api/tasks.py is Google Tasks and agent_task is the sub-agent tool.
-_COMPLETE_TASK_RUN: ToolSpec = {
-    "name": "complete_task_run",
+# take no AutoProject or run id. Model-facing text says "AutoProject" and
+# "AutoProject run".
+_COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
+    "name": "complete_autoproject_run",
     "description": (
-        "Finish this task run of this Quest Task. Call it EXACTLY ONCE, as "
+        "Finish this AutoProject run. Call it EXACTLY ONCE, as "
         "the LAST thing you do, when the work the prompt asked for is done "
         "(or you have gone as far as you can); call it again only after a "
         "refusal or a `brief_conflict`, as below. It saves this run's log "
@@ -4138,31 +4138,31 @@ _COMPLETE_TASK_RUN: ToolSpec = {
             "summary": {
                 "type": "string",
                 "description": (
-                    "One line for the log of this Quest Task: what this run "
+                    "One line for the log of this AutoProject: what this run "
                     "did, not the prompt restated (at most "
-                    f"{TASK_RUN_SUMMARY_MAX_CHARS} characters)."
+                    f"{AUTOPROJECT_RUN_SUMMARY_MAX_CHARS} characters)."
                 ),
             },
             "result": {
                 "type": "string",
                 "description": (
                     "Your answer to the user, in markdown: shown as the "
-                    "reply in the task thread, and the only text of this "
+                    "reply in the AutoProject thread, and the only text of this "
                     "run the user sees. At most "
-                    f"{TASK_RUN_RESULT_MAX_CHARS:,} characters; put large "
-                    "outputs in `task://` files, Quest Docs or Quest Tables "
+                    f"{AUTOPROJECT_RUN_RESULT_MAX_CHARS:,} characters; put large "
+                    "outputs in `autoproject://` files, Quest Docs or Quest Tables "
                     "and point at them."
                 ),
             },
             "notes": {
                 "type": "string",
                 "description": (
-                    "The handoff to the next task run: what it needs that "
+                    "The handoff to the next run: what it needs that "
                     "the result does not say -- what was tried, what failed "
                     "and why, findings, and where files and artifacts are "
-                    "(`task://` paths, doc and table ids). Empty only when "
+                    "(`autoproject://` paths, doc and table ids). Empty only when "
                     "the result says everything. At most "
-                    f"{TASK_RUN_NOTES_MAX_CHARS:,} characters."
+                    f"{AUTOPROJECT_RUN_NOTES_MAX_CHARS:,} characters."
                 ),
             },
             "brief": {
@@ -4174,7 +4174,7 @@ _COMPLETE_TASK_RUN: ToolSpec = {
                     "questions, next steps), not a history with this run "
                     "appended. Omit it to leave the "
                     "brief as it is. At most "
-                    f"{TASK_BRIEF_MAX_CHARS:,} characters."
+                    f"{AUTOPROJECT_BRIEF_MAX_CHARS:,} characters."
                 ),
             },
             "brief_expected_version": {
@@ -4186,12 +4186,12 @@ _COMPLETE_TASK_RUN: ToolSpec = {
                     "it returned. Omit it otherwise."
                 ),
             },
-            "task_title": {
+            "autoproject_title": {
                 "type": "string",
                 "description": (
-                    "Optional short title for this Quest Task (at most "
-                    f"{TASK_TITLE_MAX_CHARS} characters). Used only while "
-                    "the Quest Task still has the default title cut from "
+                    "Optional short title for this AutoProject (at most "
+                    f"{AUTOPROJECT_TITLE_MAX_CHARS} characters). Used only while "
+                    "the AutoProject still has the default title cut from "
                     "its first prompt; ignored otherwise."
                 ),
             },
@@ -4200,11 +4200,11 @@ _COMPLETE_TASK_RUN: ToolSpec = {
     },
 }
 
-_ASK_TASK_QUESTION: ToolSpec = {
-    "name": "ask_task_question",
+_ASK_AUTOPROJECT_QUESTION: ToolSpec = {
+    "name": "ask_autoproject_question",
     "description": (
-        "Ask the user one question in the task thread when only they can "
-        "unblock this task run, instead of guessing: an ambiguous goal, a "
+        "Ask the user one question in the AutoProject thread when only they can "
+        "unblock this run, instead of guessing: an ambiguous goal, a "
         "choice between materially different approaches, missing access or "
         "data, or a step that is costly or hard to undo. Ask before the "
         "work that depends on the answer; for small choices, pick a sensible "
@@ -4220,9 +4220,9 @@ _ASK_TASK_QUESTION: ToolSpec = {
                 "type": "string",
                 "description": (
                     "The question, self-contained: the user reads it in "
-                    "the task thread without this run's context, so say "
+                    "the AutoProject thread without this run's context, so say "
                     "what you need and why (at most "
-                    f"{TASK_QUESTION_MAX_CHARS:,} characters)."
+                    f"{AUTOPROJECT_QUESTION_MAX_CHARS:,} characters)."
                 ),
             },
             "options": {
@@ -4230,7 +4230,7 @@ _ASK_TASK_QUESTION: ToolSpec = {
                 "items": {"type": "string"},
                 "description": (
                     "Optional suggested answers the user can click (at "
-                    f"most {TASK_QUESTION_MAX_OPTIONS}); free text is "
+                    f"most {AUTOPROJECT_QUESTION_MAX_OPTIONS}); free text is "
                     "always allowed."
                 ),
             },
@@ -4301,14 +4301,14 @@ SLACK_TOP_LEVEL_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [_SEND_SLACK_REPLY]
 # sees the tool too -- calling it there is a harmless no-op.
 ROUTINE_TOP_LEVEL_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [_ROUTINE_COMPLETED]
 
-# Task runs of a Quest Task (a ``task_id`` on the conversation row): the full
+# AutoProject runs (an ``autoproject_id`` on the conversation row): the full
 # top-level tier plus the two loop tools that act on the calling run --
-# complete_task_run (writes the log entry and ends the run) and
-# ask_task_question (suspends the run on a question). Sub-agents of a run
+# complete_autoproject_run (writes the log entry and ends the run) and
+# ask_autoproject_question (suspends the run on a question). Sub-agents of a run
 # get neither (they keep SUB_AGENT_TOOLS).
-TASK_RUN_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [
-    _COMPLETE_TASK_RUN,
-    _ASK_TASK_QUESTION,
+AUTOPROJECT_RUN_TOOLS: list[ToolSpec] = TOP_LEVEL_TOOLS + [
+    _COMPLETE_AUTOPROJECT_RUN,
+    _ASK_AUTOPROJECT_QUESTION,
 ]
 
 # Cross-user subagent conversations (origin="user_subagent"): the base
@@ -4359,9 +4359,9 @@ MUTATING_PROXY_PATHS: frozenset[str] = frozenset({
 # conversation they could only reach chat://, which the four
 # *_workspace_file tools already cover). Every prompt builder
 # that offers dynamic tools excludes these when the conversation has no
-# project (chat/gemini_api/system_prompt.py) -- except that a task run of a
-# Quest Task keeps the five file tools (SCHEME_FILE_TOOLS below) over
-# chat:// and task:// -- and the prompts of standalone
+# project (chat/gemini_api/system_prompt.py) -- except that an AutoProject run
+# keeps the five file tools (SCHEME_FILE_TOOLS below) over
+# chat:// and autoproject:// -- and the prompts of standalone
 # run kinds -- cross-user subagents and inference-API runs -- exclude them
 # always. The handlers refuse with a structured error when there is no
 # project_id for ``proj://`` paths (no_project), so a hallucinated call is
@@ -4381,8 +4381,8 @@ PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
 })
 
 # The five scheme-qualified file tools (a subset of
-# PROJECT_ONLY_TOOL_CALL_TOOLS). A task run of a Quest Task offers them too,
-# over chat:// and task:// instead of chat:// and proj:// (the handlers take
+# PROJECT_ONLY_TOOL_CALL_TOOLS). A run of an AutoProject offers them too,
+# over chat:// and autoproject:// instead of chat:// and proj:// (the handlers take
 # the spaces from the conversation, chat/gemini_api/tool_handlers/
 # file_paths.py), while the rest of the project-only tools stay out of it.
 SCHEME_FILE_TOOLS: frozenset[str] = frozenset({
@@ -4394,17 +4394,17 @@ SCHEME_FILE_TOOLS: frozenset[str] = frozenset({
 })
 assert SCHEME_FILE_TOOLS <= PROJECT_ONLY_TOOL_CALL_TOOLS
 
-# Dynamic tools that exist only in task runs of a Quest Task (and their
+# Dynamic tools that exist only in AutoProject runs (and their
 # sub-agents): the run log reads. The twin of PROJECT_ONLY_TOOL_CALL_TOOLS:
-# every prompt builder excludes these unless it builds a task run's prompt
-# (chat/gemini_api/system_prompt.py), even for a user with the ``tasks``
+# every prompt builder excludes these unless it builds an AutoProject run's prompt
+# (chat/gemini_api/system_prompt.py), even for a user with the ``autoprojects``
 # gate open, where their ``requires_service`` alone would show them. The
-# handlers refuse outside a task run (not_task_run), so a hallucinated call
-# is harmless. Never in PUBLIC_TOOL_CALL_ALLOWLIST (a task run is never
-# public); in SCRIPT_TOOL_CALL_ALLOWLIST (a task run's scripts read its log).
-TASK_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
-    "list_task_runs",
-    "read_task_run",
+# handlers refuse outside an AutoProject run (not_autoproject_run), so a hallucinated call
+# is harmless. Never in PUBLIC_TOOL_CALL_ALLOWLIST (an AutoProject run is never
+# public); in SCRIPT_TOOL_CALL_ALLOWLIST (an AutoProject run's scripts read its log).
+AUTOPROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
+    "list_autoproject_runs",
+    "read_autoproject_run",
 })
 
 # The four conversation-workspace tools, hidden from every prompt of a
@@ -4714,9 +4714,9 @@ CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
-    # Task runs only (TASK_ONLY_TOOL_CALL_TOOLS); the ## Task section names
+    # AutoProject runs only (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the ## AutoProject section names
     # them, so they are documented in full there (spec 00012 default 20).
-    *TASK_ONLY_TOOL_CALL_TOOLS,
+    *AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
 })
 
 # The system skill documenting each built-in tool that is not core.
@@ -4794,84 +4794,84 @@ def _stamp_prompt_tiers() -> None:
 _stamp_prompt_tiers()
 
 
-def _task_run_file_tool_specs() -> dict[str, ToolSpec]:
-    """Task-run wording of the five scheme-qualified file tools.
+def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
+    """AutoProject-run wording of the five scheme-qualified file tools.
 
     Same names, parameters and handlers as the registry entries; only the
-    descriptions say ``chat://`` (this task run's own workspace) and
-    ``task://`` (the task workspace shared by every task run of the Quest
-    Task) instead of ``chat://`` and ``proj://``. The registry entries stay
+    descriptions say ``chat://`` (the run's own workspace) and
+    ``autoproject://`` (the AutoProject workspace shared by every run of the
+    AutoProject) instead of ``chat://`` and ``proj://``. The registry entries stay
     as they are, so project prompts are unchanged.
     """
     specs = {name: copy.deepcopy(TOOL_CALL_REGISTRY[name]) for name in sorted(SCHEME_FILE_TOOLS)}
     texts = {
         "list_files": (
-            "List the files in one of this task run's two file spaces: "
-            "'chat://' is this task run's own workspace (mounted at /workspace "
-            "in scripts), 'task://' is the task workspace shared by every task "
-            "run of this Quest Task (mounted at /task). Pass 'chat://' or "
-            "'task://' for the whole space, or a directory such as "
-            "'task://reports' for that subtree only. Returns an object "
+            "List the files in one of this run's two file spaces: "
+            "'chat://' is this run's own workspace (mounted at /workspace "
+            "in scripts), 'autoproject://' is the AutoProject workspace shared by every "
+            "run of this AutoProject (mounted at /autoproject). Pass 'chat://' or "
+            "'autoproject://' for the whole space, or a directory such as "
+            "'autoproject://reports' for that subtree only. Returns an object "
             "{file_count, files} with each file's path, size and modification "
             "time; the paths are relative to the space root (listing "
-            "'task://reports' returns 'reports/q3.md'), so prefix them with the "
-            "scheme ('task://reports/q3.md') to pass them to the other file "
+            "'autoproject://reports' returns 'reports/q3.md'), so prefix them with the "
+            "scheme ('autoproject://reports/q3.md') to pass them to the other file "
             "tools. Use this to discover files before reading them.",
             {
-                "path": "Scheme-qualified directory: 'chat://' or 'task://' for a whole space, or e.g. 'chat://data', 'task://reports'. The scheme is required.",
+                "path": "Scheme-qualified directory: 'chat://' or 'autoproject://' for a whole space, or e.g. 'chat://data', 'autoproject://reports'. The scheme is required.",
             },
         ),
         "read_file": (
-            "Retrieve a file from this task run's workspace ('chat://...') or "
-            "the task workspace ('task://...'). For small text files (under "
+            "Retrieve a file from this run's workspace ('chat://...') or "
+            "the AutoProject workspace ('autoproject://...'). For small text files (under "
             "100KB), returns the file contents directly. For large or binary "
             "files, makes the file available for you to analyze directly in this "
             "response. Very large files (over the per-model attachment limit) "
             "cannot be attached and return an error suggesting how to split or "
             "reduce them with run_python first (the spaces are at /workspace and "
-            "/task there). Do not use it for Office documents (.docx/.xlsx/"
+            "/autoproject there). Do not use it for Office documents (.docx/.xlsx/"
             ".pptx): extract them with run_python. Use list_files first to see "
             "available files.",
             {
-                "path": "Scheme-qualified file path, e.g. 'chat://report.pdf', 'task://data/input.csv'. Use paths from list_files.",
+                "path": "Scheme-qualified file path, e.g. 'chat://report.pdf', 'autoproject://data/input.csv'. Use paths from list_files.",
             },
         ),
         "write_file": (
-            "Write or create a text file in this task run's workspace "
-            "('chat://...') or the task workspace ('task://...'). Drafts, "
+            "Write or create a text file in this run's workspace "
+            "('chat://...') or the AutoProject workspace ('autoproject://...'). Drafts, "
             "intermediate data, scripts and scratch output go to 'chat://'; "
-            "write to 'task://' only for durable files that later task runs of "
-            "this Quest Task should find, or when the user asks. Overwrites an "
+            "write to 'autoproject://' only for durable files that later runs of "
+            "this AutoProject should find, or when the user asks. Overwrites an "
             "existing file; parent directories are created automatically. "
             "Maximum file size is 1MB. To promote an existing file (including "
-            "binary files) from 'chat://' to 'task://', use copy_file instead.",
+            "binary files) from 'chat://' to 'autoproject://', use copy_file instead.",
             {
-                "path": "Scheme-qualified file path, e.g. 'chat://src/main.py', 'task://reports/q3.md'. Parent directories are created automatically.",
+                "path": "Scheme-qualified file path, e.g. 'chat://src/main.py', 'autoproject://reports/q3.md'. Parent directories are created automatically.",
             },
         ),
         "edit_file": (
-            "Perform an exact string replacement in a text file in this task "
-            "run's workspace ('chat://...') or the task workspace "
-            "('task://...'). old_string must match the file contents exactly "
+            "Perform an exact string replacement in a text file in this "
+            "run's workspace ('chat://...') or the AutoProject workspace "
+            "('autoproject://...'). old_string must match the file contents exactly "
             "(including whitespace and indentation) and must appear exactly once "
             "in the file unless replace_all is true. You must have read the file "
             "with read_file (or written it with write_file) earlier in this "
-            "task run before editing it -- a read in an earlier task run does "
+            "run before editing it -- a read in an earlier run does "
             "not count. Prefer this over rewriting "
             "the whole file with write_file when making small changes. Text "
             "files only.",
             {
-                "path": "Scheme-qualified file path, e.g. 'chat://report.md', 'task://notes/plan.md'. The file must already exist.",
+                "path": "Scheme-qualified file path, e.g. 'chat://report.md', 'autoproject://notes/plan.md'. The file must already exist.",
             },
         ),
         "copy_file": (
-            "Copy a file or directory between or within this task run's "
-            "workspace ('chat://...') and the task workspace ('task://...'). "
-            "Use 'chat://' -> 'task://' to promote durable files that later "
-            "task runs of this Quest Task should find (or when the user asks), "
-            "and 'task://' -> 'chat://' to bring a task file into this task "
+            "Copy a file or directory between or within this run's "
+            "workspace ('chat://...') and the AutoProject workspace ('autoproject://...'). "
+            "Use 'chat://' -> 'autoproject://' to promote durable files that later "
+            "runs of this AutoProject should find (or when the user asks), "
+            "and 'autoproject://' -> 'chat://' to bring an AutoProject file into this "
             "run: attachments, inline images, run_script and every other tool "
-            "that takes a plain file path read this task run's workspace only. "
+            "that takes a plain file path read this run's workspace only. "
             "Parent directories are created. An existing destination is an "
             "error (destination_exists, nothing written) unless overwrite is "
             "true; with overwrite a file replaces a file and a directory "
@@ -4880,13 +4880,13 @@ def _task_run_file_tool_specs() -> dict[str, ToolSpec]:
             "or special file named as the source is refused (not_a_regular_file). "
             "When copying a directory, symlinks, special files and (unless "
             "include_hidden is true) hidden dot-prefixed entries are skipped and "
-            "counted in the result's 'skipped'. This task run's "
+            "counted in the result's 'skipped'. This run's "
             "'.responses/', '.subagent_responses/' and 'pasted/' (chat://) "
-            "cannot be copied to task://.",
+            "cannot be copied to autoproject://.",
             {
-                "src": "Scheme-qualified source (a file or a directory), e.g. 'chat://out/report.pdf' or 'task://data'. Use paths from list_files.",
-                "dest": "Scheme-qualified destination path, e.g. 'task://reports/report.pdf' or 'chat://data'. Required; give the full destination path, not just a directory to copy into.",
-                "intent_message": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Save report to the task'.",
+                "src": "Scheme-qualified source (a file or a directory), e.g. 'chat://out/report.pdf' or 'autoproject://data'. Use paths from list_files.",
+                "dest": "Scheme-qualified destination path, e.g. 'autoproject://reports/report.pdf' or 'chat://data'. Required; give the full destination path, not just a directory to copy into.",
+                "intent_message": "A brief, user-friendly summary of your intent (max 50 characters). Example: 'Save report to the AutoProject'.",
             },
         ),
     }
@@ -4898,11 +4898,11 @@ def _task_run_file_tool_specs() -> dict[str, ToolSpec]:
     return specs
 
 
-# The five scheme-qualified file tools as a task run's prompts document them
+# The five scheme-qualified file tools as an AutoProject run's prompts document them
 # (chat/gemini_api/system_prompt.py renders them in place of the registry
-# entries for a task run and its sub-agents). Prompt text only: dispatch and
+# entries for an AutoProject run and its sub-agents). Prompt text only: dispatch and
 # the provider tool tiers use the registry entries.
-TASK_RUN_FILE_TOOL_SPECS: dict[str, ToolSpec] = _task_run_file_tool_specs()
+AUTOPROJECT_RUN_FILE_TOOL_SPECS: dict[str, ToolSpec] = _autoproject_run_file_tool_specs()
 
 
 def tool_is_advertised(spec: ToolSpec, connected_services: dict[str, bool] | None) -> bool:

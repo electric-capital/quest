@@ -16,7 +16,7 @@ from chat.docs.constants import (
     docs_disabled_message,
 )
 from chat.tables.constants import TABLES_SERVICE_KEY, tables_disabled_message
-from chat.tasks.constants import TASKS_SERVICE_KEY, tasks_disabled_message
+from chat.autoprojects.constants import AUTOPROJECTS_SERVICE_KEY, autoprojects_disabled_message
 from chat.llm.tool_schemas import (
     TOOL_CALL_REGISTRY,
     render_tool_reference,
@@ -35,20 +35,20 @@ def _is_visible(
     skill: SystemSkill,
     connected_services: Optional[dict[str, bool]],
     has_project: bool,
-    is_task_run: bool = False,
+    is_autoproject_run: bool = False,
 ) -> bool:
     """Return True if a skill should be visible to the agent.
 
     A skill is visible when its ``requires`` gate (if any) is satisfied,
     if it is project-scoped the conversation belongs to a project, and if
-    it is task-run-scoped the conversation is a task run of a Quest Task.
+    it is AutoProject-run-scoped the conversation is a run of an AutoProject.
     Passing ``connected_services=None`` is treated as "include all
     backend skills" (used by tests and admin tooling); it does not bypass
-    the project or task-run scoping.
+    the project or AutoProject-run scoping.
     """
     if skill.requires_project and not has_project:
         return False
-    if skill.requires_task_run and not is_task_run:
+    if skill.requires_autoproject_run and not is_autoproject_run:
         return False
     if skill.requires is None:
         return True
@@ -60,7 +60,7 @@ def _is_visible(
 def list_system_skills(
     connected_services: Optional[dict[str, bool]] = None,
     has_project: bool = False,
-    is_task_run: bool = False,
+    is_autoproject_run: bool = False,
 ) -> list[SystemSkill]:
     """Return the system skills available for the current context.
 
@@ -68,15 +68,15 @@ def list_system_skills(
         connected_services: Output of ``get_user_connected_services``.
             ``None`` means "include all backend skills" (admin / test).
         has_project: Whether the current conversation belongs to a project.
-        is_task_run: Whether the current conversation is a task run of a
-            Quest Task.
+        is_autoproject_run: Whether the current conversation is a run of an
+            AutoProject.
 
     Returns:
         A list of :class:`SystemSkill` entries in catalog order.
     """
     return [
         skill for skill in CATALOG.values()
-        if _is_visible(skill, connected_services, has_project, is_task_run)
+        if _is_visible(skill, connected_services, has_project, is_autoproject_run)
     ]
 
 
@@ -149,7 +149,7 @@ def load_system_skills(
     api_key: str,
     has_project: bool = False,
     user: Optional[dict] = None,
-    is_task_run: bool = False,
+    is_autoproject_run: bool = False,
 ) -> list[dict]:
     """Resolve full content for the requested system skill ids.
 
@@ -167,9 +167,9 @@ def load_system_skills(
         has_project: Whether the current conversation belongs to a project.
         user: The user dict, for builders that take a ``connections``
             keyword (see :func:`build_skill_content`). Optional.
-        is_task_run: Whether the current conversation is a task run of a
-            Quest Task. A ``requires_task_run`` skill loads only then, and
-            a skill's ``task_run_note`` is prepended to its content only
+        is_autoproject_run: Whether the current conversation is a run of an
+            AutoProject. A ``requires_autoproject_run`` skill loads only then, and
+            a skill's ``autoproject_run_note`` is prepended to its content only
             then.
 
     Returns:
@@ -195,15 +195,15 @@ def load_system_skills(
                 ),
             })
             continue
-        if skill.requires_task_run and not is_task_run:
+        if skill.requires_autoproject_run and not is_autoproject_run:
             results.append({
                 "id": skill.id,
                 "name": skill.name,
                 "description": skill.description,
                 "visibility": "system",
                 "error": (
-                    "Quest Tasks guidance is only available in a task run "
-                    "of a Quest Task."
+                    "AutoProjects guidance is only available in an AutoProject "
+                    "run."
                 ),
             })
             continue
@@ -218,8 +218,8 @@ def load_system_skills(
                 error = doc_notes_disabled_message()
             elif skill.requires == TABLES_SERVICE_KEY:
                 error = tables_disabled_message()
-            elif skill.requires == TASKS_SERVICE_KEY:
-                error = tasks_disabled_message()
+            elif skill.requires == AUTOPROJECTS_SERVICE_KEY:
+                error = autoprojects_disabled_message()
             elif skill.requires == BROWSER_SERVICE_KEY:
                 error = browser_disabled_message()
             elif skill.requires == PROJECT_DB_SERVICE_KEY:
@@ -245,8 +245,8 @@ def load_system_skills(
             continue
         try:
             content = build_skill_content(skill, base_url, api_key, user)
-            if is_task_run and skill.task_run_note:
-                content = skill.task_run_note + "\n\n" + content
+            if is_autoproject_run and skill.autoproject_run_note:
+                content = skill.autoproject_run_note + "\n\n" + content
         except Exception as exc:  # pragma: no cover -- defensive
             results.append({
                 "id": skill.id,
@@ -287,7 +287,7 @@ def build_system_skills_enumeration(
     has_project: bool = False,
     exclude_tools: Optional[set[str]] = None,
     include_only: Optional[frozenset[str]] = None,
-    is_task_run: bool = False,
+    is_autoproject_run: bool = False,
 ) -> str:
     """Build the compact "System Skills" block for the system prompt.
 
@@ -300,10 +300,10 @@ def build_system_skills_enumeration(
     its builder passes to ``_build_dynamic_tools_section``), so a tool
     hidden from the prompt is not named here either. ``include_only``
     restricts the block to those skill ids (the public prompt passes
-    ``PUBLIC_SYSTEM_SKILLS``); the gates still apply. ``is_task_run``
-    lists the task-run-only skills (a task run of a Quest Task).
+    ``PUBLIC_SYSTEM_SKILLS``); the gates still apply. ``is_autoproject_run``
+    lists the AutoProject-run-only skills (a run of an AutoProject).
     """
-    visible = list_system_skills(connected_services, has_project, is_task_run)
+    visible = list_system_skills(connected_services, has_project, is_autoproject_run)
     if include_only is not None:
         visible = [skill for skill in visible if skill.id in include_only]
     if not visible:

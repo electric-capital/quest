@@ -39,15 +39,15 @@ from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
     _WAIT_FOR_HANDLES_MAX_IDS,
     TURN_TOOL_HANDLERS,
-    ASK_TASK_QUESTION_KEY,
-    ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY,
+    ASK_AUTOPROJECT_QUESTION_KEY,
+    ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
     FinishInferenceResponse,
-    FinishTaskRun,
+    FinishAutoProjectRun,
     REQUEST_SERVICE_CONNECTION_KEY,
     SuspendForActionRequest,
     SuspendForServiceConnection,
     SuspendForSlackReply,
-    SuspendForTaskQuestion,
+    SuspendForAutoProjectQuestion,
     SuspendForWaitHandles,
     ToolCall,
     TurnState,
@@ -509,7 +509,7 @@ async def run_conversation_turn(
     flags: list[str] | None = None,
     attached_filenames: list[str] | None = None,
     thinking_effort: str | None = None,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> list[dict]:
     """Run an LLM conversation turn with streaming and tool execution.
 
@@ -546,17 +546,17 @@ async def run_conversation_turn(
             model menu, or None for the model's default. A level the model's
             spec does not list (``thinking_efforts``) is ignored, not an
             error -- the catalog may have changed since the pick was made.
-        task_id: The conversation's ``conversations.task_id``, set by the WS
-            send path and the wait-handle resume. Marks a Quest Task run: the
-            conversation's ``task_runs`` row is resolved up front and both ids
-            reach every top-level tool call (``ToolContext.task_id`` /
-            ``task_run_id``). The run's task context (frozen on the run row
-            on its first turn, chat.tasks.context.load_run_task_context)
-            becomes the system prompt's ``## Task`` section, its
-            ``brief_version`` lands on ``RunContext.task_context_brief_version``,
-            the session gets ``TASK_RUN_TOOLS``, and ``flags`` are ignored.
-            A task run never belongs to a project. Raises RuntimeError when
-            the run row or the task is missing.
+        autoproject_id: The conversation's ``conversations.autoproject_id``, set by the WS
+            send path and the wait-handle resume. Marks an AutoProject run: the
+            conversation's ``autoproject_runs`` row is resolved up front and both ids
+            reach every top-level tool call (``ToolContext.autoproject_id`` /
+            ``autoproject_run_id``). The run's AutoProject context (frozen on the run row
+            on its first turn, chat.autoprojects.context.load_run_autoproject_context)
+            becomes the system prompt's ``## AutoProject`` section, its
+            ``brief_version`` lands on ``RunContext.autoproject_context_brief_version``,
+            the session gets ``AUTOPROJECT_RUN_TOOLS``, and ``flags`` are ignored.
+            An AutoProject run never belongs to a project. Raises RuntimeError when
+            the run row or the AutoProject is missing.
 
     Returns:
         List of structured message dicts for storage.
@@ -627,10 +627,10 @@ async def run_conversation_turn(
 
         # Resolve per-conversation flags. ``nested_subagents`` lets 1st-level
         # sub-agents spawn one tier of 2nd-level sub-agents (Haiku / Flash-Lite
-        # only). NULL/empty flags mean no opt-in behaviors are active. A
-        # task run of a Quest Task takes no flags (spec 00012 section 6.1),
+        # only). NULL/empty flags mean no opt-in behaviors are active. An
+        # AutoProject run takes no flags (spec 00012 section 6.1),
         # whatever a caller passed.
-        if task_id:
+        if autoproject_id:
             flags = None
         from chat.conversation_flags import (
             is_flag_enabled, FLAG_NESTED_SUBAGENTS, FLAG_USER_SUBAGENTS,
@@ -671,22 +671,22 @@ async def run_conversation_turn(
                 )
             subagent_caller = await _get_user_by_id(subagent_run["caller_user_id"])
 
-        # Quest Task runs (conversations.task_id set, origin="task") are
+        # AutoProject runs (conversations.autoproject_id set, origin="autoproject") are
         # private standalone conversations (spec 00012 invariant 8) with one
-        # task_runs row each; the run-scoped task tools act on that row.
-        task_run = None
-        if task_id:
+        # autoproject_runs row each; the run-scoped AutoProject tools act on that row.
+        autoproject_run = None
+        if autoproject_id:
             if project_id:
                 raise RuntimeError(
-                    f"Conversation {conversation_id} is a task run and "
+                    f"Conversation {conversation_id} is an AutoProject run and "
                     "cannot belong to a project"
                 )
-            from db.task_store import get_run_by_conversation
-            task_run = await get_run_by_conversation(conversation_id)
-            if task_run is None or task_run["task_id"] != task_id:
+            from db.autoproject_store import get_run_by_conversation
+            autoproject_run = await get_run_by_conversation(conversation_id)
+            if autoproject_run is None or autoproject_run["autoproject_id"] != autoproject_id:
                 raise RuntimeError(
-                    f"Conversation {conversation_id} has task_id={task_id} "
-                    "but no task_runs row"
+                    f"Conversation {conversation_id} has autoproject_id={autoproject_id} "
+                    "but no autoproject_runs row"
                 )
 
         # chat_history.json is read ONCE here; the workspace notice flags
@@ -701,18 +701,18 @@ async def run_conversation_turn(
             project_data = await get_project(user["id"], project_id)
             if project_data:
                 resolved_project_guide = project_data.get("guide", "")
-        # A task run has no project (checked above); in its place it gets
-        # its task context: the system prompt's ## Task section. It is
+        # An AutoProject run has no project (checked above); in its place it gets
+        # its AutoProject context: the system prompt's ## AutoProject section. It is
         # frozen on the run row on the first turn, so a resume or a restart
         # rebuilds the identical prompt with the same brief_version.
-        run_task_context = None
-        if task_run is not None:
-            from chat.tasks.context import load_run_task_context
-            run_task_context = await load_run_task_context(task_run)
-            if run_task_context is None:
+        run_autoproject_context = None
+        if autoproject_run is not None:
+            from chat.autoprojects.context import load_run_autoproject_context
+            run_autoproject_context = await load_run_autoproject_context(autoproject_run)
+            if run_autoproject_context is None:
                 raise RuntimeError(
-                    f"Conversation {conversation_id} is a run of task "
-                    f"{task_id}, which no longer exists"
+                    f"Conversation {conversation_id} is a run of AutoProject "
+                    f"{autoproject_id}, which no longer exists"
                 )
 
         # Public-project conversations run with an internet-enabled sandbox
@@ -942,9 +942,9 @@ async def run_conversation_turn(
                 connected_accounts=connected_accounts,
                 memories_content=memories_content,
                 project_memories_content=project_memories_content,
-                # Task runs only reach this branch: they have no project,
+                # AutoProject runs only reach this branch: they have no project,
                 # so they are never public.
-                task_context=run_task_context.text if run_task_context else "",
+                autoproject_context=run_autoproject_context.text if run_autoproject_context else "",
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a
@@ -991,11 +991,11 @@ async def run_conversation_turn(
         elif is_public:
             from chat.llm.tool_schemas import PUBLIC_TOOLS
             session_tools = PUBLIC_TOOLS
-        elif task_run is not None:
-            # Task run of a Quest Task: the top-level tier plus
-            # complete_task_run and ask_task_question.
-            from chat.llm.tool_schemas import TASK_RUN_TOOLS
-            session_tools = TASK_RUN_TOOLS
+        elif autoproject_run is not None:
+            # AutoProject run: the top-level tier plus
+            # complete_autoproject_run and ask_autoproject_question.
+            from chat.llm.tool_schemas import AUTOPROJECT_RUN_TOOLS
+            session_tools = AUTOPROJECT_RUN_TOOLS
         elif routine_id:
             # Routine conversation: the top-level tier plus
             # routine_completed, which the run drivers wait for.
@@ -1051,10 +1051,10 @@ async def run_conversation_turn(
             structured_messages=structured_messages,
             usage_acc=usage_acc,
             workspace_notice_flags=notice_flags,
-            task_id=task_id,
-            task_run_id=task_run["id"] if task_run else None,
-            task_context_brief_version=(
-                run_task_context.brief_version if run_task_context else None
+            autoproject_id=autoproject_id,
+            autoproject_run_id=autoproject_run["id"] if autoproject_run else None,
+            autoproject_context_brief_version=(
+                run_autoproject_context.brief_version if run_autoproject_context else None
             ),
         )
 
@@ -1081,8 +1081,8 @@ async def run_conversation_turn(
         # tool_id. Rows with kind="slack_reply" indicate a
         # send_slack_reply_and_get_response suspend; kind="action_request"
         # a create_action_request suspend; kind="service_connection" a
-        # request_service_connection suspend; kind="task_question" an
-        # ask_task_question suspend.
+        # request_service_connection suspend; kind="autoproject_question" an
+        # ask_autoproject_question suspend.
         wait_handle_by_tool_id: dict[str, dict] = {}
         if pending_tool_uses_with_args:
             for tool_id, _tname, _args in pending_tool_uses_with_args:
@@ -1214,10 +1214,10 @@ async def run_conversation_turn(
                         "tool_id": tool_id,
                         "extra_parts": [],
                     })
-                elif row is not None and row.get("kind") == "task_question":
-                    # ask_task_question suspends (a task run of a Quest
-                    # Task): close with the user's answer from
-                    # chat.tasks.service.answer_question. Any other terminal
+                elif row is not None and row.get("kind") == "autoproject_question":
+                    # ask_autoproject_question suspends (an AutoProject run of an
+                    # AutoProject): close with the user's answer from
+                    # chat.autoprojects.service.answer_question. Any other terminal
                     # status (a Stop, a completion cancelling open handles)
                     # reads as cancelled.
                     response = row.get("response") or {}
@@ -1449,7 +1449,7 @@ async def run_conversation_turn(
             tool_results = []
             turn_state = TurnState()
             # Card suspends collected across this batch (create_action_request,
-            # request_service_connection, ask_task_question). A model may
+            # request_service_connection, ask_autoproject_question). A model may
             # emit several of them in ONE turn (parallel tool calls); each
             # opens its own card + wait handle, and the loop keeps
             # dispatching the rest of the batch instead of unwinding on the
@@ -1461,7 +1461,7 @@ async def run_conversation_turn(
             batch_suspends: list[
                 SuspendForActionRequest
                 | SuspendForServiceConnection
-                | SuspendForTaskQuestion
+                | SuspendForAutoProjectQuestion
             ] = []
             for fc_event in function_calls:
                 tool_call_count += 1
@@ -1545,20 +1545,20 @@ async def run_conversation_turn(
                         )
                     except (
                         SuspendForActionRequest, SuspendForServiceConnection,
-                        SuspendForTaskQuestion,
+                        SuspendForAutoProjectQuestion,
                     ) as suspend_exc:
                         if registry_key not in (
                             "create_action_request",
                             REQUEST_SERVICE_CONNECTION_KEY,
-                            ASK_TASK_QUESTION_KEY,
-                            ASK_TASK_QUESTION_VIA_TOOL_CALL_KEY,
+                            ASK_AUTOPROJECT_QUESTION_KEY,
+                            ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
                         ):
                             # return_to_caller keeps its immediate unwind:
                             # a subagent run has exactly one return.
                             raise
                         # Card + wait handle are already durable (the arm
                         # emitted the action_request / connect_request /
-                        # task_question event before raising). No
+                        # autoproject_question event before raising). No
                         # tool_result for this call -- the resume bucket
                         # closes it with the row's verdict. Keep
                         # dispatching the rest of the batch.
@@ -1580,7 +1580,7 @@ async def run_conversation_turn(
                         # Routine runs keep run_kind "top_level" but may not
                         # suggest doc notes (the suggest_doc_note backstop).
                         is_routine=bool(ctx.routine_id),
-                        task_id=ctx.task_id, task_run_id=ctx.task_run_id,
+                        autoproject_id=ctx.autoproject_id, autoproject_run_id=ctx.autoproject_run_id,
                     )
 
                     # Emit conversation_updated event when the name was set
@@ -1710,14 +1710,14 @@ async def run_conversation_turn(
             exc.service, exc.sibling_handle_ids, user["email"],
         )
         return structured_messages
-    except SuspendForTaskQuestion as exc:
+    except SuspendForAutoProjectQuestion as exc:
         # Same shape as SuspendForServiceConnection: the dangling
-        # ask_task_question tool_use is on disk and the resume bucket closes
-        # it once chat.tasks.service.answer_question writes the
-        # task_question wait-handle row (or a Stop cancels it). The task run
+        # ask_autoproject_question tool_use is on disk and the resume bucket closes
+        # it once chat.autoprojects.service.answer_question writes the
+        # autoproject_question wait-handle row (or a Stop cancels it). The AutoProject run
         # driver sets the run ``waiting``.
         logger.info(
-            "[wait-suspend] Conversation %s suspended on task_question "
+            "[wait-suspend] Conversation %s suspended on autoproject_question "
             "(tool_id=%s, handle_id=%s, run_id=%s, "
             "sibling_handle_ids=%s, user=%s)",
             conversation_id, exc.tool_id, exc.handle_id,
@@ -1735,16 +1735,16 @@ async def run_conversation_turn(
             conversation_id, exc.tool_id, user["email"],
         )
         return structured_messages
-    except FinishTaskRun as exc:
-        # A task run of a Quest Task was completed by complete_task_run
+    except FinishAutoProjectRun as exc:
+        # A run of an AutoProject was completed by complete_autoproject_run
         # (the run row is already ``completed`` and the closing tool_result
         # is in structured_messages). The run ends here with no further
         # model call; unlike an inference finish it keeps the turn's stats
         # (the run view's cost line) and the turn-end SDK history save.
-        # Tool calls after complete_task_run in the same batch are never
+        # Tool calls after complete_autoproject_run in the same batch are never
         # dispatched.
         logger.info(
-            "[task-run] Conversation %s finished via complete_task_run "
+            "[autoproject-run] Conversation %s finished via complete_autoproject_run "
             "(tool_id=%s, user=%s)",
             conversation_id, exc.tool_id, user["email"],
         )

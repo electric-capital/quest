@@ -1,12 +1,12 @@
-"""Task questions: a task run asks the user something in the task thread.
+"""AutoProject questions: an AutoProject run asks the user something in the AutoProject thread.
 
-A task run of a Quest Task that cannot go on without the user calls
-``ask_task_question(question, options?)`` (the loop arm in
+A run of an AutoProject that cannot go on without the user calls
+``ask_autoproject_question(question, options?)`` (the loop arm in
 ``chat/gemini_api/turn_tools.py``). The arm posts the question as a pending
-``task_question`` wait handle, records it in the run's transcript and
-suspends the run; the task driver (``chat/tasks/runs.py``) then marks the
+``autoproject_question`` wait handle, records it in the run's transcript and
+suspends the run; the AutoProject driver (``chat/autoprojects/runs.py``) then marks the
 run ``waiting``. The user answers from the thread
-(``chat.tasks.service.answer_question``), which resolves the handle and
+(``chat.autoprojects.service.answer_question``), which resolves the handle and
 kicks the resume, and the run continues with ``{"answer": "..."}`` as the
 tool result. A Stop cancels the handle and the question reads as
 cancelled everywhere.
@@ -14,7 +14,7 @@ cancelled everywhere.
 Questions have no table: the wait-handle row is the question (spec issue
 #213, section 4.1). Its ``payload`` is ``{question, options}``, its
 ``response`` ``{answer}``, and it is correlated to the run
-(``correlation_kind="task_run"``, ``correlation_id=<run id>``) from
+(``correlation_kind="autoproject_run"``, ``correlation_id=<run id>``) from
 creation. The thread groups questions by the run's conversation, not by the
 correlation, so a row always lands under its own run.
 """
@@ -24,15 +24,15 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from chat.tasks.constants import (
-    TASK_ANSWER_MAX_CHARS,
-    TASK_QUESTION_MAX_CHARS,
-    TASK_QUESTION_MAX_OPTIONS,
-    TASK_QUESTION_OPTION_MAX_CHARS,
+from chat.autoprojects.constants import (
+    AUTOPROJECT_ANSWER_MAX_CHARS,
+    AUTOPROJECT_QUESTION_MAX_CHARS,
+    AUTOPROJECT_QUESTION_MAX_OPTIONS,
+    AUTOPROJECT_QUESTION_OPTION_MAX_CHARS,
 )
 from db import tool_wait_handle_store
 from db.models import ToolWaitHandleKind, ToolWaitHandleStatus
-from db.task_store import TaskStoreError, TaskValidationError
+from db.autoproject_store import AutoProjectStoreError, AutoProjectValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,11 @@ logger = logging.getLogger(__name__)
 # wait-handle kind (the resume bucket and the thread match on it). Kept as
 # three names like chat/connect_requests.py, although two of them share a
 # spelling.
-TOOL_NAME = "ask_task_question"
-MESSAGE_TYPE = "task_question"
-HANDLE_KIND = ToolWaitHandleKind.TASK_QUESTION.value
+TOOL_NAME = "ask_autoproject_question"
+MESSAGE_TYPE = "autoproject_question"
+HANDLE_KIND = ToolWaitHandleKind.AUTOPROJECT_QUESTION.value
 # ``correlation_kind`` of a question's handle; ``correlation_id`` is the run id.
-CORRELATION_KIND = "task_run"
+CORRELATION_KIND = "autoproject_run"
 
 # A question's status in the thread and in the transcript message. A
 # handle that ended any other way than an answer (a Stop, a completion
@@ -60,9 +60,9 @@ QUESTION_STATUS_CANCELLED = "cancelled"
 # ---------------------------------------------------------------------------
 
 
-class TaskQuestionNotFoundError(TaskStoreError):
-    """No such question in this task: the handle is missing, of another
-    kind, another user's, or its run belongs to another task. All read the
+class AutoProjectQuestionNotFoundError(AutoProjectStoreError):
+    """No such question in this AutoProject: the handle is missing, of another
+    kind, another user's, or its run belongs to another AutoProject. All read the
     same (invariant 7)."""
 
     code = "question_not_found"
@@ -72,7 +72,7 @@ class TaskQuestionNotFoundError(TaskStoreError):
         self.handle_id = handle_id
 
 
-class TaskQuestionResolvedError(TaskStoreError):
+class AutoProjectQuestionResolvedError(AutoProjectStoreError):
     """The question is no longer open: answered already, or cancelled (a
     Stop, or its run finished). ``details`` carries its thread ``status``
     and ``answer`` (None unless answered)."""
@@ -83,7 +83,7 @@ class TaskQuestionResolvedError(TaskStoreError):
         if status == QUESTION_STATUS_ANSWERED:
             message = "This question has already been answered."
         else:
-            message = "This question was cancelled; its task run is no longer waiting for it."
+            message = "This question was cancelled; its AutoProject run is no longer waiting for it."
         super().__init__(message, details={"status": status, "answer": answer})
 
 
@@ -93,7 +93,7 @@ class TaskQuestionResolvedError(TaskStoreError):
 
 
 def validate_question(question: Any, options: Any) -> tuple[str, list[str]]:
-    """Check the arguments of ``ask_task_question``.
+    """Check the arguments of ``ask_autoproject_question``.
 
     Args:
         question: The question text (required).
@@ -104,61 +104,61 @@ def validate_question(question: Any, options: Any) -> tuple[str, list[str]]:
         in order (``[]`` when none were given).
 
     Raises:
-        TaskValidationError: ``invalid_question``, ``question_too_long``,
+        AutoProjectValidationError: ``invalid_question``, ``question_too_long``,
         ``invalid_options``, ``too_many_options`` or ``option_too_long``
         (the size refusals with ``cap`` and ``actual``). The messages say
         what to change, for the model.
     """
     if not isinstance(question, str) or not question.strip():
-        raise TaskValidationError(
+        raise AutoProjectValidationError(
             "invalid_question",
             "Pass the question to ask the user as a non-empty string in "
             "'question'.",
         )
     text = question.strip()
-    if len(text) > TASK_QUESTION_MAX_CHARS:
-        raise TaskValidationError(
+    if len(text) > AUTOPROJECT_QUESTION_MAX_CHARS:
+        raise AutoProjectValidationError(
             "question_too_long",
             f"The question is {len(text)} characters. Shorten it to at most "
-            f"{TASK_QUESTION_MAX_CHARS} characters.",
-            cap=TASK_QUESTION_MAX_CHARS,
+            f"{AUTOPROJECT_QUESTION_MAX_CHARS} characters.",
+            cap=AUTOPROJECT_QUESTION_MAX_CHARS,
             actual=len(text),
         )
 
     if options is None:
         return text, []
     if not isinstance(options, list):
-        raise TaskValidationError(
+        raise AutoProjectValidationError(
             "invalid_options",
             "'options' must be a list of short answer strings, or left out.",
         )
     cleaned: list[str] = []
     for option in options:
         if not isinstance(option, str) or not option.strip():
-            raise TaskValidationError(
+            raise AutoProjectValidationError(
                 "invalid_options",
                 "Every entry of 'options' must be a non-empty string. Remove "
                 "the empty or non-text entries.",
             )
         label = option.strip()
-        if len(label) > TASK_QUESTION_OPTION_MAX_CHARS:
-            raise TaskValidationError(
+        if len(label) > AUTOPROJECT_QUESTION_OPTION_MAX_CHARS:
+            raise AutoProjectValidationError(
                 "option_too_long",
                 f"An option is {len(label)} characters. Shorten each option "
-                f"to at most {TASK_QUESTION_OPTION_MAX_CHARS} characters; "
+                f"to at most {AUTOPROJECT_QUESTION_OPTION_MAX_CHARS} characters; "
                 "put longer explanations in the question.",
-                cap=TASK_QUESTION_OPTION_MAX_CHARS,
+                cap=AUTOPROJECT_QUESTION_OPTION_MAX_CHARS,
                 actual=len(label),
             )
         cleaned.append(label)
     deduped = list(dict.fromkeys(cleaned))
-    if len(deduped) > TASK_QUESTION_MAX_OPTIONS:
-        raise TaskValidationError(
+    if len(deduped) > AUTOPROJECT_QUESTION_MAX_OPTIONS:
+        raise AutoProjectValidationError(
             "too_many_options",
             f"There are {len(deduped)} options. Offer at most "
-            f"{TASK_QUESTION_MAX_OPTIONS}; the user can always type their own "
+            f"{AUTOPROJECT_QUESTION_MAX_OPTIONS}; the user can always type their own "
             "answer.",
-            cap=TASK_QUESTION_MAX_OPTIONS,
+            cap=AUTOPROJECT_QUESTION_MAX_OPTIONS,
             actual=len(deduped),
         )
     return text, deduped
@@ -171,21 +171,21 @@ def validate_answer(answer: Any) -> str:
         The stripped answer.
 
     Raises:
-        TaskValidationError: ``invalid_answer`` for a non-string, a blank
-        answer, or one over ``TASK_ANSWER_MAX_CHARS`` (with ``cap`` and
+        AutoProjectValidationError: ``invalid_answer`` for a non-string, a blank
+        answer, or one over ``AUTOPROJECT_ANSWER_MAX_CHARS`` (with ``cap`` and
         ``actual``).
     """
     if not isinstance(answer, str):
-        raise TaskValidationError("invalid_answer", "The answer must be text.")
+        raise AutoProjectValidationError("invalid_answer", "The answer must be text.")
     text = answer.strip()
     if not text:
-        raise TaskValidationError("invalid_answer", "The answer cannot be empty.")
-    if len(text) > TASK_ANSWER_MAX_CHARS:
-        raise TaskValidationError(
+        raise AutoProjectValidationError("invalid_answer", "The answer cannot be empty.")
+    if len(text) > AUTOPROJECT_ANSWER_MAX_CHARS:
+        raise AutoProjectValidationError(
             "invalid_answer",
             f"The answer is {len(text)} characters; the limit is "
-            f"{TASK_ANSWER_MAX_CHARS}.",
-            cap=TASK_ANSWER_MAX_CHARS,
+            f"{AUTOPROJECT_ANSWER_MAX_CHARS}.",
+            cap=AUTOPROJECT_ANSWER_MAX_CHARS,
             actual=len(text),
         )
     return text
@@ -215,7 +215,7 @@ def _answer_of(handle: dict) -> Optional[str]:
 
 
 def question_view(handle: dict) -> dict:
-    """A question as the thread and ``read_task_run`` show it.
+    """A question as the thread and ``read_autoproject_run`` show it.
 
     Shape::
 
@@ -249,7 +249,7 @@ async def list_run_questions(runs: list[dict]) -> dict[str, list[dict]]:
     when it asked nothing.
 
     Args:
-        runs: Run dicts (``db.task_store`` shape; ``id`` and
+        runs: Run dicts (``db.autoproject_store`` shape; ``id`` and
             ``conversation_id`` are read), already scoped to the caller.
     """
     by_run: dict[str, list[dict]] = {run["id"]: [] for run in runs}
@@ -270,9 +270,9 @@ async def list_run_questions(runs: list[dict]) -> dict[str, list[dict]]:
 
 
 def make_question_message(handle: dict) -> dict:
-    """The durable ``task_question`` transcript message for a new question.
+    """The durable ``autoproject_question`` transcript message for a new question.
 
-    Shape: ``{"type": "task_question", "wait_handle_id", "status":
+    Shape: ``{"type": "autoproject_question", "wait_handle_id", "status":
     "pending", "question", "options"}``; the loop adds the timestamp. The
     ``status`` values are the thread's (:func:`question_status`), and
     answering adds ``answer`` (:func:`rewrite_question_message`).
@@ -302,10 +302,10 @@ def rewrite_question_message(
     if status == QUESTION_STATUS_ANSWERED:
         fields["answer"] = answer
     try:
-        ChatStorage.update_task_question_message(conversation_id, handle_id, fields)
+        ChatStorage.update_autoproject_question_message(conversation_id, handle_id, fields)
     except Exception:
         logger.warning(
-            "[task_question] transcript rewrite failed for %s (conversation=%s)",
+            "[autoproject_question] transcript rewrite failed for %s (conversation=%s)",
             handle_id, conversation_id, exc_info=True,
         )
 

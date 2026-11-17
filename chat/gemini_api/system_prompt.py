@@ -20,8 +20,8 @@ from chat.llm.tool_schemas import (
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
     SCHEME_FILE_TOOLS,
-    TASK_ONLY_TOOL_CALL_TOOLS,
-    TASK_RUN_FILE_TOOL_SPECS,
+    AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
+    AUTOPROJECT_RUN_FILE_TOOL_SPECS,
     TOOL_CALL_REGISTRY,
     format_tool_call_doc,
     mutating_tool_call_tools,
@@ -402,30 +402,30 @@ _PROJECT_SCRIPT_EXAMPLE = (
 )
 
 
-# --- Task runs of a Quest Task (issue #213) --------------------------------
+# --- AutoProject runs (issue #213) ----------------------------------------
 #
-# A task run has two file spaces like a project conversation, with the task
-# workspace in place of the project one: chat:// (this task run's own
-# workspace, /workspace in scripts) and task:// (the task workspace shared by
-# every task run of the Quest Task, /task in scripts). Its prompts offer the
-# five scheme-qualified file tools in their task-run wording
-# (TASK_RUN_FILE_TOOL_SPECS) and the run log reads (TASK_ONLY_TOOL_CALL_TOOLS),
+# An AutoProject run has two file spaces like a project conversation, with the AutoProject
+# workspace in place of the project one: chat:// (the run's own
+# workspace, /workspace in scripts) and autoproject:// (the AutoProject workspace shared by
+# every run of the AutoProject, /autoproject in scripts). Its prompts offer the
+# five scheme-qualified file tools in their AutoProject-run wording
+# (AUTOPROJECT_RUN_FILE_TOOL_SPECS) and the run log reads (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS),
 # and hide the four *_workspace_file tools and the rest of the project-only
-# tools. Every other prompt hides TASK_ONLY_TOOL_CALL_TOOLS.
-_TASK_RUN_EXCLUDED_TOOLS: frozenset[str] = (
+# tools. Every other prompt hides AUTOPROJECT_ONLY_TOOL_CALL_TOOLS.
+_AUTOPROJECT_RUN_EXCLUDED_TOOLS: frozenset[str] = (
     PROJECT_HIDDEN_WORKSPACE_TOOLS
     | (PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS)
 )
 
-# Shared tail of the two task-run file-spaces paragraphs: the plain-path
+# Shared tail of the two AutoProject-run file-spaces paragraphs: the plain-path
 # rule and the *_workspace_file name mapping (the project paragraph's, with
-# the task-run wording).
-_TASK_RUN_PLAIN_PATHS_SENTENCES = (
+# the AutoProject-run wording).
+_AUTOPROJECT_RUN_PLAIN_PATHS_SENTENCES = (
     "Every other tool that takes a file path (attachments, inline images, "
-    "`run_script`, downloads) uses plain paths in this task run's workspace "
-    "only: `copy_file` a task file from `task://` to `chat://` first. To run "
-    "a script kept in the task workspace, copy it over or start it from "
-    "`run_python` (`subprocess.run([\"python3\", \"/task/etl.py\"])`). "
+    "`run_script`, downloads) uses plain paths in this run's workspace "
+    "only: `copy_file` an AutoProject file from `autoproject://` to `chat://` first. To run "
+    "a script kept in the AutoProject workspace, copy it over or start it from "
+    "`run_python` (`subprocess.run([\"python3\", \"/autoproject/etl.py\"])`). "
     "Tool descriptions that mention the conversation-workspace tools mean "
     "the same files through the tools above: `list_workspace_files` = "
     "`list_files(\"chat://\")`, `get_workspace_file(p)` = "
@@ -433,52 +433,52 @@ _TASK_RUN_PLAIN_PATHS_SENTENCES = (
     "`chat://` path, `edit_workspace_file` = `edit_file` on a `chat://` path."
 )
 
-# The top-level task run's paragraph. Static (the same for every task run of
-# every Quest Task), so it sits with the task-run naming note in the cacheable
-# part of the prompt, never in the per-run ``## Task`` block.
-_TASK_RUN_FILE_SPACES_SECTION = (
-    "**Two file spaces:** This task run has its own workspace and this "
-    "Quest Task has a shared one. The file tools name the space in every "
-    "path: `chat://<path>` is this task run's workspace (`/workspace` in "
-    "scripts), `task://<path>` is the task workspace shared by every task "
-    "run of this Quest Task (`/task` in scripts); `list_files`, `read_file`, "
+# The top-level AutoProject run's paragraph. Static (the same for every run of
+# every AutoProject), so it sits with the AutoProject-run naming note in the cacheable
+# part of the prompt, never in the per-run ``## AutoProject`` block.
+_AUTOPROJECT_RUN_FILE_SPACES_SECTION = (
+    "**Two file spaces:** This run has its own workspace and this "
+    "AutoProject has a shared one. The file tools name the space in every "
+    "path: `chat://<path>` is this run's workspace (`/workspace` in "
+    "scripts), `autoproject://<path>` is the AutoProject workspace shared by every "
+    "run of this AutoProject (`/autoproject` in scripts); `list_files`, `read_file`, "
     "`write_file`, `edit_file` and `copy_file` accept only scheme-qualified "
     "paths. Scratch work goes to `chat://`: drafts, downloads, intermediate "
-    "data, scripts, API responses. Later task runs never see this task "
-    "run's workspace, so put a file in `task://` when a later task run will "
+    "data, scripts, API responses. Later runs never see this run's workspace, "
+    "so put a file in `autoproject://` when a later run will "
     "need it (data the work builds on, finished deliverables, scripts worth "
     "re-running), or when the user asks, and say where it is in your notes. "
-    "Promote a file with `copy_file` from `chat://` to `task://` (from a "
-    "script: `shutil.copy('/workspace/out.csv', '/task/out.csv')`). "
-    + _TASK_RUN_PLAIN_PATHS_SENTENCES
+    "Promote a file with `copy_file` from `chat://` to `autoproject://` (from a "
+    "script: `shutil.copy('/workspace/out.csv', '/autoproject/out.csv')`). "
+    + _AUTOPROJECT_RUN_PLAIN_PATHS_SENTENCES
 )
 
-# The sub-agent variant: a task run's sub-agent works in the same two
+# The sub-agent variant: an AutoProject run's sub-agent works in the same two
 # spaces as the run that spawned it.
-_TASK_RUN_SUB_AGENT_FILE_SPACES_SECTION = (
-    "**Two file spaces:** You share the two file spaces of the task run "
+_AUTOPROJECT_RUN_SUB_AGENT_FILE_SPACES_SECTION = (
+    "**Two file spaces:** You share the two file spaces of the AutoProject run "
     "that spawned you. The file tools name the space in every path: "
-    "`chat://<path>` is the task run's own workspace (`/workspace` in "
-    "scripts), `task://<path>` is the task workspace shared by every task "
-    "run of this Quest Task (`/task` in scripts); `list_files`, `read_file`, "
+    "`chat://<path>` is that run's own workspace (`/workspace` in "
+    "scripts), `autoproject://<path>` is the AutoProject workspace shared by every "
+    "run of this AutoProject (`/autoproject` in scripts); `list_files`, `read_file`, "
     "`write_file`, `edit_file` and `copy_file` accept only scheme-qualified "
     "paths. Write scratch work and files for the parent agent to "
-    "`chat://`; write to `task://` only when your task asks for it. "
-    + _TASK_RUN_PLAIN_PATHS_SENTENCES
+    "`chat://`; write to `autoproject://` only when your instructions ask for it. "
+    + _AUTOPROJECT_RUN_PLAIN_PATHS_SENTENCES
 )
 
-_TASK_RUN_FILE_RULES = (
+_AUTOPROJECT_RUN_FILE_RULES = (
     '- Use `tool_call(tool_name="list_files", arguments={"path": "chat://"})` '
-    '(or `"task://"` for the task workspace) to discover available files '
+    '(or `"autoproject://"` for the AutoProject workspace) to discover available files '
     'before trying to read them. For workspace + sandbox details, load '
     '`system:workspace`.\n'
     '- Use `tool_call(tool_name="read_file", arguments={"path": "chat://..."})` '
-    '(or a `task://` path) to read text files, images, and PDFs.'
+    '(or an `autoproject://` path) to read text files, images, and PDFs.'
 )
-_TASK_RUN_FILE_EXAMPLES = (
-    "To list this task run's files and the task's files:\n"
+_AUTOPROJECT_RUN_FILE_EXAMPLES = (
+    "To list this run's files and the AutoProject's files:\n"
     '  tool_call(tool_name="list_files", arguments={"path": "chat://"})\n'
-    '  tool_call(tool_name="list_files", arguments={"path": "task://"})\n'
+    '  tool_call(tool_name="list_files", arguments={"path": "autoproject://"})\n'
     '\n'
     'To read a text file:\n'
     '  tool_call(tool_name="read_file", arguments={"path": "chat://notes.txt"})\n'
@@ -486,19 +486,19 @@ _TASK_RUN_FILE_EXAMPLES = (
     'To analyze an uploaded PDF:\n'
     '  tool_call(tool_name="read_file", arguments={"path": "chat://report.pdf"})\n'
     '\n'
-    "To write a file to this task run's workspace:\n"
+    "To write a file to this run's workspace:\n"
     '  tool_call(tool_name="write_file", arguments={"path": '
     '"chat://analysis.py", "content": "import pandas as pd\\n..."})\n'
     '\n'
-    'To keep a file for later task runs of this Quest Task:\n'
+    'To keep a file for later runs of this AutoProject:\n'
     '  tool_call(tool_name="copy_file", arguments={"src": "chat://report.pdf", '
-    '"dest": "task://report.pdf"})'
+    '"dest": "autoproject://report.pdf"})'
 )
-_TASK_RUN_SCRIPT_EXAMPLE = (
-    "\n\nTo keep a file from this task run's workspace in the task workspace "
+_AUTOPROJECT_RUN_SCRIPT_EXAMPLE = (
+    "\n\nTo keep a file from this run's workspace in the AutoProject workspace "
     "from a script:\n"
     "  run_python(script=\"import shutil\\nshutil.copy('/workspace/out.csv', "
-    "'/task/out.csv')\")"
+    "'/autoproject/out.csv')\")"
 )
 
 
@@ -537,8 +537,8 @@ def _build_dynamic_tools_section(
             documents every offered tool in full -- the public-project
             prompt, which has no skill tools to load.
         spec_overrides: Optional ``{name: spec}`` documenting a tool with
-            another spec's text (a task run's prompts pass
-            ``TASK_RUN_FILE_TOOL_SPECS``). Which tools are listed, and in
+            another spec's text (an AutoProject run's prompts pass
+            ``AUTOPROJECT_RUN_FILE_TOOL_SPECS``). Which tools are listed, and in
             which order, still follows the registry entries.
 
     Returns:
@@ -660,22 +660,22 @@ _ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run
 
 **Routine completion (IMPORTANT):** When every piece of work the routine prompt asked for is done and you have written your final summary, call the top-level `routine_completed` tool (it has its own function declaration -- call it directly, not through `tool_call`) EXACTLY ONCE as your LAST tool call. A run that ends without this call is treated as unfinished: you will receive a follow-up message asking you to check that all the requested work was done and to call `routine_completed`. If part of the task could not be completed, still call `routine_completed` and explain what is missing in its `summary`."""
 
-# Replacement for task runs of a Quest Task (issue #213): a run conversation
-# is never shown by name (the task thread shows the task's title), so
-# ``set_conversation_name`` is not offered. How a task run finishes is in the
-# ``## Task`` section near the end of the prompt.
-_TASK_RUN_NAMING_SECTION = """**Task run:** This conversation is one task run of a Quest Task and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. How to finish the run, ask the user and hand off to the next task run is in the `## Task` section at the end of this prompt. If the title shown there is still just the start of the first prompt, give this Quest Task a short title through `complete_task_run`'s `task_title` (it is ignored once a title has been set)."""
+# Replacement for AutoProject runs (issue #213): a run conversation
+# is never shown by name (the AutoProject thread shows the AutoProject's title), so
+# ``set_conversation_name`` is not offered. How an AutoProject run finishes is in the
+# ``## AutoProject`` section near the end of the prompt.
+_AUTOPROJECT_RUN_NAMING_SECTION = """**AutoProject run:** This conversation is one run of an AutoProject and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. How to finish the run, ask the user and hand off to the next run is in the `## AutoProject` section at the end of this prompt. If the title shown there is still just the start of the first prompt, give this AutoProject a short title through `complete_autoproject_run`'s `autoproject_title` (it is ignored once a title has been set)."""
 
-# The two loop-level tools of a task run, appended to the numbered tool list
+# The two loop-level tools of an AutoProject run, appended to the numbered tool list
 # (which then counts fifteen). Their own function declarations carry the
-# parameters; the ``## Task`` section says when to call them.
-_TASK_RUN_TOOL_LINES = (
-    "\n14. **complete_task_run(summary, result, notes, brief?, "
-    "brief_expected_version?, task_title?)** -- Finish this task run: saves "
+# parameters; the ``## AutoProject`` section says when to call them.
+_AUTOPROJECT_RUN_TOOL_LINES = (
+    "\n14. **complete_autoproject_run(summary, result, notes, brief?, "
+    "brief_expected_version?, autoproject_title?)** -- Finish this run: saves "
     "its log entry, applies the brief and ends the run. Call it directly, "
     "not through `tool_call`."
-    "\n15. **ask_task_question(question, options?)** -- Ask the user one "
-    "question in the task thread and wait for the answer. Call it directly, "
+    "\n15. **ask_autoproject_question(question, options?)** -- Ask the user one "
+    "question in the AutoProject thread and wait for the answer. Call it directly, "
     "not through `tool_call`."
 )
 
@@ -708,7 +708,7 @@ def get_system_prompt(
     connected_accounts: str = "",
     memories_content: str = "",
     project_memories_content: str = "",
-    task_context: str = "",
+    autoproject_context: str = "",
 ) -> str:
     """Build the system prompt with tool instructions and skill enumeration.
 
@@ -762,28 +762,28 @@ def get_system_prompt(
             into the "Project Memories" paragraph; empty -> the paragraph
             only names the read tools. Ignored when ``has_project`` is
             False.
-        task_context: The ``## Task`` block of a task run of a Quest Task
-            (chat.tasks.context, frozen on the run row). Non-empty marks
-            the conversation as a task run: the block is placed as its own
+        autoproject_context: The ``## AutoProject`` block of a run of an AutoProject
+            (chat.autoprojects.context, frozen on the run row). Non-empty marks
+            the conversation as an AutoProject run: the block is placed as its own
             section after every stable section and right before the proxy
             preamble (which stays last), ``set_conversation_name`` is left
             out of the enumeration and the naming section is replaced by
-            the task-run note plus the task run's "Two file spaces"
-            paragraph (``chat://`` and ``task://``, static so it stays in
+            the AutoProject-run note plus the AutoProject run's "Two file spaces"
+            paragraph (``chat://`` and ``autoproject://``, static so it stays in
             the cacheable prefix). The dynamic tools then offer the five
-            scheme-qualified file tools in their task-run wording
-            (``TASK_RUN_FILE_TOOL_SPECS``) and the run log reads
-            (``TASK_ONLY_TOOL_CALL_TOOLS``), hide the four
+            scheme-qualified file tools in their AutoProject-run wording
+            (``AUTOPROJECT_RUN_FILE_TOOL_SPECS``) and the run log reads
+            (``AUTOPROJECT_ONLY_TOOL_CALL_TOOLS``), hide the four
             ``*_workspace_file`` tools and the other project-only tools,
             and the file rules, examples and script example name
-            ``task://`` / ``/task``. The caller passes no project (a task
-            run never has one; ``task_context`` wins if it did). Empty ->
+            ``autoproject://`` / ``/autoproject``. The caller passes no project (an AutoProject
+            run never has one; ``autoproject_context`` wins if it did). Empty ->
             the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph and a
     ``/project`` script example; a standalone conversation's prompt carries
-    none of the project text. Every prompt but a task run's leaves out
-    ``TASK_ONLY_TOOL_CALL_TOOLS``.
+    none of the project text. Every prompt but an AutoProject run's leaves out
+    ``AUTOPROJECT_ONLY_TOOL_CALL_TOOLS``.
 
     Returns:
         Complete system prompt string.
@@ -864,19 +864,19 @@ Facts the user has saved about themselves and how they want you to work, newest 
     # (project_db_query, scheme-qualified file tools) for non-project
     # conversations, and the four *_workspace_file tools for project ones
     top_level_exclude: set[str] = set()
-    is_task_run = bool(task_context and task_context.strip())
-    if is_task_run:
-        # A task run has chat:// and task://: the scheme-qualified file
-        # tools (in their task-run wording) and the run log reads, and none
+    is_autoproject_run = bool(autoproject_context and autoproject_context.strip())
+    if is_autoproject_run:
+        # An AutoProject run has chat:// and autoproject://: the scheme-qualified file
+        # tools (in their AutoProject-run wording) and the run log reads, and none
         # of the other project-only tools.
-        top_level_exclude |= _TASK_RUN_EXCLUDED_TOOLS
+        top_level_exclude |= _AUTOPROJECT_RUN_EXCLUDED_TOOLS
     elif has_project:
         # The scheme-qualified file tools replace the four workspace tools.
         top_level_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
         top_level_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
-    if not is_task_run:
-        top_level_exclude |= TASK_ONLY_TOOL_CALL_TOOLS
+    if not is_autoproject_run:
+        top_level_exclude |= AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
     if is_slack:
         # Slack-driven runs have no web UI to resolve the
         # create_action_request approval card, so hide it from the
@@ -902,29 +902,29 @@ Facts the user has saved about themselves and how they want you to work, newest 
         top_level_exclude.add("suggest_memory")
         top_level_exclude.add("suggest_project_memory")
         top_level_exclude.add("suggest_doc_note")
-    if is_task_run:
-        # A run conversation's name is never shown: the task thread shows
-        # the task's title, which the first run sets through
-        # complete_task_run's task_title.
+    if is_autoproject_run:
+        # A run conversation's name is never shown: the AutoProject thread shows
+        # the AutoProject's title, which the first run sets through
+        # complete_autoproject_run's autoproject_title.
         top_level_exclude.add("set_conversation_name")
     dynamic_tools_section = _build_dynamic_tools_section(
         exclude=top_level_exclude, connected_services=connected_services,
-        spec_overrides=TASK_RUN_FILE_TOOL_SPECS if is_task_run else None,
+        spec_overrides=AUTOPROJECT_RUN_FILE_TOOL_SPECS if is_autoproject_run else None,
     )
 
     # Build the system-skills enumeration block (per-backend API docs live
     # here now, and each skill line names the non-core tools it documents)
     system_skills_block = build_system_skills_enumeration(
         connected_services, has_project, exclude_tools=top_level_exclude,
-        is_task_run=is_task_run,
+        is_autoproject_run=is_autoproject_run,
     )
 
     # Build the proxy preamble (intro + auth header rule + numbered API list)
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
 
     slack_section = _SLACK_REPLY_MODE_SECTION if is_slack else ""
-    tool_count = "fifteen" if is_task_run else "thirteen"
-    task_run_tool_lines = _TASK_RUN_TOOL_LINES if is_task_run else ""
+    tool_count = "fifteen" if is_autoproject_run else "thirteen"
+    autoproject_run_tool_lines = _AUTOPROJECT_RUN_TOOL_LINES if is_autoproject_run else ""
 
     # Nested sub-agent note: only present when the conversation flag is on. It is
     # appended to the sub-agent model-selection guidance so the top-level agent
@@ -942,21 +942,21 @@ Facts the user has saved about themselves and how they want you to work, newest 
             "1st-level sub-agents and let them spin up leaf agents as needed."
         )
 
-    if is_task_run:
+    if is_autoproject_run:
         naming_section = (
-            f"{_TASK_RUN_NAMING_SECTION}\n\n{_TASK_RUN_FILE_SPACES_SECTION}"
+            f"{_AUTOPROJECT_RUN_NAMING_SECTION}\n\n{_AUTOPROJECT_RUN_FILE_SPACES_SECTION}"
         )
     elif is_routine:
         naming_section = _ROUTINE_NAMING_SECTION
     else:
         naming_section = _CONVERSATION_NAMING_SECTION
-    # The task context changes between task runs, so it sits after every
+    # The AutoProject context changes between AutoProject runs, so it sits after every
     # stable section: the prefix before it stays cacheable across runs.
-    task_section = f"\n{task_context.strip()}\n" if is_task_run else ""
-    if is_task_run:
-        project_script_example = _TASK_RUN_SCRIPT_EXAMPLE
-        file_discovery_rules = _TASK_RUN_FILE_RULES
-        file_examples = _TASK_RUN_FILE_EXAMPLES
+    autoproject_section = f"\n{autoproject_context.strip()}\n" if is_autoproject_run else ""
+    if is_autoproject_run:
+        project_script_example = _AUTOPROJECT_RUN_SCRIPT_EXAMPLE
+        file_discovery_rules = _AUTOPROJECT_RUN_FILE_RULES
+        file_examples = _AUTOPROJECT_RUN_FILE_EXAMPLES
     else:
         project_script_example = _PROJECT_SCRIPT_EXAMPLE if has_project else ""
         file_discovery_rules = (
@@ -1004,7 +1004,7 @@ You have {tool_count} tools available:
 10. **run_python(script, args?, timeout?)** -- Run inline Python in the same sandboxed container. For one-off tasks (no file written). For full usage patterns, load the `system:workspace` skill.
 11. **list_skills()** -- List skills accessible to you, including built-in `system:*` skills.
 12. **search_skills(keyword)** -- Search skills (DB + system) by keyword.
-13. **load_skills(skill_ids)** -- Fetch full content for one or more skills (by `system:*` id or DB UUID). You can load multiple at once.{task_run_tool_lines}
+13. **load_skills(skill_ids)** -- Fetch full content for one or more skills (by `system:*` id or DB UUID). You can load multiple at once.{autoproject_run_tool_lines}
 
 {dynamic_tools_section}
 
@@ -1103,7 +1103,7 @@ To run multiple research tasks in parallel:
 To load backend API documentation before using a backend's APIs:
   load_skills(skill_ids=["system:gmail"])
   (then call the relevant Gmail API as documented in the loaded skill)
-{slack_section}{task_section}
+{slack_section}{autoproject_section}
 ---
 
 {proxy_preamble}"""
@@ -1158,7 +1158,7 @@ def get_user_subagent_system_prompt(
     # Cross-user runs cannot mutate connected services or Quest artifacts.
     # Dispatch enforces the boundary; the prompt advertises only reads.
     # The run is a standalone conversation in the target's account, so the
-    # project-only tools never apply, nor do the task-run-only ones. Nobody
+    # project-only tools never apply, nor do the AutoProject-run-only ones. Nobody
     # reviews suggestions here, so
     # the suggest tools are out (doc notes stay readable: list_doc_notes).
     user_subagent_exclude = (
@@ -1168,7 +1168,7 @@ def get_user_subagent_system_prompt(
             "set_conversation_name", "suggest_memory", "suggest_doc_note",
         }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
-        | TASK_ONLY_TOOL_CALL_TOOLS
+        | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
     )
     dynamic_tools = _build_dynamic_tools_section(
@@ -1267,7 +1267,7 @@ def get_inference_api_system_prompt(
     # (chat/gemini_api/tool_dispatch.py, is_inference_api): inference runs
     # must not change anything. That covers the Quest Docs writes too.
     # Inference runs are standalone conversations: no project-only or
-    # task-run-only tools.
+    # AutoProject-run-only tools.
     # Nobody reviews suggestions in a headless run, so the suggest tools
     # are out too (doc notes stay readable: list_doc_notes).
     inference_exclude = (
@@ -1277,7 +1277,7 @@ def get_inference_api_system_prompt(
             "set_conversation_name", "suggest_memory", "suggest_doc_note",
         }
         | PROJECT_ONLY_TOOL_CALL_TOOLS
-        | TASK_ONLY_TOOL_CALL_TOOLS
+        | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
         | mutating_tool_call_tools()
     )
     dynamic_tools = _build_dynamic_tools_section(
@@ -1603,7 +1603,7 @@ def get_sub_agent_system_prompt(
     legacy_shared_workspace: bool = False,
     converted_from_standalone: bool = False,
     connected_accounts: str = "",
-    task_context: str = "",
+    autoproject_context: str = "",
 ) -> str:
     """Build the system prompt for a sub-agent.
 
@@ -1638,21 +1638,21 @@ def get_sub_agent_system_prompt(
             note. Project conversations only.
         connected_accounts: Pre-rendered "Connected accounts" paragraph (the
             user's multi-connection services); empty -> nothing added.
-        task_context: The read-only ``## Task`` block for a sub-agent of a
-            task run of a Quest Task
-            (chat.tasks.context.load_task_subagent_context), placed after
+        autoproject_context: The read-only ``## AutoProject`` block for a sub-agent of an
+            AutoProject run
+            (chat.autoprojects.context.load_autoproject_subagent_context), placed after
             the important rules, right before the proxy preamble (which
             stays last), behind the sub-agent's "Two file spaces"
-            paragraph (it shares the run's ``chat://`` and ``task://``
-            workspaces). Non-empty also selects the task run's tools as in
-            get_system_prompt(): the file tools in their task-run wording
+            paragraph (it shares the run's ``chat://`` and ``autoproject://``
+            workspaces). Non-empty also selects the AutoProject run's tools as in
+            get_system_prompt(): the file tools in their AutoProject-run wording
             and the run log reads, without the ``*_workspace_file`` and
             other project-only tools. Empty -> the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph (the
     sub-agent shares the parent's conversation and project workspaces).
-    Every sub-agent prompt but a task run's leaves out
-    ``TASK_ONLY_TOOL_CALL_TOOLS``.
+    Every sub-agent prompt but an AutoProject run's leaves out
+    ``AUTOPROJECT_ONLY_TOOL_CALL_TOOLS``.
 
     Returns:
         Complete system prompt string for the sub-agent.
@@ -1723,20 +1723,20 @@ def get_sub_agent_system_prompt(
         "suggest_doc_note",
     }
     sub_agent_exclude |= _doc_write_tool_names() | _table_write_tool_names()
-    is_task_run = bool(task_context and task_context.strip())
-    if is_task_run:
-        # The parent task run's file tools (chat:// and task://) and run
+    is_autoproject_run = bool(autoproject_context and autoproject_context.strip())
+    if is_autoproject_run:
+        # The parent AutoProject run's file tools (chat:// and autoproject://) and run
         # log reads; neither loop tool is a tool_call tool.
-        sub_agent_exclude |= _TASK_RUN_EXCLUDED_TOOLS
+        sub_agent_exclude |= _AUTOPROJECT_RUN_EXCLUDED_TOOLS
     elif has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:
         sub_agent_exclude |= PROJECT_ONLY_TOOL_CALL_TOOLS
-    if not is_task_run:
-        sub_agent_exclude |= TASK_ONLY_TOOL_CALL_TOOLS
+    if not is_autoproject_run:
+        sub_agent_exclude |= AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
     sub_agent_dynamic_tools = _build_dynamic_tools_section(
         exclude=sub_agent_exclude, connected_services=connected_services,
-        spec_overrides=TASK_RUN_FILE_TOOL_SPECS if is_task_run else None,
+        spec_overrides=AUTOPROJECT_RUN_FILE_TOOL_SPECS if is_autoproject_run else None,
     )
 
     # Build the system-skills enumeration block
@@ -1748,9 +1748,9 @@ def get_sub_agent_system_prompt(
     proxy_preamble = _build_proxy_preamble(base_url, user_api_key, connected_services)
 
     # File tool names in the sub-agent rules: a project conversation's (and
-    # a task run's) prompt offers the scheme-qualified tools instead of
+    # an AutoProject run's) prompt offers the scheme-qualified tools instead of
     # *_workspace_file.
-    if has_project or is_task_run:
+    if has_project or is_autoproject_run:
         sub_read_tool = "`read_file` (`chat://<file>`)"
         sub_write_tool = "`write_file` (`chat://<file>`)"
     else:
@@ -1803,12 +1803,12 @@ def get_sub_agent_system_prompt(
             "on your behalf."
         )
 
-    # The read-only task block of a task run's sub-agent: last before the
-    # proxy preamble, like the top-level ``## Task`` section, after the
+    # The read-only AutoProject block of an AutoProject run's sub-agent: last before the
+    # proxy preamble, like the top-level ``## AutoProject`` section, after the
     # static file-spaces paragraph.
-    task_section = (
-        f"\n{_TASK_RUN_SUB_AGENT_FILE_SPACES_SECTION}\n\n{task_context.strip()}\n"
-        if is_task_run else ""
+    autoproject_section = (
+        f"\n{_AUTOPROJECT_RUN_SUB_AGENT_FILE_SPACES_SECTION}\n\n{autoproject_context.strip()}\n"
+        if is_autoproject_run else ""
     )
 
     return f"""You are a sub-agent of Quest, named "{agent_name}". You have been spawned by a parent agent to complete a specific task.
@@ -1866,7 +1866,7 @@ You have {tool_count_word} tools available:
 - Your response should be comprehensive and well-formatted.
 - Do not ask follow-up questions -- complete the task with the information available.
 - Use `run_python` for one-off, throwaway tasks. Use {sub_write_tool} + `run_script` for scripts the user will want to keep, re-run, or modify. Load `system:workspace` for full patterns.
-{task_section}
+{autoproject_section}
 ---
 
 {proxy_preamble}"""

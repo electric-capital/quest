@@ -71,14 +71,14 @@ def make_conversation_unread_changed(
     }
 
 
-FILE_LIST_SCOPES = frozenset({"conversation", "project", "task"})
+FILE_LIST_SCOPES = frozenset({"conversation", "project", "autoproject"})
 
 
 def make_file_list_changed(
     conversation_id: Optional[str],
     project_id: Optional[str],
     scope: str,
-    task_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Envelope for ``file_list_changed``.
 
@@ -96,30 +96,30 @@ def make_file_list_changed(
     * ``"project"`` -- the shared workspace of ``project_id``;
       ``conversation_id`` is the triggering conversation, or None for a
       write through the project file routes;
-    * ``"task"`` -- the shared workspace of the Quest Task ``task_id``
+    * ``"autoproject"`` -- the shared workspace of the AutoProject ``autoproject_id``
       (required for this scope); ``conversation_id`` is the triggering
-      task run, or None for a write through the task file routes.
+      AutoProject run, or None for a write through the AutoProject file routes.
 
-    The payload carries a ``task_id`` key only when ``task_id`` is given,
+    The payload carries an ``autoproject_id`` key only when ``autoproject_id`` is given,
     so conversation and project payloads keep their shape. The FE filter
-    keys off ``scope`` plus the matching id (``task_id`` for scope task).
+    keys off ``scope`` plus the matching id (``autoproject_id`` for scope AutoProject).
 
     Raises:
         ValueError: ``scope`` is not one of ``FILE_LIST_SCOPES``, or scope
-            ``"task"`` without a ``task_id``.
+            ``"autoproject"`` without an ``autoproject_id``.
     """
     if scope not in FILE_LIST_SCOPES:
         raise ValueError(f"invalid file_list_changed scope: {scope!r}")
-    if scope == "task" and not task_id:
-        raise ValueError("file_list_changed scope 'task' requires a task_id")
+    if scope == "autoproject" and not autoproject_id:
+        raise ValueError("file_list_changed scope 'autoproject' requires an autoproject_id")
     event = {
         "type": "file_list_changed",
         "conversation_id": conversation_id,
         "project_id": project_id,
         "scope": scope,
     }
-    if task_id is not None:
-        event["task_id"] = task_id
+    if autoproject_id is not None:
+        event["autoproject_id"] = autoproject_id
     return event
 
 
@@ -223,40 +223,40 @@ def make_table_changed(
     }
 
 
-def make_task_list_changed() -> dict[str, Any]:
-    """Envelope for ``task_list_changed``.
+def make_autoproject_list_changed() -> dict[str, Any]:
+    """Envelope for ``autoproject_list_changed``.
 
-    Per-user global published after any Quest Tasks change that can alter
+    Per-user global published after any AutoProjects change that can alter
     a list row (create, rename, archive, delete, and every change to a
     row's ``active_run`` or ``unread``: a run starting, waiting, finishing,
-    the task being marked unread). Carries no ids: the sidebar section and
+    the AutoProject being marked unread). Carries no ids: the sidebar section and
     the archived list simply re-fetch. Published through
-    chat/tasks/events.py only.
+    chat/autoprojects/events.py only.
     """
-    return {"type": "task_list_changed"}
+    return {"type": "autoproject_list_changed"}
 
 
-def make_task_changed(
-    task_id: str,
+def make_autoproject_changed(
+    autoproject_id: str,
     event_seq: int,
     brief_version: int,
     active_run: Optional[dict],
 ) -> dict[str, Any]:
-    """Envelope for ``task_changed``.
+    """Envelope for ``autoproject_changed``.
 
-    Per-user global published after every change to a task's thread or
+    Per-user global published after every change to an AutoProject's thread or
     brief (a run starting, changing status or finishing, a brief write).
-    ``event_seq`` is the task's thread counter after the change: an open
-    thread of ``task_id`` re-fetches its newest page when it moved.
+    ``event_seq`` is the AutoProject's thread counter after the change: an open
+    thread of ``autoproject_id`` re-fetches its newest page when it moved.
     ``brief_version`` lets the brief panel re-fetch only when it moved.
-    ``active_run`` is ``{id, seq, status}`` of the task's running or
+    ``active_run`` is ``{id, seq, status}`` of the AutoProject's running or
     waiting run, or None, so the composer and the activity line update
-    without a fetch. Carries no task text. Published through
-    chat/tasks/events.py only.
+    without a fetch. Carries no AutoProject text. Published through
+    chat/autoprojects/events.py only.
     """
     return {
-        "type": "task_changed",
-        "task_id": task_id,
+        "type": "autoproject_changed",
+        "autoproject_id": autoproject_id,
         "event_seq": event_seq,
         "brief_version": brief_version,
         "active_run": active_run,

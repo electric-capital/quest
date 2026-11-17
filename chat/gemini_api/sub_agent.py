@@ -62,9 +62,9 @@ async def _run_sub_agent(
     workspace_notice_flags: dict[str, bool] | None = None,
     level: int = 1,
     nested_parent_id: str | None = None,
-    task_context: str = "",
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_context: str = "",
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> str:
     """Run a sub-agent task and return its response.
 
@@ -120,18 +120,18 @@ async def _run_sub_agent(
             1st-level ``parent_tool_id``) so the FE can render the grandchild's
             tool calls one extra indent level deep, under the nested-agent node
             rather than flat under the 1st-level agent row.
-        task_context: The read-only ``## Task`` block when the parent is a
-            task run of a Quest Task (``load_task_subagent_context``, loaded
+        autoproject_context: The read-only ``## AutoProject`` block when the parent is an
+            AutoProject run (``load_autoproject_subagent_context``, loaded
             by the spawn arm), placed in the sub-agent's system prompt;
             ``""`` otherwise. Passed through to a nested sub-agent unchanged.
-        task_id: The parent's Quest Task when it is a task run
-            (``RunContext.task_id``), else None. Passed to every tool call
-            the sub-agent dispatches, so ``task://`` paths, the ``/task``
-            sandbox mount and the task-run read tools (``list_task_runs``,
-            ``read_task_run``) reach the parent run's task. Passed through
+        autoproject_id: The parent's AutoProject when it is an AutoProject run
+            (``RunContext.autoproject_id``), else None. Passed to every tool call
+            the sub-agent dispatches, so ``autoproject://`` paths, the ``/autoproject``
+            sandbox mount and the AutoProject-run read tools (``list_autoproject_runs``,
+            ``read_autoproject_run``) reach the parent run's AutoProject. Passed through
             to a nested sub-agent unchanged.
-        task_run_id: The parent's task run (``RunContext.task_run_id``),
-            else None; passed along with ``task_id``.
+        autoproject_run_id: The parent's AutoProject run (``RunContext.autoproject_run_id``),
+            else None; passed along with ``autoproject_id``.
 
     Returns:
         The sub-agent's response string.
@@ -229,7 +229,7 @@ async def _run_sub_agent(
         # PUBLIC_TOOLS tier and hard-rejected in public runs via
         # _PUBLIC_BLOCKED_LOOP_TOOLS (turn_tools.py).
         connected_accounts=build_connected_accounts_paragraph(user),
-        task_context=task_context,
+        autoproject_context=autoproject_context,
     )
 
     # Choose the tool tier: only a 1st-level sub-agent with the flag on gets the
@@ -506,9 +506,9 @@ async def _run_sub_agent(
                                 workspace_notice_flags=workspace_notice_flags,
                                 level=2,
                                 nested_parent_id=nested_agent_id,
-                                task_context=task_context,
-                                task_id=task_id,
-                                task_run_id=task_run_id,
+                                autoproject_context=autoproject_context,
+                                autoproject_id=autoproject_id,
+                                autoproject_run_id=autoproject_run_id,
                             )
                         except Exception as e:
                             logger.exception(
@@ -589,7 +589,7 @@ async def _run_sub_agent(
                 app, provider, user, conversation_id, timezone,
                 fc_event.tool_name, args, project_id=project_id,
                 model=model, is_sub_agent=True, agent_name=agent_name,
-                task_id=task_id, task_run_id=task_run_id,
+                autoproject_id=autoproject_id, autoproject_run_id=autoproject_run_id,
             )
 
             tool_duration_ms = int((time.time() - tool_start) * 1000)
@@ -692,9 +692,9 @@ async def _run_parallel_sub_agents(
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
     workspace_notice_flags: dict[str, bool] | None = None,
-    task_context: str = "",
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_context: str = "",
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> str:
     """Run multiple sub-agent tasks in parallel and return combined results.
 
@@ -717,10 +717,10 @@ async def _run_parallel_sub_agents(
                'prompt', 'description', and optional 'model'.
         project_id: Optional project UUID (the parent's), passed to every
             sub-agent (see ``_run_sub_agent``), as are
-            ``workspace_notice_flags`` and ``task_context`` (the read-only
-            ``## Task`` block of a task run's sub-agents, loaded once for
-            the whole batch), ``task_id`` and ``task_run_id`` (the parent
-            task run's, else None).
+            ``workspace_notice_flags`` and ``autoproject_context`` (the read-only
+            ``## AutoProject`` block of an AutoProject run's sub-agents, loaded once for
+            the whole batch), ``autoproject_id`` and ``autoproject_run_id`` (the parent
+            AutoProject run's, else None).
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage.
 
@@ -819,9 +819,9 @@ async def _run_parallel_sub_agents(
                 nested_enabled=nested_enabled,
                 workspace_notice_flags=workspace_notice_flags,
                 level=1,
-                task_context=task_context,
-                task_id=task_id,
-                task_run_id=task_run_id,
+                autoproject_context=autoproject_context,
+                autoproject_id=autoproject_id,
+                autoproject_run_id=autoproject_run_id,
             )
             return spec_id, {
                 "status": "success",
@@ -893,9 +893,9 @@ async def _run_parallel_sub_agents_template(
     parent_tool_id: str | None = None,
     nested_enabled: bool = False,
     workspace_notice_flags: dict[str, bool] | None = None,
-    task_context: str = "",
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_context: str = "",
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> str:
     """Run template-based parallel sub-agents and return combined results.
 
@@ -921,11 +921,11 @@ async def _run_parallel_sub_agents_template(
         usage_accumulator: Optional dict to accumulate usage.
         on_event: Optional event callback.
         parent_tool_id: Optional parent tool ID for event tracking.
-        task_context: The read-only ``## Task`` block of a task run's
+        autoproject_context: The read-only ``## AutoProject`` block of an AutoProject run's
             sub-agents (``""`` otherwise), passed to every agent.
-        task_id: The parent task run's Quest Task (None otherwise), passed
-            to every agent with ``task_run_id``.
-        task_run_id: The parent task run (None otherwise).
+        autoproject_id: The parent AutoProject run's AutoProject (None otherwise), passed
+            to every agent with ``autoproject_run_id``.
+        autoproject_run_id: The parent AutoProject run (None otherwise).
 
     Returns:
         JSON string with results keyed by agent name.
@@ -1000,7 +1000,7 @@ async def _run_parallel_sub_agents_template(
         parent_tool_id=parent_tool_id,
         nested_enabled=nested_enabled,
         workspace_notice_flags=workspace_notice_flags,
-        task_context=task_context,
-        task_id=task_id,
-        task_run_id=task_run_id,
+        autoproject_context=autoproject_context,
+        autoproject_id=autoproject_id,
+        autoproject_run_id=autoproject_run_id,
     )

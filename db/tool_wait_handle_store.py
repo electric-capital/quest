@@ -256,8 +256,8 @@ async def list_pending_for_conversations(
     """List the PENDING handles in ``conversation_ids``, oldest first,
     optionally only those whose ``kind`` is in ``kinds``.
 
-    One query per 500 conversations, so a Quest Task's thread page (its
-    open approval and connect cards) and a task delete (which of its run
+    One query per 500 conversations, so an AutoProject's thread page (its
+    open approval and connect cards) and an AutoProject delete (which of its run
     conversations have anything to cancel) cost one query however many
     runs there are. No ownership check: callers pass conversation ids they
     have already scoped to the user.
@@ -288,7 +288,7 @@ async def list_handles_for_conversations(
     """List every handle of ``kind`` (any status) in ``conversation_ids``,
     oldest first.
 
-    One query for a whole page of conversations (the Quest Tasks thread
+    One query for a whole page of conversations (the AutoProjects thread
     reads the questions of a page of runs this way). No ownership check:
     callers pass conversation ids they have already scoped to the user.
     """

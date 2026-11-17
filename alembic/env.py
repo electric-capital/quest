@@ -74,7 +74,7 @@ def include_name(name, type_, parent_names):
 # Entries: (table, constrained columns).
 _INLINE_FKS = {
     ("docs", ("instructions_updated_by",)),
-    ("conversations", ("task_id",)),  # migration 4b57cca1158c
+    ("conversations", ("autoproject_id",)),  # migration 4b57cca1158c
 }
 
 

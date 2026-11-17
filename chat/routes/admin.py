@@ -837,7 +837,7 @@ async def admin_skills_report(
     system_names = {
         skill.id: skill.name
         for skill in list_system_skills(
-            connected_services=None, has_project=True, is_task_run=True,
+            connected_services=None, has_project=True, is_autoproject_run=True,
         )
         if skill.id in seen_ids
     }

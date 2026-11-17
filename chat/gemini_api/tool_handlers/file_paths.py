@@ -2,22 +2,22 @@
 
 ``list_files`` / ``read_file`` / ``write_file`` / ``edit_file`` /
 ``copy_file`` address a file space explicitly (devplan 00009, revised
-2026-10-08; issue #213 for ``task://``):
+2026-10-08; issue #213 for ``autoproject://``):
 
 * ``chat://<rel>`` -- this conversation's workspace;
 * ``proj://<rel>`` -- the project workspace shared by every conversation of
   the project;
-* ``task://<rel>`` -- the task workspace shared by every task run of a
-  Quest Task.
+* ``autoproject://<rel>`` -- the AutoProject workspace shared by every run of an
+  AutoProject.
 
 The scheme is mandatory. Which schemes a conversation has depends on its
 kind (``conversation_spaces``): a standalone or project conversation has
 ``chat://`` and ``proj://`` (``DEFAULT_SPACES``; ``proj://`` outside a
 project is refused later, by ``workspace.resolve_space_root``, with
-``no_project``), a task run has ``chat://`` and ``task://``
-(``TASK_RUN_SPACES``). A known scheme the conversation does not have is
-refused here: ``proj://`` in a task run with ``no_project``, ``task://``
-outside one with ``no_task``. Every message ends with the grammar hint of
+``no_project``), an AutoProject run has ``chat://`` and ``autoproject://``
+(``AUTOPROJECT_RUN_SPACES``). A known scheme the conversation does not have is
+refused here: ``proj://`` in an AutoProject run with ``no_project``, ``autoproject://``
+outside one with ``no_autoproject``. Every message ends with the grammar hint of
 the conversation's spaces.
 
 This module is the single parser every handler uses; it never touches the
@@ -37,35 +37,35 @@ from chat.workspace_hints import (  # noqa: F401
 
 SPACE_CHAT = "chat"
 SPACE_PROJECT = "proj"
-SPACE_TASK = "task"
+SPACE_AUTOPROJECT = "autoproject"
 
-_SCHEMES = (SPACE_CHAT, SPACE_PROJECT, SPACE_TASK)
+_SCHEMES = (SPACE_CHAT, SPACE_PROJECT, SPACE_AUTOPROJECT)
 
-# The spaces of a standalone or project conversation, and of a task run.
+# The spaces of a standalone or project conversation, and of an AutoProject run.
 DEFAULT_SPACES = (SPACE_CHAT, SPACE_PROJECT)
-TASK_RUN_SPACES = (SPACE_CHAT, SPACE_TASK)
+AUTOPROJECT_RUN_SPACES = (SPACE_CHAT, SPACE_AUTOPROJECT)
 
 _GRAMMAR_HINT = (
     "Use chat://<path> for this conversation's workspace or proj://<path> "
     "for the project workspace (e.g. chat://notes.md, proj://reports/q3.md)."
 )
 
-_TASK_RUN_GRAMMAR_HINT = (
-    "Use chat://<path> for this task run's workspace or task://<path> for "
-    "the task workspace shared by every task run of this Quest Task "
-    "(e.g. chat://notes.md, task://reports/q3.md)."
+_AUTOPROJECT_RUN_GRAMMAR_HINT = (
+    "Use chat://<path> for this run's workspace or autoproject://<path> for "
+    "the AutoProject workspace shared by every run of this AutoProject "
+    "(e.g. chat://notes.md, autoproject://reports/q3.md)."
 )
 
 _GRAMMAR_HINTS = {
     DEFAULT_SPACES: _GRAMMAR_HINT,
-    TASK_RUN_SPACES: _TASK_RUN_GRAMMAR_HINT,
+    AUTOPROJECT_RUN_SPACES: _AUTOPROJECT_RUN_GRAMMAR_HINT,
 }
 
 
-def conversation_spaces(task_id: str | None) -> tuple[str, ...]:
-    """The file spaces of a conversation: ``TASK_RUN_SPACES`` for a task
-    run (``task_id`` set), ``DEFAULT_SPACES`` otherwise."""
-    return TASK_RUN_SPACES if task_id else DEFAULT_SPACES
+def conversation_spaces(autoproject_id: str | None) -> tuple[str, ...]:
+    """The file spaces of a conversation: ``AUTOPROJECT_RUN_SPACES`` for an AutoProject
+    run (``autoproject_id`` set), ``DEFAULT_SPACES`` otherwise."""
+    return AUTOPROJECT_RUN_SPACES if autoproject_id else DEFAULT_SPACES
 
 
 def grammar_hint(spaces: tuple[str, ...] = DEFAULT_SPACES) -> str:
@@ -73,7 +73,7 @@ def grammar_hint(spaces: tuple[str, ...] = DEFAULT_SPACES) -> str:
 
     Raises:
         ValueError: ``spaces`` is not ``DEFAULT_SPACES`` or
-            ``TASK_RUN_SPACES``.
+            ``AUTOPROJECT_RUN_SPACES``.
     """
     try:
         return _GRAMMAR_HINTS[tuple(spaces)]
@@ -94,15 +94,15 @@ def _foreign_scheme_error(raw: str, scheme: str, hint: str) -> SpacePathError:
     """Refusal of a known scheme the conversation does not have."""
     if scheme == SPACE_PROJECT:
         return SpacePathError(
-            f"Invalid path {raw!r}: a task run has no project workspace, so "
+            f"Invalid path {raw!r}: an AutoProject run has no project workspace, so "
             f"proj:// paths do not exist here. {hint}",
             code="no_project",
         )
-    if scheme == SPACE_TASK:
+    if scheme == SPACE_AUTOPROJECT:
         return SpacePathError(
-            f"Invalid path {raw!r}: task:// paths exist only in task runs of "
-            f"a Quest Task. {hint}",
-            code="no_task",
+            f"Invalid path {raw!r}: autoproject:// paths exist only in AutoProject "
+            f"runs. {hint}",
+            code="no_autoproject",
         )
     # chat:// is in every space set.
     return SpacePathError(
@@ -113,7 +113,7 @@ def _foreign_scheme_error(raw: str, scheme: str, hint: str) -> SpacePathError:
 def parse_space_path(
     raw, *, allow_root: bool, spaces: tuple[str, ...] = DEFAULT_SPACES,
 ) -> tuple[str, str]:
-    r"""Split ``chat://a/b`` / ``proj://a/b`` / ``task://a/b`` into
+    r"""Split ``chat://a/b`` / ``proj://a/b`` / ``autoproject://a/b`` into
     ``(space, rel)``.
 
     ``spaces`` are the schemes the calling conversation has
@@ -132,8 +132,8 @@ def parse_space_path(
             as ``file_storage.validate_path`` and the old tools), or the
             root where a file or folder must be named: code
             ``invalid_path``. A known scheme outside ``spaces``:
-            ``no_project`` (``proj://`` in a task run) or ``no_task``
-            (``task://`` outside one). The message names the two schemes
+            ``no_project`` (``proj://`` in an AutoProject run) or ``no_autoproject``
+            (``autoproject://`` outside one). The message names the two schemes
             of ``spaces``.
     """
     hint = grammar_hint(spaces)

@@ -1,9 +1,9 @@
-"""What the Quest Task routes return: the list row, the task detail, the
+"""What the AutoProject routes return: the list row, the AutoProject detail, the
 brief state and versions, and the thread's pages of runs (spec issue #213,
 section 7).
 
 Every builder takes rows the caller has already scoped to the user (the
-route guard ``require_task_for_route`` or the service did the gate and
+route guard ``require_autoproject_for_route`` or the service did the gate and
 ownership checks) and shapes them for the frontend. Store-internal fields
 (``user_id``, ``next_run_seq``, a run's frozen ``context_brief_version``)
 never leave this module.
@@ -14,9 +14,9 @@ run while it still exists, so the UI can say "Updated by run N" or "Edited
 by you" without a second call.
 
 A run's view hides the pending entry of an ACTIVE run (``summary``,
-``result``, ``notes`` saved by a ``complete_task_run`` that hit a brief
-conflict, chat/tasks/runs.py) and carries its questions (one query per
-page, chat/tasks/questions.py) and its open approval and connect cards as
+``result``, ``notes`` saved by a ``complete_autoproject_run`` that hit a brief
+conflict, chat/autoprojects/runs.py) and carries its questions (one query per
+page, chat/autoprojects/questions.py) and its open approval and connect cards as
 the transcript rows the conversation detail holds, so the thread renders
 them with the same components as a chat.
 
@@ -30,11 +30,11 @@ import asyncio
 import logging
 from typing import Optional
 
-from chat.tasks.constants import TASK_RUN_ACTIVE_STATUSES
-from chat.tasks.questions import list_run_questions
-from db import task_store, tool_wait_handle_store
+from chat.autoprojects.constants import AUTOPROJECT_RUN_ACTIVE_STATUSES
+from chat.autoprojects.questions import list_run_questions
+from db import autoproject_store, tool_wait_handle_store
 from db.models import ToolWaitHandleKind
-from db.task_store import BriefVersionNotFoundError
+from db.autoproject_store import BriefVersionNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -61,45 +61,45 @@ def source_run_id(source: Optional[str]) -> Optional[str]:
     return None
 
 
-async def _brief_authorship(task_id: str, brief_version: int) -> tuple[Optional[str], Optional[int]]:
-    """``(brief_source, brief_run_seq)`` of the task's current brief version:
+async def _brief_authorship(autoproject_id: str, brief_version: int) -> tuple[Optional[str], Optional[int]]:
+    """``(brief_source, brief_run_seq)`` of the AutoProject's current brief version:
     both None for version 0 or a pruned row; the seq None unless the source
     is a run that still exists."""
     if not brief_version:
         return None, None
-    source = await task_store.get_brief_version_source(task_id, brief_version)
+    source = await autoproject_store.get_brief_version_source(autoproject_id, brief_version)
     run_id = source_run_id(source)
     if run_id is None:
         return source, None
-    seqs = await task_store.get_run_seqs(task_id, [run_id])
+    seqs = await autoproject_store.get_run_seqs(autoproject_id, [run_id])
     return source, seqs.get(run_id)
 
 
 # ---------------------------------------------------------------------------
-# Tasks
+# AutoProjects
 # ---------------------------------------------------------------------------
 
 
-def task_list_row(task: dict) -> dict:
-    """A ``GET /tasks`` row from a ``task_store.list_tasks`` row:
+def autoproject_list_row(autoproject: dict) -> dict:
+    """A ``GET /autoprojects`` row from an ``autoproject_store.list_autoprojects`` row:
     ``{id, title, archived, last_activity_at, active_run, unread, event_seq,
     unread_seq, read_seq}``."""
     return {
-        "id": task["id"],
-        "title": task["title"],
-        "archived": task["archived"],
-        "last_activity_at": task["last_activity_at"],
-        "active_run": task.get("active_run"),
-        "unread": task["unread"],
-        "event_seq": task["event_seq"],
-        "unread_seq": task["unread_seq"],
-        "read_seq": task["read_seq"],
+        "id": autoproject["id"],
+        "title": autoproject["title"],
+        "archived": autoproject["archived"],
+        "last_activity_at": autoproject["last_activity_at"],
+        "active_run": autoproject.get("active_run"),
+        "unread": autoproject["unread"],
+        "event_seq": autoproject["event_seq"],
+        "unread_seq": autoproject["unread_seq"],
+        "read_seq": autoproject["read_seq"],
     }
 
 
-async def build_task_detail(task: dict) -> dict:
-    """The task detail from a task dict (``GET /tasks/{id}`` and every
-    route that returns the task).
+async def build_autoproject_detail(autoproject: dict) -> dict:
+    """The AutoProject detail from an AutoProject dict (``GET /autoprojects/{id}`` and every
+    route that returns the AutoProject).
 
     Shape::
 
@@ -109,45 +109,45 @@ async def build_task_detail(task: dict) -> dict:
          | None, event_seq, unread_seq, read_seq, unread, created_at,
          updated_at, last_activity_at}
     """
-    task_id = task["id"]
-    active = await task_store.get_active_run(task_id)
-    run_count = await task_store.count_runs(task_id)
-    brief_source, brief_run_seq = await _brief_authorship(task_id, task["brief_version"])
+    autoproject_id = autoproject["id"]
+    active = await autoproject_store.get_active_run(autoproject_id)
+    run_count = await autoproject_store.count_runs(autoproject_id)
+    brief_source, brief_run_seq = await _brief_authorship(autoproject_id, autoproject["brief_version"])
     return {
-        "id": task_id,
-        "title": task["title"],
-        "title_is_default": task["title_is_default"],
-        "archived": task["archived"],
-        "brief": task["brief"],
-        "brief_version": task["brief_version"],
-        "brief_updated_at": task["brief_updated_at"],
+        "id": autoproject_id,
+        "title": autoproject["title"],
+        "title_is_default": autoproject["title_is_default"],
+        "archived": autoproject["archived"],
+        "brief": autoproject["brief"],
+        "brief_version": autoproject["brief_version"],
+        "brief_updated_at": autoproject["brief_updated_at"],
         "brief_source": brief_source,
         "brief_run_seq": brief_run_seq,
-        "model": task["model"],
-        "thinking_effort": task["thinking_effort"],
+        "model": autoproject["model"],
+        "thinking_effort": autoproject["thinking_effort"],
         "run_count": run_count,
         "active_run": (
             {"id": active["id"], "seq": active["seq"], "status": active["status"]}
             if active is not None else None
         ),
-        "event_seq": task["event_seq"],
-        "unread_seq": task["unread_seq"],
-        "read_seq": task["read_seq"],
-        "unread": task["unread"],
-        "created_at": task["created_at"],
-        "updated_at": task["updated_at"],
-        "last_activity_at": task["last_activity_at"],
+        "event_seq": autoproject["event_seq"],
+        "unread_seq": autoproject["unread_seq"],
+        "read_seq": autoproject["read_seq"],
+        "unread": autoproject["unread"],
+        "created_at": autoproject["created_at"],
+        "updated_at": autoproject["updated_at"],
+        "last_activity_at": autoproject["last_activity_at"],
     }
 
 
-def read_state(task: dict) -> dict:
-    """``{event_seq, unread_seq, read_seq, unread}`` of a task dict (the
+def read_state(autoproject: dict) -> dict:
+    """``{event_seq, unread_seq, read_seq, unread}`` of an AutoProject dict (the
     read acknowledgement's response)."""
     return {
-        "event_seq": task["event_seq"],
-        "unread_seq": task["unread_seq"],
-        "read_seq": task["read_seq"],
-        "unread": task["unread"],
+        "event_seq": autoproject["event_seq"],
+        "unread_seq": autoproject["unread_seq"],
+        "read_seq": autoproject["read_seq"],
+        "unread": autoproject["unread"],
     }
 
 
@@ -156,11 +156,11 @@ def read_state(task: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def build_brief_state(task_id: str, state: dict) -> dict:
+async def build_brief_state(autoproject_id: str, state: dict) -> dict:
     """The brief state from a store ``{brief, brief_version,
     brief_updated_at}``: ``{brief, brief_version, brief_updated_at,
     brief_source, brief_run_seq}``."""
-    brief_source, brief_run_seq = await _brief_authorship(task_id, state["brief_version"])
+    brief_source, brief_run_seq = await _brief_authorship(autoproject_id, state["brief_version"])
     return {
         "brief": state["brief"],
         "brief_version": state["brief_version"],
@@ -170,12 +170,12 @@ async def build_brief_state(task_id: str, state: dict) -> dict:
     }
 
 
-async def build_brief_versions(task_id: str) -> list[dict]:
+async def build_brief_versions(autoproject_id: str) -> list[dict]:
     """The stored versions newest first: ``[{version, source, run_seq,
     created_at, excerpt}]``, the run seqs resolved in one query."""
-    versions = await task_store.list_brief_versions(task_id)
-    seqs = await task_store.get_run_seqs(
-        task_id, [rid for v in versions if (rid := source_run_id(v["source"]))],
+    versions = await autoproject_store.list_brief_versions(autoproject_id)
+    seqs = await autoproject_store.get_run_seqs(
+        autoproject_id, [rid for v in versions if (rid := source_run_id(v["source"]))],
     )
     return [
         {
@@ -189,20 +189,20 @@ async def build_brief_versions(task_id: str) -> list[dict]:
     ]
 
 
-async def build_brief_version(task_id: str, version: int) -> dict:
+async def build_brief_version(autoproject_id: str, version: int) -> dict:
     """One stored version: ``{version, source, run_seq, created_at,
     content}``.
 
     Raises:
         BriefVersionNotFoundError: never written, or pruned.
     """
-    row = await task_store.get_brief_version(task_id, version)
+    row = await autoproject_store.get_brief_version(autoproject_id, version)
     if row is None:
         raise BriefVersionNotFoundError(version)
     run_id = source_run_id(row["source"])
     run_seq = None
     if run_id is not None:
-        run_seq = (await task_store.get_run_seqs(task_id, [run_id])).get(run_id)
+        run_seq = (await autoproject_store.get_run_seqs(autoproject_id, [run_id])).get(run_id)
     return {
         "version": row["version"],
         "source": row["source"],
@@ -218,7 +218,7 @@ async def build_brief_version(task_id: str, version: int) -> dict:
 
 
 def _run_view(run: dict, questions: list[dict], open_requests: list[dict]) -> dict:
-    active = run["status"] in TASK_RUN_ACTIVE_STATUSES
+    active = run["status"] in AUTOPROJECT_RUN_ACTIVE_STATUSES
     return {
         "id": run["id"],
         "seq": run["seq"],
@@ -251,14 +251,14 @@ async def _read_transcript_messages(conversation_id: str) -> list:
         conversation = await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
     except Exception:
         logger.debug(
-            "[tasks] threaded transcript read failed for %s; retrying on the loop",
+            "[autoprojects] threaded transcript read failed for %s; retrying on the loop",
             conversation_id, exc_info=True,
         )
         try:
             conversation = ChatStorage.get_conversation(conversation_id)
         except Exception:
             logger.warning(
-                "[tasks] reading the transcript of %s failed", conversation_id,
+                "[autoprojects] reading the transcript of %s failed", conversation_id,
                 exc_info=True,
             )
             return []
@@ -279,7 +279,7 @@ async def list_open_requests(runs: list[dict]) -> dict[str, list[dict]]:
     run_by_conversation = {
         run["conversation_id"]: run["id"]
         for run in runs
-        if run["status"] in TASK_RUN_ACTIVE_STATUSES
+        if run["status"] in AUTOPROJECT_RUN_ACTIVE_STATUSES
     }
     if not run_by_conversation:
         return by_run
@@ -307,9 +307,9 @@ async def list_open_requests(runs: list[dict]) -> dict[str, list[dict]]:
 
 
 async def build_runs_page(
-    task_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
+    autoproject_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
 ) -> dict:
-    """One page of the thread (``GET /tasks/{id}/runs``): ``{"runs": [run
+    """One page of the thread (``GET /autoprojects/{id}/runs``): ``{"runs": [run
     view, ...], "next_before_seq": int | None}``, newest first.
 
     Run view::
@@ -319,7 +319,7 @@ async def build_runs_page(
          questions: [question_view, ...],          # oldest first
          open_requests: [transcript card row, ...]}
     """
-    page = await task_store.list_runs_page(task_id, before_seq=before_seq, limit=limit)
+    page = await autoproject_store.list_runs_page(autoproject_id, before_seq=before_seq, limit=limit)
     runs = page["runs"]
     questions = await list_run_questions(runs)
     open_requests = await list_open_requests(runs)

@@ -38,19 +38,19 @@ async def project_workspace_dir(project_id: str) -> Path:
     return workspace_dir
 
 
-async def task_workspace_dir(task_id: str) -> Path:
-    """Return the task workspace root, creating it if missing.
+async def autoproject_workspace_dir(autoproject_id: str) -> Path:
+    """Return the AutoProject workspace root, creating it if missing.
 
-    ``ChatStorage.get_task_workspace_root``: the workspace shared by every
-    task run of a Quest Task, reached only through ``task://`` paths of
-    the space-aware file tools, ``/task`` in the sandbox and the task file
+    ``ChatStorage.get_autoproject_workspace_root``: the workspace shared by every
+    run of an AutoProject, reached only through ``autoproject://`` paths of
+    the space-aware file tools, ``/autoproject`` in the sandbox and the AutoProject file
     routes. The resolver never creates it; the first tool use does, here.
 
     Raises:
-        InvalidStorageIdError: ``task_id`` is not a valid storage id.
+        InvalidStorageIdError: ``autoproject_id`` is not a valid storage id.
     """
     from chat.storage import ChatStorage
-    workspace_dir = ChatStorage.get_task_workspace_root(task_id)
+    workspace_dir = ChatStorage.get_autoproject_workspace_root(autoproject_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     return workspace_dir
 
@@ -81,27 +81,27 @@ def _invalid_project_result() -> str:
     })
 
 
-def _no_task_result() -> str:
-    """Structured refusal of a ``task://`` path outside a task run.
+def _no_autoproject_result() -> str:
+    """Structured refusal of an ``autoproject://`` path outside an AutoProject run.
 
-    ``parse_space_path`` already refuses ``task://`` for a conversation
-    without a task id; this guards a direct ``resolve_space_root`` call.
+    ``parse_space_path`` already refuses ``autoproject://`` for a conversation
+    without an AutoProject id; this guards a direct ``resolve_space_root`` call.
     """
     return json.dumps({
         "error": (
-            "This conversation is not a task run of a Quest Task, so task:// "
+            "This conversation is not an AutoProject run, so autoproject:// "
             "paths do not exist here."
         ),
-        "code": "no_task",
+        "code": "no_autoproject",
     })
 
 
-def _invalid_task_result() -> str:
-    """Structured refusal when the conversation's task id does not resolve
-    to a valid task workspace (``InvalidStorageIdError``)."""
+def _invalid_autoproject_result() -> str:
+    """Structured refusal when the conversation's AutoProject id does not resolve
+    to a valid AutoProject workspace (``InvalidStorageIdError``)."""
     return json.dumps({
-        "error": "This task run's task workspace could not be resolved.",
-        "code": "invalid_task",
+        "error": "This run's AutoProject workspace could not be resolved.",
+        "code": "invalid_autoproject",
     })
 
 
@@ -110,7 +110,7 @@ def _publish_file_list_changed(
     scope: str,
     conversation_id: str | None,
     project_id: str | None,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> None:
     """Best-effort: notify the user's WS subscribers that a workspace
     listing has changed so the file browser can silent-refresh.
@@ -119,7 +119,7 @@ def _publish_file_list_changed(
     ``"conversation"`` for the conversation workspace (every tool write by
     default), ``"project"`` for the project workspace (project file and
     copy tools), whose events reach every sibling conversation's tab, and
-    ``"task"`` for the task workspace of ``task_id`` (required for that
+    ``"autoproject"`` for the AutoProject workspace of ``autoproject_id`` (required for that
     scope). Same argument order as the ``chat.file_routes`` helper.
     """
     try:
@@ -130,15 +130,15 @@ def _publish_file_list_changed(
                 conversation_id=conversation_id,
                 project_id=project_id,
                 scope=scope,
-                task_id=task_id,
+                autoproject_id=autoproject_id,
             ),
         )
     except Exception:
         logger.debug(
             "[tool_handlers] publish file_list_changed failed "
             "(user_id=%s, scope=%s, conversation_id=%s, project_id=%s, "
-            "task_id=%s)",
-            user_id, scope, conversation_id, project_id, task_id,
+            "autoproject_id=%s)",
+            user_id, scope, conversation_id, project_id, autoproject_id,
             exc_info=True,
         )
 

@@ -131,12 +131,12 @@ class ToolWaitHandleKind(StrEnum):
     # subagent_conversation_id, target_user_email); response carries
     # {"status": "returned"|"denied"|"failed", "response", "files": [...]}.
     USER_SUBAGENT = "user_subagent"
-    # Question a task run of a Quest Task asks the user in the task thread
-    # (ask_task_question, chat/tasks/questions.py); payload carries
+    # Question a run of an AutoProject asks the user in the AutoProject thread
+    # (ask_autoproject_question, chat/autoprojects/questions.py); payload carries
     # (question, options), response carries {"answer": "..."} written by
-    # chat/tasks/service.py answer_question. correlation_kind "task_run" /
+    # chat/autoprojects/service.py answer_question. correlation_kind "autoproject_run" /
     # correlation_id = the run id are populated at create time. No expiry.
-    TASK_QUESTION = "task_question"
+    AUTOPROJECT_QUESTION = "autoproject_question"
 
 
 class ToolWaitHandleStatus(StrEnum):
@@ -1128,22 +1128,22 @@ class RoutineScheduleRun(Base):
     )
 
 
-class Task(Base):
-    """A Quest Task: a long-lived unit of work the owner keeps prompting into.
+class AutoProject(Base):
+    """An AutoProject: a long-lived unit of work the owner keeps prompting into.
 
-    Every prompt is answered by a run (``task_runs``) that starts from a
+    Every prompt is answered by a run (``autoproject_runs``) that starts from a
     fresh model context; what carries over between runs lives on this row
     (the ``brief``, kept by the runs and editable by the user), in the
-    runs' log entries and in the task workspace on disk
-    (``TASKS_DIR/<id>/workspace``). Private and owned by one user; every
-    write goes through db/task_store.py, and the caps come from
-    chat/tasks/constants.py (enforced at the application layer).
+    runs' log entries and in the AutoProject workspace on disk
+    (``AUTOPROJECTS_DIR/<id>/workspace``). Private and owned by one user; every
+    write goes through db/autoproject_store.py, and the caps come from
+    chat/autoprojects/constants.py (enforced at the application layer).
     """
 
-    __tablename__ = "tasks"
+    __tablename__ = "autoprojects"
     __table_args__ = (
         sa.Index(
-            "ix_tasks_user_id_archived_last_activity",
+            "ix_autoprojects_user_id_archived_last_activity",
             "user_id", "archived", "last_activity_at",
         ),
     )
@@ -1160,11 +1160,11 @@ class Task(Base):
         nullable=False,
     )
 
-    # Display title (max TASK_TITLE_MAX_CHARS, enforced at application layer)
+    # Display title (max AUTOPROJECT_TITLE_MAX_CHARS, enforced at application layer)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # True while ``title`` is still the text cut from the first prompt. Only
-    # then may a run name the task (complete_task_run ``task_title``); a
+    # then may a run name the AutoProject (complete_autoproject_run ``autoproject_title``); a
     # rename by the user or the run's naming clears it for good.
     title_is_default: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
@@ -1172,8 +1172,8 @@ class Task(Base):
 
     # The current state of the work (markdown), rewritten by runs and
     # editable by the user. ``brief_version`` is its concurrency token and
-    # counts writes (0 = never written); each write also stores a
-    # ``task_brief_versions`` row.
+    # counts writes (0 = never written); each write also stores an
+    # ``autoproject_brief_versions`` row.
     brief: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
@@ -1192,8 +1192,8 @@ class Task(Base):
         String(20), nullable=True, default=None
     )
 
-    # Archived tasks leave the sidebar and refuse new runs; the thread stays
-    # readable. Unarchived tasks count against MAX_ACTIVE_TASKS_PER_USER.
+    # Archived AutoProjects leave the sidebar and refuse new runs; the thread stays
+    # readable. Unarchived AutoProjects count against MAX_ACTIVE_AUTOPROJECTS_PER_USER.
     archived: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
@@ -1205,8 +1205,8 @@ class Task(Base):
     )
 
     # Bumped on every change to what the thread shows (run start, status,
-    # entry, delete, brief, question) and on task edits. Unread state is the
-    # conversation-unread scheme over this counter: the task is unread while
+    # entry, delete, brief, question) and on AutoProject edits. Unread state is the
+    # conversation-unread scheme over this counter: the AutoProject is unread while
     # ``unread_seq > read_seq``; both only move forward.
     event_seq: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, default=0, server_default="0"
@@ -1231,40 +1231,40 @@ class Task(Base):
     )
 
 
-class TaskRun(Base):
-    """One run of a task: a prompt answered in its own conversation.
+class AutoProjectRun(Base):
+    """One run of an AutoProject: a prompt answered in its own conversation.
 
-    The run's conversation carries ``conversations.task_id`` and origin
-    ``"task"``; the row is created when the conversation's one user message
-    is accepted (db/task_store.py ``allocate_run``) and cascades with both
-    the task and the conversation, so deleting a run's conversation deletes
-    its log entry. ``seq`` numbers the runs of a task from 1 and is never
-    reused. ``status`` is one of chat/tasks/constants.py
-    ``TASK_RUN_STATUSES``; ``running`` and ``waiting`` are active, and at
-    most one run per task is active (checked in ``allocate_run``). The log
+    The run's conversation carries ``conversations.autoproject_id`` and origin
+    ``"autoproject"``; the row is created when the conversation's one user message
+    is accepted (db/autoproject_store.py ``allocate_run``) and cascades with both
+    the AutoProject and the conversation, so deleting a run's conversation deletes
+    its log entry. ``seq`` numbers the runs of an AutoProject from 1 and is never
+    reused. ``status`` is one of chat/autoprojects/constants.py
+    ``AUTOPROJECT_RUN_STATUSES``; ``running`` and ``waiting`` are active, and at
+    most one run per AutoProject is active (checked in ``allocate_run``). The log
     entry (``summary``, ``result``, ``notes``) is written by
-    ``complete_task_run``. ``context`` and ``context_brief_version`` freeze
-    the run's starting ``## Task`` block on its first turn
+    ``complete_autoproject_run``. ``context`` and ``context_brief_version`` freeze
+    the run's starting ``## AutoProject`` block on its first turn
     (``freeze_run_context``), so every later turn, after a restart too,
     rebuilds the same system prompt.
     """
 
-    __tablename__ = "task_runs"
+    __tablename__ = "autoproject_runs"
     __table_args__ = (
-        sa.Index("ix_task_runs_task_id_seq", "task_id", "seq", unique=True),
-        sa.Index("ix_task_runs_task_id_status", "task_id", "status"),
-        sa.Index("ix_task_runs_conversation_id", "conversation_id", unique=True),
+        sa.Index("ix_autoproject_runs_autoproject_id_seq", "autoproject_id", "seq", unique=True),
+        sa.Index("ix_autoproject_runs_autoproject_id_status", "autoproject_id", "status"),
+        sa.Index("ix_autoproject_runs_conversation_id", "conversation_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    task_id: Mapped[str] = mapped_column(
+    autoproject_id: Mapped[str] = mapped_column(
         String(36),
-        sa.ForeignKey("tasks.id", ondelete="CASCADE"),
+        sa.ForeignKey("autoprojects.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # Run number within the task, from 1 (allocated from tasks.next_run_seq)
+    # Run number within the AutoProject, from 1 (allocated from autoprojects.next_run_seq)
     seq: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     # The run's conversation (one per run; unique)
     conversation_id: Mapped[str] = mapped_column(
@@ -1281,7 +1281,7 @@ class TaskRun(Base):
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     result: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
-    # The run finished without calling complete_task_run (even after the
+    # The run finished without calling complete_autoproject_run (even after the
     # nudge); its entry was filled from its final text.
     handoff_missing: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
@@ -1292,13 +1292,13 @@ class TaskRun(Base):
     model: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, default=None
     )
-    # The rendered ## Task block the run's system prompt was built with (up
-    # to TASK_CONTEXT_MAX_CHARS), written once on the run's first turn; NULL
+    # The rendered ## AutoProject block the run's system prompt was built with (up
+    # to AUTOPROJECT_CONTEXT_MAX_CHARS), written once on the run's first turn; NULL
     # until then. Deferred: only get_run_context / freeze_run_context read it.
     context: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None, deferred=True
     )
-    # The tasks.brief_version that context shows (complete_task_run's
+    # The autoprojects.brief_version that context shows (complete_autoproject_run's
     # expected_version); NULL until the context is frozen.
     context_brief_version: Mapped[Optional[int]] = mapped_column(
         sa.Integer, nullable=True, default=None
@@ -1311,34 +1311,34 @@ class TaskRun(Base):
     )
 
 
-class TaskBriefVersion(Base):
-    """One stored version of a task's brief.
+class AutoProjectBriefVersion(Base):
+    """One stored version of an AutoProject's brief.
 
     Each brief write stores the text it wrote under the ``brief_version`` it
     produced, so the newest row is always the current brief and ``source``
     names who wrote that version: ``run:<run_id>``, ``ui`` or
     ``restore:<version>``. The empty version 0 has no row. At most
-    TASK_BRIEF_MAX_VERSIONS rows per task are kept (the oldest are pruned in
-    the writing transaction); cascades with the task.
+    AUTOPROJECT_BRIEF_MAX_VERSIONS rows per AutoProject are kept (the oldest are pruned in
+    the writing transaction); cascades with the AutoProject.
     """
 
-    __tablename__ = "task_brief_versions"
+    __tablename__ = "autoproject_brief_versions"
     __table_args__ = (
         sa.Index(
-            "ix_task_brief_versions_task_id_version",
-            "task_id", "version", unique=True,
+            "ix_autoproject_brief_versions_autoproject_id_version",
+            "autoproject_id", "version", unique=True,
         ),
     )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    task_id: Mapped[str] = mapped_column(
+    autoproject_id: Mapped[str] = mapped_column(
         String(36),
-        sa.ForeignKey("tasks.id", ondelete="CASCADE"),
+        sa.ForeignKey("autoprojects.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # The tasks.brief_version this text had
+    # The autoprojects.brief_version this text had
     version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # run:<run_id> | ui | restore:<version>
@@ -1394,12 +1394,12 @@ class Conversation(Base):
         index=True,
     )
 
-    # The Quest Task this conversation is a run of (NULL for every other
-    # conversation). Set at creation with origin "task"; cascade-deleted
-    # with the task. A run conversation never has a project_id.
-    task_id: Mapped[Optional[str]] = mapped_column(
+    # The AutoProject this conversation is a run of (NULL for every other
+    # conversation). Set at creation with origin "autoproject"; cascade-deleted
+    # with the AutoProject. A run conversation never has a project_id.
+    autoproject_id: Mapped[Optional[str]] = mapped_column(
         String(36),
-        sa.ForeignKey("tasks.id", ondelete="CASCADE"),
+        sa.ForeignKey("autoprojects.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
@@ -1445,9 +1445,9 @@ class Conversation(Base):
     # created by another user's approved run_user_subagent action request; the
     # owner can view but not send), and "inference_api" (a one-shot headless
     # run driven by POST /api/inference; also read-only for the owner), and
-    # "task" (one run of a Quest Task, ``task_id`` set; it takes exactly one
+    # "autoproject" (one run of an AutoProject, ``autoproject_id`` set; it takes exactly one
     # user message, stays out of the Conversations list and is read-only when
-    # opened; unread state is tracked on the task). NULL is treated as "web"
+    # opened; unread state is tracked on the AutoProject). NULL is treated as "web"
     # by application code.
     origin: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True, default=None

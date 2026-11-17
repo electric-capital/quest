@@ -201,20 +201,20 @@ class ToolContext:
     # what a routine run must not do reads it (suggest_doc_note: nobody
     # reviews a routine conversation's suggestions as it runs).
     is_routine: bool = False
-    # Quest Task run (the conversation has a task_id, origin="task"):
-    # task_id is the conversation row's task, task_run_id its task_runs
+    # AutoProject run (the conversation has an autoproject_id, origin="autoproject"):
+    # autoproject_id is the conversation row's AutoProject, autoproject_run_id its autoproject_runs
     # row. Not a run kind of its own: run_kind stays "top_level". The
-    # run-scoped task tools resolve the task and run from here, never from
+    # run-scoped AutoProject tools resolve the AutoProject and run from here, never from
     # tool arguments (spec 00012 invariant 5).
-    task_id: str | None = None
-    task_run_id: str | None = None
+    autoproject_id: str | None = None
+    autoproject_run_id: str | None = None
 
     @property
-    def is_task_run(self) -> bool:
-        """Whether the conversation is a Quest Task run, whatever the
+    def is_autoproject_run(self) -> bool:
+        """Whether the conversation is an AutoProject run, whatever the
         caller kind. Tools that only the run's own top-level model may
         call combine it with ``is_sub_agent`` / ``is_script``."""
-        return self.task_id is not None
+        return self.autoproject_id is not None
 
     @property
     def block_mutating_tools(self) -> bool:
@@ -308,33 +308,33 @@ async def _tool_edit_workspace_file(ctx: ToolContext, args: dict) -> str:
     )
 
 
-# Space-aware file tools (chat:// / proj:// / task:// paths; devplan 00009,
+# Space-aware file tools (chat:// / proj:// / autoproject:// paths; devplan 00009,
 # revised 2026-10-08; issue #213). Offered in project conversations
-# (chat:// + proj://) and task runs (chat:// + task://, keyed off
-# ctx.task_id). A proj:// path without ctx.project_id or in a task run
-# returns a structured ``no_project`` error, a task:// path outside a task
-# run ``no_task``, a bare or malformed path ``invalid_path`` -- the handlers
+# (chat:// + proj://) and AutoProject runs (chat:// + autoproject://, keyed off
+# ctx.autoproject_id). A proj:// path without ctx.project_id or in an AutoProject run
+# returns a structured ``no_project`` error, an autoproject:// path outside an AutoProject
+# run ``no_autoproject``, a bare or malformed path ``invalid_path`` -- the handlers
 # never raise.
 
 
 async def _tool_list_files(ctx: ToolContext, args: dict) -> str:
     return await _handle_list_files(
         ctx.user["id"], ctx.conversation_id, ctx.project_id, args.get("path"),
-        task_id=ctx.task_id,
+        autoproject_id=ctx.autoproject_id,
     )
 
 
 async def _tool_read_file(ctx: ToolContext, args: dict) -> tuple[str, list]:
     return await _handle_read_file(
         ctx.provider, ctx.user["id"], ctx.conversation_id, ctx.project_id,
-        args.get("path"), model=ctx.model, task_id=ctx.task_id,
+        args.get("path"), model=ctx.model, autoproject_id=ctx.autoproject_id,
     )
 
 
 async def _tool_write_file(ctx: ToolContext, args: dict) -> str:
     return await _handle_write_file(
         ctx.user["id"], ctx.conversation_id, ctx.project_id,
-        args.get("path"), args.get("content", ""), task_id=ctx.task_id,
+        args.get("path"), args.get("content", ""), autoproject_id=ctx.autoproject_id,
     )
 
 
@@ -343,7 +343,7 @@ async def _tool_edit_file(ctx: ToolContext, args: dict) -> str:
         ctx.user["id"], ctx.conversation_id, ctx.project_id,
         args.get("path"), args.get("old_string", ""), args.get("new_string", ""),
         replace_all=_as_bool(args.get("replace_all")),
-        task_id=ctx.task_id,
+        autoproject_id=ctx.autoproject_id,
     )
 
 
@@ -353,24 +353,24 @@ async def _tool_copy_file(ctx: ToolContext, args: dict) -> str:
         args.get("src"), args.get("dest"),
         overwrite=_as_bool(args.get("overwrite")),
         include_hidden=_as_bool(args.get("include_hidden")),
-        task_id=ctx.task_id,
+        autoproject_id=ctx.autoproject_id,
     )
 
 
-# Read tools over the calling run's own Quest Task (issue #213, spec 6.2):
-# listed only in task runs (TASK_ONLY_TOOL_CALL_TOOLS); the handlers refuse
-# a conversation without ctx.task_id. Imported lazily: the tasks modules
+# Read tools over the calling run's own AutoProject (issue #213, spec 6.2):
+# listed only in AutoProject runs (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the handlers refuse
+# a conversation without ctx.autoproject_id. Imported lazily: the AutoProjects modules
 # import chat.realtime, whose package init imports the socket module.
 
 
-async def _tool_list_task_runs(ctx: ToolContext, args: dict) -> str:
-    from chat.gemini_api.tool_handlers.task_runs import handle_list_task_runs
-    return await handle_list_task_runs(ctx, args)
+async def _tool_list_autoproject_runs(ctx: ToolContext, args: dict) -> str:
+    from chat.gemini_api.tool_handlers.autoproject_runs import handle_list_autoproject_runs
+    return await handle_list_autoproject_runs(ctx, args)
 
 
-async def _tool_read_task_run(ctx: ToolContext, args: dict) -> str:
-    from chat.gemini_api.tool_handlers.task_runs import handle_read_task_run
-    return await handle_read_task_run(ctx, args)
+async def _tool_read_autoproject_run(ctx: ToolContext, args: dict) -> str:
+    from chat.gemini_api.tool_handlers.autoproject_runs import handle_read_autoproject_run
+    return await handle_read_autoproject_run(ctx, args)
 
 
 async def _tool_memory_search(ctx: ToolContext, args: dict) -> str:
@@ -588,14 +588,14 @@ async def _tool_send_gmail_to_self(ctx: ToolContext, args: dict) -> str:
 
 
 async def _tool_set_conversation_name(ctx: ToolContext, args: dict) -> str:
-    if ctx.is_task_run:
-        # The task-run prompt does not offer the tool: a run conversation's
-        # name is never shown (the task thread shows the task's title).
+    if ctx.is_autoproject_run:
+        # The AutoProject-run prompt does not offer the tool: a run conversation's
+        # name is never shown (the AutoProject thread shows the AutoProject's title).
         return json.dumps({
             "error": (
-                "A task run of a Quest Task has no conversation name to set. "
-                "The task's title is set through complete_task_run's "
-                "task_title (first task run only)."
+                "An AutoProject run has no conversation name to set. "
+                "The AutoProject's title is set through complete_autoproject_run's "
+                "autoproject_title (first run only)."
             ),
         })
     return await _handle_set_conversation_name(
@@ -622,7 +622,7 @@ async def _tool_list_skills(ctx: ToolContext, args: dict) -> str:
         ctx.user["id"],
         connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
-        is_task_run=ctx.is_task_run,
+        is_autoproject_run=ctx.is_autoproject_run,
     )
 
 
@@ -631,7 +631,7 @@ async def _tool_search_skills(ctx: ToolContext, args: dict) -> str:
         ctx.user["id"], args.get("keyword", ""),
         connected_services=_get_connected_services(ctx),
         has_project=bool(ctx.project_id),
-        is_task_run=ctx.is_task_run,
+        is_autoproject_run=ctx.is_autoproject_run,
     )
 
 
@@ -652,7 +652,7 @@ async def _tool_load_skills(ctx: ToolContext, args: dict) -> str:
         api_key=ctx.user.get("api_key", ""),
         conversation_id=ctx.conversation_id,
         user=ctx.user,
-        is_task_run=ctx.is_task_run,
+        is_autoproject_run=ctx.is_autoproject_run,
     )
 
 
@@ -689,8 +689,8 @@ async def _tool_run_script(ctx: ToolContext, args: dict) -> str:
         project_id=ctx.project_id,
         public=ctx.is_public,
         block_mutating_tools=ctx.block_mutating_tools,
-        task_id=ctx.task_id,
-        task_run_id=ctx.task_run_id,
+        autoproject_id=ctx.autoproject_id,
+        autoproject_run_id=ctx.autoproject_run_id,
     )
 
 
@@ -701,8 +701,8 @@ async def _tool_run_python(ctx: ToolContext, args: dict) -> str:
         project_id=ctx.project_id,
         public=ctx.is_public,
         block_mutating_tools=ctx.block_mutating_tools,
-        task_id=ctx.task_id,
-        task_run_id=ctx.task_run_id,
+        autoproject_id=ctx.autoproject_id,
+        autoproject_run_id=ctx.autoproject_run_id,
     )
 
 
@@ -852,9 +852,9 @@ TOOL_CALL_HANDLERS: dict[str, ToolHandler] = {
     "write_file": _tool_write_file,
     "edit_file": _tool_edit_file,
     "copy_file": _tool_copy_file,
-    # Quest Task run reads (task runs only; see TASK_ONLY_TOOL_CALL_TOOLS).
-    "list_task_runs": _tool_list_task_runs,
-    "read_task_run": _tool_read_task_run,
+    # AutoProject run reads (AutoProject runs only; see AUTOPROJECT_ONLY_TOOL_CALL_TOOLS).
+    "list_autoproject_runs": _tool_list_autoproject_runs,
+    "read_autoproject_run": _tool_read_autoproject_run,
     "memory_search": _tool_memory_search,
     "memory_list": _tool_memory_list,
     "memory_get": _tool_memory_get,
@@ -1033,8 +1033,8 @@ async def _dispatch_tool_call(
     is_slack: bool = False,
     is_script: bool = False,
     is_routine: bool = False,
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> tuple[str, list]:
     """Dispatch a tool call to the appropriate handler.
 
@@ -1091,15 +1091,15 @@ async def _dispatch_tool_call(
             or one-click). It does not change ``run_kind`` (a routine run
             is ``top_level`` and records doc notes deliveries); it keeps
             suggest_doc_note out (``ToolContext.is_routine``).
-        task_id: The conversation's Quest Task id when it is a task run
-            (``conversations.task_id``), else None. Like is_routine it does
-            not change ``run_kind``; it sets ``ToolContext.is_task_run``,
+        autoproject_id: The conversation's AutoProject id when it is an AutoProject run
+            (``conversations.autoproject_id``), else None. Like is_routine it does
+            not change ``run_kind``; it sets ``ToolContext.is_autoproject_run``,
             switches the space-aware file tools to ``chat://`` +
-            ``task://`` (``proj://`` is refused), mounts the task workspace
-            at ``/task`` in the sandbox, and scopes list_task_runs /
-            read_task_run to this task.
-        task_run_id: The ``task_runs`` row id of that conversation, set
-            together with task_id. The run-scoped task tools act on this
+            ``autoproject://`` (``proj://`` is refused), mounts the AutoProject workspace
+            at ``/autoproject`` in the sandbox, and scopes list_autoproject_runs /
+            read_autoproject_run to this AutoProject.
+        autoproject_run_id: The ``autoproject_runs`` row id of that conversation, set
+            together with autoproject_id. The run-scoped AutoProject tools act on this
             run only.
 
     Returns:
@@ -1114,7 +1114,7 @@ async def _dispatch_tool_call(
             is_public=is_public, is_inference_api=is_inference_api,
             is_user_subagent=is_user_subagent, is_slack=is_slack,
             is_script=is_script, is_routine=is_routine,
-            task_id=task_id, task_run_id=task_run_id,
+            autoproject_id=autoproject_id, autoproject_run_id=autoproject_run_id,
         )
     except Exception as exc:
         label = tool_name
@@ -1132,9 +1132,9 @@ async def _dispatch_tool_call(
 # load_skills, whose public arm admits PUBLIC_SYSTEM_SKILLS alone.
 _PUBLIC_DIRECT_TOOLS = frozenset({"run_script", "run_python", "load_skills"})
 
-# The loop tools of a task run (TASK_RUN_TOOLS): refused by shared dispatch,
+# The loop tools of an AutoProject run (AUTOPROJECT_RUN_TOOLS): refused by shared dispatch,
 # which only sub-agents and scripts reach with these names.
-_TASK_RUN_LOOP_TOOLS = frozenset({"complete_task_run", "ask_task_question"})
+_AUTOPROJECT_RUN_LOOP_TOOLS = frozenset({"complete_autoproject_run", "ask_autoproject_question"})
 
 
 async def _dispatch_tool_call_inner(
@@ -1155,8 +1155,8 @@ async def _dispatch_tool_call_inner(
     is_slack: bool = False,
     is_script: bool = False,
     is_routine: bool = False,
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> tuple[str, list]:
     """Un-guarded dispatch body; see ``_dispatch_tool_call``."""
     extra_parts = []
@@ -1178,8 +1178,8 @@ async def _dispatch_tool_call_inner(
         is_slack=is_slack,
         is_script=is_script,
         is_routine=is_routine,
-        task_id=task_id,
-        task_run_id=task_run_id,
+        autoproject_id=autoproject_id,
+        autoproject_run_id=autoproject_run_id,
     )
 
     # Public-project enforcement. This is the security boundary, not the
@@ -1232,7 +1232,7 @@ async def _dispatch_tool_call_inner(
                 ),
             }), []
 
-    # The task-run loop tools act on the calling run and only its own
+    # The AutoProject-run loop tools act on the calling run and only its own
     # top-level model may call them (spec 5, invariant 5). The top-level
     # loop handles both names in TURN_TOOL_HANDLERS before shared dispatch,
     # so reaching here means a sub-agent or a script asked: refuse
@@ -1240,10 +1240,10 @@ async def _dispatch_tool_call_inner(
     requested_loop_tool = (
         args.get("tool_name") if tool_name == "tool_call" else tool_name
     )
-    if requested_loop_tool in _TASK_RUN_LOOP_TOOLS:
+    if requested_loop_tool in _AUTOPROJECT_RUN_LOOP_TOOLS:
         return json.dumps({
             "error": (
-                f"{requested_loop_tool} can only be called by the task run's "
+                f"{requested_loop_tool} can only be called by the AutoProject run's "
                 "own model, not by a sub-agent or a script."
             ),
         }), []
@@ -1258,27 +1258,27 @@ async def _dispatch_tool_call_inner(
             result = json.dumps({"error": "tool_call requires a 'tool_name' parameter."})
         elif inner_tool_name not in TOOL_CALL_REGISTRY:
             # List what the prompt offers: the project-only tools only in a
-            # project, the *_workspace_file tools only outside one; a task
+            # project, the *_workspace_file tools only outside one; an AutoProject
             # run has the scheme file tools (not the other project-only
-            # ones) and the task-only tools, which every other
+            # ones) and the AutoProject-only tools, which every other
             # conversation lacks.
             from chat.llm.tool_schemas import (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS,
                 PROJECT_ONLY_TOOL_CALL_TOOLS,
                 SCHEME_FILE_TOOLS,
-                TASK_ONLY_TOOL_CALL_TOOLS,
+                AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
             )
-            if task_id:
+            if autoproject_id:
                 hidden = PROJECT_HIDDEN_WORKSPACE_TOOLS | (
                     PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS
                 )
             elif project_id:
                 hidden = (
-                    PROJECT_HIDDEN_WORKSPACE_TOOLS | TASK_ONLY_TOOL_CALL_TOOLS
+                    PROJECT_HIDDEN_WORKSPACE_TOOLS | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
                 )
             else:
                 hidden = (
-                    PROJECT_ONLY_TOOL_CALL_TOOLS | TASK_ONLY_TOOL_CALL_TOOLS
+                    PROJECT_ONLY_TOOL_CALL_TOOLS | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
                 )
             names = [n for n in TOOL_CALL_REGISTRY if n not in hidden]
             available = ", ".join(sorted(names))

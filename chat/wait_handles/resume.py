@@ -12,8 +12,8 @@ These suspend sentinels feed into here:
   resolves the handle but deliberately kicks NO resume -- see
   ``_stopped_handle_ids``)
 * ``request_service_connection`` (web inline connect card)
-* ``ask_task_question`` (a Quest Task run's question, answered from the
-  task thread)
+* ``ask_autoproject_question`` (an AutoProject run's question, answered from the
+  AutoProject thread)
 
 For Slack-origin conversations the resume reads the conversation's
 stored ``origin`` and the matching ``slack_conversations`` row so the
@@ -129,7 +129,7 @@ def _conversation_has_dangling_wait(conversation_id: str) -> bool:
     * ``send_slack_reply_and_get_response`` (Slack-driven thread suspend)
     * ``create_action_request`` (web action-request Approve / Revise / Stop)
     * ``request_service_connection`` (web inline connect card)
-    * ``ask_task_question`` (a Quest Task run's question; top-level or
+    * ``ask_autoproject_question`` (an AutoProject run's question; top-level or
       through ``tool_call``)
 
     Returns False if the file is missing, the provider is unknown, or the
@@ -142,12 +142,12 @@ def _conversation_has_dangling_wait(conversation_id: str) -> bool:
             "send_slack_reply_and_get_response",
             "create_action_request",
             "return_to_caller",
-            "ask_task_question",
+            "ask_autoproject_question",
         ):
             return True
         if name == "tool_call" and (args or {}).get("tool_name") in (
             "wait_for_handles", "request_service_connection",
-            "ask_task_question",
+            "ask_autoproject_question",
         ):
             return True
     return False
@@ -173,7 +173,7 @@ def _conversation_has_dangling_slack_reply(conversation_id: str) -> bool:
 # is deliberately absent: its rows belong to other tools and its contract
 # is "return when ANY resolves."
 _ONE_ROW_PER_TOOL_USE_KINDS = frozenset({
-    "action_request", "slack_reply", "service_connection", "task_question",
+    "action_request", "slack_reply", "service_connection", "autoproject_question",
 })
 
 
@@ -185,7 +185,7 @@ async def _unresolved_blocking_handle_ids(
 
     A parallel tool-call batch can leave SEVERAL dangling card tool_uses
     on disk (``create_action_request``, ``request_service_connection``,
-    ``ask_task_question``), one card each -- e.g. a task run's question and
+    ``ask_autoproject_question``), one card each -- e.g. an AutoProject run's question and
     an approval card pending at once. Resolving the first card must NOT
     resume the conversation -- the resume bucket would close the other
     cards' tool_uses with ``still_waiting`` and the model would carry on
@@ -272,7 +272,7 @@ async def _run_resume(
     from db.conversation_store import get_conversation_meta
 
     # Multi-card gate: hold the continuation while any sibling card of a
-    # parallel card batch (approval, connect, task question) is still
+    # parallel card batch (approval, connect, AutoProject question) is still
     # pending. Best-effort -- a failing check falls through to the
     # pre-gate behavior. Runs
     # BEFORE ``resume_started`` so a held resume publishes nothing and the
@@ -340,7 +340,7 @@ async def _run_resume(
         model = (meta or {}).get("model")
         project_id = (meta or {}).get("project_id")
         routine_id = (meta or {}).get("routine_id")
-        task_id = (meta or {}).get("task_id")
+        autoproject_id = (meta or {}).get("autoproject_id")
         origin = (meta or {}).get("origin") or "web"
 
         if origin == "slack":
@@ -455,28 +455,28 @@ async def _run_resume(
                 origin=origin,
                 slack_context=slack_context,
                 flags=resumed_flags or None,
-                task_id=task_id,
+                autoproject_id=autoproject_id,
             )
 
-        task_run: Optional[dict] = None
-        if task_id:
-            # A Quest Task run's resume turn goes through its driver, which
+        autoproject_run: Optional[dict] = None
+        if autoproject_id:
+            # An AutoProject run's resume turn goes through its driver, which
             # moves the run back to ``running``, sets its status from how
             # the turn ended (and nudges a run that ended without
-            # complete_task_run), and runs no turn at all for a run that
+            # complete_autoproject_run), and runs no turn at all for a run that
             # already finished (a card approved after a Stop).
-            from db.task_store import get_run_by_conversation
-            task_run = await get_run_by_conversation(conversation_id)
-            if task_run is None:
+            from db.autoproject_store import get_run_by_conversation
+            autoproject_run = await get_run_by_conversation(conversation_id)
+            if autoproject_run is None:
                 logger.warning(
-                    "[wait-resume] Task conversation %s has no run row; "
-                    "resuming without the task run driver", conversation_id,
+                    "[wait-resume] AutoProject conversation %s has no run row; "
+                    "resuming without the AutoProject run driver", conversation_id,
                 )
-        if task_run is not None:
-            from chat.tasks.runs import drive_task_run
-            await drive_task_run(
+        if autoproject_run is not None:
+            from chat.autoprojects.runs import drive_autoproject_run
+            await drive_autoproject_run(
                 run_turn,
-                run=task_run,
+                run=autoproject_run,
                 prompt=None,
                 messages_out=messages_out,
                 on_event=_on_event,

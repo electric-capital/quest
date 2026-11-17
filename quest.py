@@ -182,16 +182,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Vertex credentials consistency check failed; continuing")
 
-    # Quest Task startup sweeps (chat/tasks/service.py), before the
-    # scheduler and wait-handle sweeps start: a ``running`` task run cannot
+    # AutoProject startup sweeps (chat/autoprojects/service.py), before the
+    # scheduler and wait-handle sweeps start: a ``running`` AutoProject run cannot
     # survive a restart (its in-memory turn is gone), so it is failed; a
     # ``waiting`` run survives because its wait handle does; and run
     # conversations created but never sent are deleted once older than a day.
-    from chat.tasks.service import run_startup_sweeps
+    from chat.autoprojects.service import run_startup_sweeps
     try:
         await run_startup_sweeps()
     except Exception:
-        logger.exception("Task startup sweeps failed; continuing")
+        logger.exception("AutoProject startup sweeps failed; continuing")
 
     # Kick off per-model health checks in the background: one minimal live
     # inference call per configured model (none when no provider is
@@ -606,7 +606,7 @@ from chat.tables.routes import router as tables_router
 from chat.tables.history_routes import router as tables_history_router
 from chat.tables.download_routes import router as tables_download_router
 from chat.tables.share_routes import router as tables_share_router
-from chat.tasks.routes import router as tasks_router
+from chat.autoprojects.routes import router as autoprojects_router
 from chat.realtime import realtime_router
 
 app.include_router(chat_router)
@@ -633,7 +633,7 @@ app.include_router(tables_router)
 app.include_router(tables_history_router)
 app.include_router(tables_download_router)
 app.include_router(tables_share_router)
-app.include_router(tasks_router)
+app.include_router(autoprojects_router)
 app.include_router(realtime_router)
 
 # Discover and register filesystem plugins (plugins/*/plugin.py) AFTER the
@@ -732,11 +732,11 @@ async def serve_spa_tables(rest: str = ""):
     /tables?project=<id>, /tables/<id> viewer)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
-@app.get("/tasks")
-@app.get("/tasks/{rest:path}")
-async def serve_spa_tasks(rest: str = ""):
-    """Serve SPA for the Quest Tasks deep links (/tasks/new, /tasks/<id>
-    thread, /tasks/<id>/runs/<conversation id> run view)."""
+@app.get("/autoprojects")
+@app.get("/autoprojects/{rest:path}")
+async def serve_spa_autoprojects(rest: str = ""):
+    """Serve SPA for the AutoProjects deep links (/autoprojects/new, /autoprojects/<id>
+    thread, /autoprojects/<id>/runs/<conversation id> run view)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/set-password")

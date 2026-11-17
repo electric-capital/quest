@@ -79,14 +79,14 @@ class RunContext:
     # standalone conversation. Treat as read-only.
     workspace_notice_flags: dict[str, bool] = field(default_factory=dict)
 
-    # Quest Task run linkage (conversations.task_id set, origin="task"):
-    # the task id and the conversation's task_runs row id. None for every
+    # AutoProject run linkage (conversations.autoproject_id set, origin="autoproject"):
+    # the AutoProject id and the conversation's autoproject_runs row id. None for every
     # other conversation.
-    task_id: str | None = None
-    task_run_id: str | None = None
-    # The tasks.brief_version the run's ``## Task`` system-prompt section
-    # was built from (frozen on the task_runs row with the text, so it
-    # survives a resume and a restart). Phase A5's complete_task_run passes
+    autoproject_id: str | None = None
+    autoproject_run_id: str | None = None
+    # The autoprojects.brief_version the run's ``## AutoProject`` system-prompt section
+    # was built from (frozen on the autoproject_runs row with the text, so it
+    # survives a resume and a restart). Phase A5's complete_autoproject_run passes
     # it as set_brief(expected_version=...), so a brief the user edited
-    # during the run is detected as a conflict. None outside a task run.
-    task_context_brief_version: int | None = None
+    # during the run is detected as a conflict. None outside an AutoProject run.
+    autoproject_context_brief_version: int | None = None

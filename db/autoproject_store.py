@@ -1,33 +1,33 @@
-"""Quest Tasks data access layer.
+"""AutoProjects data access layer.
 
-Owns every write to the ``tasks``, ``task_runs`` and ``task_brief_versions``
+Owns every write to the ``autoprojects``, ``autoproject_runs`` and ``autoproject_brief_versions``
 tables (spec issue #213, sections 3 and 4). Async functions that each open
 a fresh ``AsyncSessionLocal()`` session (imported at module level so tests
 can monkeypatch it) and return plain dicts with ISO datetimes; the shapes
-are documented on :func:`_task_to_dict`, :func:`_run_to_dict` and
+are documented on :func:`_autoproject_to_dict`, :func:`_run_to_dict` and
 :func:`_brief_state`.
 
-Scoping: functions taking ``user_id`` are owner-scoped, and a task owned by
-someone else raises (or reads as) exactly what a missing task does
-(invariant 7). The rest take a task or run id only and are for callers that
-already did the access check (``require_owned_task`` in routes, the run's
-own task resolved from ``ToolContext`` in tools, the run driver).
+Scoping: functions taking ``user_id`` are owner-scoped, and an AutoProject owned by
+someone else raises (or reads as) exactly what a missing AutoProject does
+(invariant 7). The rest take an AutoProject or run id only and are for callers that
+already did the access check (``require_owned_autoproject`` in routes, the run's
+own AutoProject resolved from ``ToolContext`` in tools, the run driver).
 
 Concurrency: SQLite takes its single write lock at a transaction's first
 write, and reads before it see whatever was last committed. Every
-check-then-write here (the task cap, invariant 6's one active run, the
-brief's version token, the conversation sweep of a task delete) therefore
+check-then-write here (the AutoProject cap, invariant 6's one active run, the
+brief's version token, the conversation sweep of an AutoProject delete) therefore
 issues its UPDATE or INSERT first and checks inside the same transaction,
 rolling back on refusal, so two concurrent writers cannot both pass a check.
 
-Counters on the ``tasks`` row: ``event_seq`` is bumped by every write that
-changes what the thread shows and by task edits (the realtime
-``task_changed`` event carries it), ``last_activity_at`` moves on create and
+Counters on the ``autoprojects`` row: ``event_seq`` is bumped by every write that
+changes what the thread shows and by AutoProject edits (the realtime
+``autoproject_changed`` event carries it), ``last_activity_at`` moves on create and
 on every run write (it orders the sidebar), and the unread pair follows the
 conversation scheme (``unread_seq > read_seq``, both only move forward).
 
-Caps and statuses come from chat/tasks/constants.py. The filesystem (the
-task workspace, the run conversations' directories) is never touched here;
+Caps and statuses come from chat/autoprojects/constants.py. The filesystem (the
+AutoProject workspace, the run conversations' directories) is never touched here;
 delete functions return the ids the caller sweeps.
 """
 
@@ -41,29 +41,29 @@ from sqlalchemy import delete, func, literal, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 
-from chat.tasks.constants import (
-    MAX_ACTIVE_TASKS_PER_USER,
-    TASK_BRIEF_MAX_CHARS,
-    TASK_BRIEF_MAX_VERSIONS,
-    TASK_CONTEXT_MAX_CHARS,
-    TASK_RUN_ACTIVE_STATUSES,
-    TASK_RUN_FINISHED_STATUSES,
-    TASK_RUN_NOTES_MAX_CHARS,
-    TASK_RUN_RESULT_MAX_CHARS,
-    TASK_RUN_STATUS_COMPLETED,
-    TASK_RUN_STATUS_FAILED,
-    TASK_RUN_STATUS_RUNNING,
-    TASK_RUN_STATUS_STOPPED,
-    TASK_RUN_STATUS_WAITING,
-    TASK_RUN_SUMMARY_MAX_CHARS,
-    TASK_TITLE_MAX_CHARS,
-    task_not_found_message,
+from chat.autoprojects.constants import (
+    MAX_ACTIVE_AUTOPROJECTS_PER_USER,
+    AUTOPROJECT_BRIEF_MAX_CHARS,
+    AUTOPROJECT_BRIEF_MAX_VERSIONS,
+    AUTOPROJECT_CONTEXT_MAX_CHARS,
+    AUTOPROJECT_RUN_ACTIVE_STATUSES,
+    AUTOPROJECT_RUN_FINISHED_STATUSES,
+    AUTOPROJECT_RUN_NOTES_MAX_CHARS,
+    AUTOPROJECT_RUN_RESULT_MAX_CHARS,
+    AUTOPROJECT_RUN_STATUS_COMPLETED,
+    AUTOPROJECT_RUN_STATUS_FAILED,
+    AUTOPROJECT_RUN_STATUS_RUNNING,
+    AUTOPROJECT_RUN_STATUS_STOPPED,
+    AUTOPROJECT_RUN_STATUS_WAITING,
+    AUTOPROJECT_RUN_SUMMARY_MAX_CHARS,
+    AUTOPROJECT_TITLE_MAX_CHARS,
+    autoproject_not_found_message,
 )
 from db.engine import AsyncSessionLocal
-from db.models import Conversation, Task, TaskBriefVersion, TaskRun
+from db.models import Conversation, AutoProject, AutoProjectBriefVersion, AutoProjectRun
 
 # Fallback title when a first prompt has no text to cut one from.
-DEFAULT_TASK_TITLE = "Untitled task"
+DEFAULT_AUTOPROJECT_TITLE = "Untitled AutoProject"
 
 # Length bounds of the free-form model fields (the column sizes).
 _MODEL_MAX_CHARS = 100
@@ -71,20 +71,20 @@ _THINKING_EFFORT_MAX_CHARS = 20
 
 # Page size bounds: the thread page (list_runs_page) and the plain listings
 # (list_runs, and list_context_runs, from which the context builder reads
-# the window and the index, about TASK_LOG_WINDOW_MAX_ENTRIES +
-# TASK_LOG_INDEX_MAX_ENTRIES rows, in one call).
+# the window and the index, about AUTOPROJECT_LOG_WINDOW_MAX_ENTRIES +
+# AUTOPROJECT_LOG_INDEX_MAX_ENTRIES rows, in one call).
 _RUNS_PAGE_MAX_LIMIT = 100
 _LIST_RUNS_MAX_LIMIT = 500
 
 # Statuses set_run_status writes (``completed`` goes through complete_run).
 _SETTABLE_RUN_STATUSES = frozenset({
-    TASK_RUN_STATUS_RUNNING,
-    TASK_RUN_STATUS_WAITING,
-    TASK_RUN_STATUS_FAILED,
-    TASK_RUN_STATUS_STOPPED,
+    AUTOPROJECT_RUN_STATUS_RUNNING,
+    AUTOPROJECT_RUN_STATUS_WAITING,
+    AUTOPROJECT_RUN_STATUS_FAILED,
+    AUTOPROJECT_RUN_STATUS_STOPPED,
 })
 
-# ``task_brief_versions.source``: run:<run id> | ui | restore:<version>.
+# ``autoproject_brief_versions.source``: run:<run id> | ui | restore:<version>.
 _BRIEF_SOURCE_RE = re.compile(r"^(?:ui|run:[0-9A-Za-z-]{1,36}|restore:\d{1,9})$")
 
 
@@ -97,7 +97,7 @@ class _Unset:
         return "UNSET"
 
 
-# "Leave this field alone" for update_task(); None means "clear" where a
+# "Leave this field alone" for update_autoproject(); None means "clear" where a
 # field is nullable.
 UNSET: Any = _Unset()
 
@@ -107,7 +107,7 @@ UNSET: Any = _Unset()
 # ---------------------------------------------------------------------------
 
 
-class TaskStoreError(Exception):
+class AutoProjectStoreError(Exception):
     """Base of every refusal this module raises.
 
     ``code`` is the stable machine code routes and tools put straight into
@@ -115,7 +115,7 @@ class TaskStoreError(Exception):
     fields of the body (caps, lengths, the active run).
     """
 
-    code = "task_store_error"
+    code = "autoproject_store_error"
 
     def __init__(
         self,
@@ -131,30 +131,30 @@ class TaskStoreError(Exception):
         self.details: dict = dict(details or {})
 
 
-class TaskNotFoundError(TaskStoreError):
-    """The task does not exist, or belongs to someone else (same text)."""
+class AutoProjectNotFoundError(AutoProjectStoreError):
+    """The AutoProject does not exist, or belongs to someone else (same text)."""
 
-    code = "task_not_found"
+    code = "autoproject_not_found"
 
-    def __init__(self, task_id: str):
-        super().__init__(task_not_found_message(task_id))
-        self.task_id = task_id
+    def __init__(self, autoproject_id: str):
+        super().__init__(autoproject_not_found_message(autoproject_id))
+        self.autoproject_id = autoproject_id
 
 
-class TaskCapReachedError(TaskStoreError):
-    """The user already has ``MAX_ACTIVE_TASKS_PER_USER`` unarchived tasks."""
+class AutoProjectCapReachedError(AutoProjectStoreError):
+    """The user already has ``MAX_ACTIVE_AUTOPROJECTS_PER_USER`` unarchived AutoProjects."""
 
-    code = "tasks_cap_reached"
+    code = "autoprojects_cap_reached"
 
     def __init__(self, cap: int):
         super().__init__(
-            f"Task limit reached: you can have at most {cap} tasks that are "
+            f"AutoProject limit reached: you can have at most {cap} AutoProjects that are "
             "not archived. Archive or delete one first.",
             details={"cap": cap},
         )
 
 
-class TaskValidationError(TaskStoreError, ValueError):
+class AutoProjectValidationError(AutoProjectStoreError, ValueError):
     """Invalid input; ``code`` names the field (``invalid_title``,
     ``brief_too_long``, ...). ``details`` carries ``cap`` and ``actual``
     (lengths) for the size refusals."""
@@ -175,24 +175,24 @@ class TaskValidationError(TaskStoreError, ValueError):
         super().__init__(message, code=code, details=details)
 
 
-class TaskArchivedError(TaskStoreError):
-    """The task is archived, so it takes no new run."""
+class AutoProjectArchivedError(AutoProjectStoreError):
+    """The AutoProject is archived, so it takes no new run."""
 
-    code = "task_archived"
+    code = "autoproject_archived"
 
-    def __init__(self, task_id: str):
+    def __init__(self, autoproject_id: str):
         super().__init__(
-            "This task is archived. Unarchive it to start a new run.",
-            details={"task_id": task_id},
+            "This AutoProject is archived. Unarchive it to start a new run.",
+            details={"autoproject_id": autoproject_id},
         )
 
 
-class TaskRunActiveError(TaskStoreError):
-    """The task has an active run (``running`` or ``waiting``) and the
+class AutoProjectRunActiveError(AutoProjectStoreError):
+    """The AutoProject has an active run (``running`` or ``waiting``) and the
     operation needs none (invariant 6, archive, run delete).
     ``details["active_run"]`` is ``{id, seq, status}``."""
 
-    code = "task_run_active"
+    code = "autoproject_run_active"
 
     def __init__(self, active_run: dict, message: Optional[str] = None):
         summary = {
@@ -202,7 +202,7 @@ class TaskRunActiveError(TaskStoreError):
         }
         super().__init__(
             message or (
-                f"Run {summary['seq']} of this task is still {summary['status']}. "
+                f"Run {summary['seq']} of this AutoProject is still {summary['status']}. "
                 "Wait for it to finish or stop it first."
             ),
             details={"active_run": summary},
@@ -210,45 +210,45 @@ class TaskRunActiveError(TaskStoreError):
         self.active_run = summary
 
 
-class TaskRunNotFoundError(TaskStoreError):
-    """The run does not exist (in that task)."""
+class AutoProjectRunNotFoundError(AutoProjectStoreError):
+    """The run does not exist (in that AutoProject)."""
 
-    code = "task_run_not_found"
+    code = "autoproject_run_not_found"
 
     def __init__(self, run_id: str):
-        super().__init__(f"Task run not found: {run_id}")
+        super().__init__(f"AutoProject run not found: {run_id}")
         self.run_id = run_id
 
 
-class TaskRunFinishedError(TaskStoreError):
+class AutoProjectRunFinishedError(AutoProjectStoreError):
     """A write that needs an active run hit a finished one."""
 
-    code = "task_run_finished"
+    code = "autoproject_run_finished"
 
     def __init__(self, run_id: str, status: str):
         super().__init__(
-            f"This task run has already finished ({status}).",
+            f"This AutoProject run has already finished ({status}).",
             details={"status": status},
         )
         self.run_id = run_id
         self.status = status
 
 
-class TaskRunExistsError(TaskStoreError):
+class AutoProjectRunExistsError(AutoProjectStoreError):
     """The conversation already has its run: a run conversation takes
     exactly one user message (invariant 1)."""
 
-    code = "task_run_single_message"
+    code = "autoproject_run_single_message"
 
     def __init__(self, conversation_id: str):
         super().__init__(
-            "This task run already has its message. Send the next prompt "
-            "from the task instead.",
+            "This AutoProject run already has its message. Send the next prompt "
+            "from the AutoProject instead.",
             details={"conversation_id": conversation_id},
         )
 
 
-class StaleBriefError(TaskStoreError):
+class StaleBriefError(AutoProjectStoreError):
     """``expected_version`` is not the brief's current version (someone
     wrote it in between). ``current`` is ``{brief, brief_version,
     brief_updated_at}`` so the caller can show or merge it without a second
@@ -264,7 +264,7 @@ class StaleBriefError(TaskStoreError):
         self.current = current
 
 
-class BriefVersionNotFoundError(TaskStoreError):
+class BriefVersionNotFoundError(AutoProjectStoreError):
     """No stored brief version with that number (never written, or pruned)."""
 
     code = "brief_version_not_found"
@@ -286,7 +286,7 @@ def _collapse(text: str) -> str:
 
 def _check_len(text: str, cap: int, code: str, label: str) -> str:
     if len(text) > cap:
-        raise TaskValidationError(
+        raise AutoProjectValidationError(
             code,
             f"{label} is {len(text)} characters; the limit is {cap}.",
             cap=cap,
@@ -299,48 +299,48 @@ def normalize_title(title) -> str:
     """Return the title stripped with whitespace collapsed to single spaces.
 
     Raises:
-        TaskValidationError ``invalid_title``: not a string, empty, or over
-            ``TASK_TITLE_MAX_CHARS`` after normalizing.
+        AutoProjectValidationError ``invalid_title``: not a string, empty, or over
+            ``AUTOPROJECT_TITLE_MAX_CHARS`` after normalizing.
     """
     if not isinstance(title, str):
-        raise TaskValidationError("invalid_title", "The task title must be a string.")
+        raise AutoProjectValidationError("invalid_title", "The AutoProject title must be a string.")
     clean = _collapse(title)
     if not clean:
-        raise TaskValidationError("invalid_title", "The task title cannot be empty.")
-    return _check_len(clean, TASK_TITLE_MAX_CHARS, "invalid_title", "The task title")
+        raise AutoProjectValidationError("invalid_title", "The AutoProject title cannot be empty.")
+    return _check_len(clean, AUTOPROJECT_TITLE_MAX_CHARS, "invalid_title", "The AutoProject title")
 
 
 def title_from_prompt(prompt: str) -> str:
     """The default title cut from a first prompt.
 
     The first non-empty line with whitespace collapsed, cut to
-    ``TASK_TITLE_MAX_CHARS`` with a trailing "…" when cut;
-    :data:`DEFAULT_TASK_TITLE` when the prompt has no text.
+    ``AUTOPROJECT_TITLE_MAX_CHARS`` with a trailing "…" when cut;
+    :data:`DEFAULT_AUTOPROJECT_TITLE` when the prompt has no text.
     """
     if not isinstance(prompt, str):
-        return DEFAULT_TASK_TITLE
+        return DEFAULT_AUTOPROJECT_TITLE
     for line in prompt.splitlines():
         clean = _collapse(line)
         if clean:
             break
     else:
-        return DEFAULT_TASK_TITLE
-    if len(clean) <= TASK_TITLE_MAX_CHARS:
+        return DEFAULT_AUTOPROJECT_TITLE
+    if len(clean) <= AUTOPROJECT_TITLE_MAX_CHARS:
         return clean
-    return clean[: TASK_TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return clean[: AUTOPROJECT_TITLE_MAX_CHARS - 1].rstrip() + "…"
 
 
 def validate_brief(content) -> str:
     """Return the stripped brief (empty allowed).
 
     Raises:
-        TaskValidationError ``invalid_brief`` (not a string) or
-            ``brief_too_long`` (over ``TASK_BRIEF_MAX_CHARS``).
+        AutoProjectValidationError ``invalid_brief`` (not a string) or
+            ``brief_too_long`` (over ``AUTOPROJECT_BRIEF_MAX_CHARS``).
     """
     if not isinstance(content, str):
-        raise TaskValidationError("invalid_brief", "The brief must be a string.")
+        raise AutoProjectValidationError("invalid_brief", "The brief must be a string.")
     return _check_len(
-        content.strip(), TASK_BRIEF_MAX_CHARS, "brief_too_long", "The brief",
+        content.strip(), AUTOPROJECT_BRIEF_MAX_CHARS, "brief_too_long", "The brief",
     )
 
 
@@ -351,22 +351,22 @@ def validate_run_entry(summary, result, notes) -> tuple[str, str, str]:
     reported.
 
     Raises:
-        TaskValidationError ``invalid_summary`` / ``invalid_result`` /
+        AutoProjectValidationError ``invalid_summary`` / ``invalid_result`` /
             ``invalid_notes`` (not a string), or ``summary_too_long`` /
             ``result_too_long`` / ``notes_too_long`` (over
-            ``TASK_RUN_SUMMARY_MAX_CHARS`` / ``TASK_RUN_RESULT_MAX_CHARS`` /
-            ``TASK_RUN_NOTES_MAX_CHARS``).
+            ``AUTOPROJECT_RUN_SUMMARY_MAX_CHARS`` / ``AUTOPROJECT_RUN_RESULT_MAX_CHARS`` /
+            ``AUTOPROJECT_RUN_NOTES_MAX_CHARS``).
     """
     cleaned = []
     for name, value, cap in (
-        ("summary", summary, TASK_RUN_SUMMARY_MAX_CHARS),
-        ("result", result, TASK_RUN_RESULT_MAX_CHARS),
-        ("notes", notes, TASK_RUN_NOTES_MAX_CHARS),
+        ("summary", summary, AUTOPROJECT_RUN_SUMMARY_MAX_CHARS),
+        ("result", result, AUTOPROJECT_RUN_RESULT_MAX_CHARS),
+        ("notes", notes, AUTOPROJECT_RUN_NOTES_MAX_CHARS),
     ):
         if value is None:
             value = ""
         if not isinstance(value, str):
-            raise TaskValidationError(
+            raise AutoProjectValidationError(
                 f"invalid_{name}", f"The run's {name} must be a string."
             )
         cleaned.append(
@@ -378,7 +378,7 @@ def validate_run_entry(summary, result, notes) -> tuple[str, str, str]:
 def _validate_prompt(prompt) -> str:
     """Return the prompt verbatim; refuse a non-string or blank one."""
     if not isinstance(prompt, str) or not prompt.strip():
-        raise TaskValidationError("invalid_prompt", "The prompt cannot be empty.")
+        raise AutoProjectValidationError("invalid_prompt", "The prompt cannot be empty.")
     return prompt
 
 
@@ -388,7 +388,7 @@ def _validate_model(model) -> Optional[str]:
     if model is None:
         return None
     if not isinstance(model, str) or not model.strip() or len(model) > _MODEL_MAX_CHARS:
-        raise TaskValidationError("invalid_model", "Invalid model id.")
+        raise AutoProjectValidationError("invalid_model", "Invalid model id.")
     return model.strip()
 
 
@@ -401,7 +401,7 @@ def _validate_thinking_effort(effort) -> Optional[str]:
         not isinstance(effort, str) or not effort.strip()
         or len(effort) > _THINKING_EFFORT_MAX_CHARS
     ):
-        raise TaskValidationError("invalid_thinking_effort", "Invalid thinking level.")
+        raise AutoProjectValidationError("invalid_thinking_effort", "Invalid thinking level.")
     return effort.strip()
 
 
@@ -436,8 +436,8 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
 
 
-def _task_to_dict(task: Task) -> dict:
-    """Convert a Task ORM instance to the task dict.
+def _autoproject_to_dict(autoproject: AutoProject) -> dict:
+    """Convert an AutoProject ORM instance to the AutoProject dict.
 
     Shape::
 
@@ -449,33 +449,33 @@ def _task_to_dict(task: Task) -> dict:
          "unread"}                              # unread_seq > read_seq
     """
     return {
-        "id": task.id,
-        "user_id": task.user_id,
-        "title": task.title,
-        "title_is_default": bool(task.title_is_default),
-        "brief": task.brief,
-        "brief_version": task.brief_version,
-        "brief_updated_at": _iso(task.brief_updated_at),
-        "model": task.model,
-        "thinking_effort": task.thinking_effort,
-        "archived": bool(task.archived),
-        "next_run_seq": task.next_run_seq,
-        "event_seq": task.event_seq,
-        "unread_seq": task.unread_seq,
-        "read_seq": task.read_seq,
-        "created_at": _iso(task.created_at),
-        "updated_at": _iso(task.updated_at),
-        "last_activity_at": _iso(task.last_activity_at),
-        "unread": (task.unread_seq or 0) > (task.read_seq or 0),
+        "id": autoproject.id,
+        "user_id": autoproject.user_id,
+        "title": autoproject.title,
+        "title_is_default": bool(autoproject.title_is_default),
+        "brief": autoproject.brief,
+        "brief_version": autoproject.brief_version,
+        "brief_updated_at": _iso(autoproject.brief_updated_at),
+        "model": autoproject.model,
+        "thinking_effort": autoproject.thinking_effort,
+        "archived": bool(autoproject.archived),
+        "next_run_seq": autoproject.next_run_seq,
+        "event_seq": autoproject.event_seq,
+        "unread_seq": autoproject.unread_seq,
+        "read_seq": autoproject.read_seq,
+        "created_at": _iso(autoproject.created_at),
+        "updated_at": _iso(autoproject.updated_at),
+        "last_activity_at": _iso(autoproject.last_activity_at),
+        "unread": (autoproject.unread_seq or 0) > (autoproject.read_seq or 0),
     }
 
 
-def _run_to_dict(run: TaskRun, *, include_result: bool = True) -> dict:
-    """Convert a TaskRun ORM instance to the run dict.
+def _run_to_dict(run: AutoProjectRun, *, include_result: bool = True) -> dict:
+    """Convert an AutoProjectRun ORM instance to the run dict.
 
     Shape::
 
-        {"id", "task_id", "seq", "conversation_id", "prompt", "status",
+        {"id", "autoproject_id", "seq", "conversation_id", "prompt", "status",
          "summary", "result", "notes",          # None until completed
          "handoff_missing", "error", "model",
          "context_brief_version",               # None until frozen
@@ -488,7 +488,7 @@ def _run_to_dict(run: TaskRun, *, include_result: bool = True) -> dict:
     """
     row = {
         "id": run.id,
-        "task_id": run.task_id,
+        "autoproject_id": run.autoproject_id,
         "seq": run.seq,
         "conversation_id": run.conversation_id,
         "prompt": run.prompt,
@@ -509,16 +509,16 @@ def _run_to_dict(run: TaskRun, *, include_result: bool = True) -> dict:
     return row
 
 
-def _active_run_summary(run: TaskRun) -> dict:
+def _active_run_summary(run: AutoProjectRun) -> dict:
     return {"id": run.id, "seq": run.seq, "status": run.status}
 
 
-def _brief_state(task: Task) -> dict:
-    """The brief part of a task: ``{brief, brief_version, brief_updated_at}``."""
+def _brief_state(autoproject: AutoProject) -> dict:
+    """The brief part of an AutoProject: ``{brief, brief_version, brief_updated_at}``."""
     return {
-        "brief": task.brief,
-        "brief_version": task.brief_version,
-        "brief_updated_at": _iso(task.brief_updated_at),
+        "brief": autoproject.brief,
+        "brief_version": autoproject.brief_version,
+        "brief_updated_at": _iso(autoproject.brief_updated_at),
     }
 
 
@@ -534,83 +534,83 @@ def _excerpt(content: str, chars: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _reload_task(db, task_id: str) -> Optional[Task]:
+async def _reload_autoproject(db, autoproject_id: str) -> Optional[AutoProject]:
     """The row as stored (naive-UTC datetimes), bypassing the identity map."""
-    return await db.get(Task, task_id, populate_existing=True)
+    return await db.get(AutoProject, autoproject_id, populate_existing=True)
 
 
-async def _owned_task(db, user_id: int, task_id: str) -> Optional[Task]:
-    task = await db.get(Task, task_id, populate_existing=True)
-    if task is None or task.user_id != user_id:
+async def _owned_autoproject(db, user_id: int, autoproject_id: str) -> Optional[AutoProject]:
+    autoproject = await db.get(AutoProject, autoproject_id, populate_existing=True)
+    if autoproject is None or autoproject.user_id != user_id:
         return None
-    return task
+    return autoproject
 
 
-async def _first_active_run(db, task_id: str) -> Optional[TaskRun]:
+async def _first_active_run(db, autoproject_id: str) -> Optional[AutoProjectRun]:
     return (await db.execute(
-        select(TaskRun)
+        select(AutoProjectRun)
         .where(
-            TaskRun.task_id == task_id,
-            TaskRun.status.in_(TASK_RUN_ACTIVE_STATUSES),
+            AutoProjectRun.autoproject_id == autoproject_id,
+            AutoProjectRun.status.in_(AUTOPROJECT_RUN_ACTIVE_STATUSES),
         )
-        .order_by(TaskRun.seq.asc())
+        .order_by(AutoProjectRun.seq.asc())
         .limit(1)
     )).scalar_one_or_none()
 
 
 async def _count_unarchived(db, user_id: int) -> int:
     return (await db.execute(
-        select(func.count()).select_from(Task)
-        .where(Task.user_id == user_id, Task.archived == False)  # noqa: E712
+        select(func.count()).select_from(AutoProject)
+        .where(AutoProject.user_id == user_id, AutoProject.archived == False)  # noqa: E712
     )).scalar_one()
 
 
-async def _touch_task(db, task_id: str, *, activity: bool, now: datetime) -> None:
+async def _touch_autoproject(db, autoproject_id: str, *, activity: bool, now: datetime) -> None:
     """Bump ``event_seq`` (and ``last_activity_at`` for a run write)."""
-    values: dict = {Task.event_seq: Task.event_seq + 1}
+    values: dict = {AutoProject.event_seq: AutoProject.event_seq + 1}
     if activity:
-        values[Task.last_activity_at] = now
+        values[AutoProject.last_activity_at] = now
     await db.execute(
-        update(Task)
-        .where(Task.id == task_id)
+        update(AutoProject)
+        .where(AutoProject.id == autoproject_id)
         .values(values)
         .execution_options(synchronize_session=False)
     )
 
 
 # ---------------------------------------------------------------------------
-# Tasks
+# AutoProjects
 # ---------------------------------------------------------------------------
 
 
-async def create_task(
+async def create_autoproject(
     user_id: int,
     *,
     title: str,
     title_is_default: bool = False,
     model: Optional[str] = None,
     thinking_effort: Optional[str] = None,
-    task_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
 ) -> dict:
-    """Create a task.
+    """Create an AutoProject.
 
     Args:
         user_id: The owner.
         title: Normalized through :func:`normalize_title`.
         title_is_default: True when ``title`` was cut from the first prompt
             (:func:`title_from_prompt`), so the first run may still name the
-            task.
+            AutoProject.
         model, thinking_effort: Defaults for new runs (None = the user's
             default); shape-checked only.
-        task_id: Optional pre-generated id (lets a service lay out the task
+        autoproject_id: Optional pre-generated id (lets a service lay out the AutoProject
             directory first); a uuid4 when omitted.
 
     Returns:
-        The task dict.
+        The AutoProject dict.
 
     Raises:
-        TaskValidationError, TaskCapReachedError (the user has
-        ``MAX_ACTIVE_TASKS_PER_USER`` unarchived tasks; counted after the
+        AutoProjectValidationError, AutoProjectCapReachedError (the user has
+        ``MAX_ACTIVE_AUTOPROJECTS_PER_USER`` unarchived AutoProjects; counted after the
         insert in the same transaction, so concurrent creates cannot both
         slip under the cap).
     """
@@ -618,10 +618,10 @@ async def create_task(
     clean_model = _validate_model(model)
     clean_effort = _validate_thinking_effort(thinking_effort)
     now = _now()
-    new_id = task_id or str(uuid.uuid4())
+    new_id = autoproject_id or str(uuid.uuid4())
 
     async with AsyncSessionLocal() as db:
-        db.add(Task(
+        db.add(AutoProject(
             id=new_id,
             user_id=user_id,
             title=clean_title,
@@ -636,89 +636,89 @@ async def create_task(
         # The insert holds the write lock, so this count includes every
         # committed create and ours, and no other create can commit before
         # we do.
-        if await _count_unarchived(db, user_id) > MAX_ACTIVE_TASKS_PER_USER:
+        if await _count_unarchived(db, user_id) > MAX_ACTIVE_AUTOPROJECTS_PER_USER:
             await db.rollback()
-            raise TaskCapReachedError(MAX_ACTIVE_TASKS_PER_USER)
+            raise AutoProjectCapReachedError(MAX_ACTIVE_AUTOPROJECTS_PER_USER)
         await db.commit()
-        return _task_to_dict(await _reload_task(db, new_id))
+        return _autoproject_to_dict(await _reload_autoproject(db, new_id))
 
 
-async def get_task(user_id: int, task_id: str) -> Optional[dict]:
-    """The task dict, or None when missing or owned by someone else."""
+async def get_autoproject(user_id: int, autoproject_id: str) -> Optional[dict]:
+    """The AutoProject dict, or None when missing or owned by someone else."""
     async with AsyncSessionLocal() as db:
-        task = await _owned_task(db, user_id, task_id)
-        return _task_to_dict(task) if task is not None else None
+        autoproject = await _owned_autoproject(db, user_id, autoproject_id)
+        return _autoproject_to_dict(autoproject) if autoproject is not None else None
 
 
-async def get_task_by_id(task_id: str) -> Optional[dict]:
-    """The task dict whoever owns it, or None (server-side callers only:
+async def get_autoproject_by_id(autoproject_id: str) -> Optional[dict]:
+    """The AutoProject dict whoever owns it, or None (server-side callers only:
     ``ToolContext``, the run driver)."""
     async with AsyncSessionLocal() as db:
-        task = await db.get(Task, task_id)
-        return _task_to_dict(task) if task is not None else None
+        autoproject = await db.get(AutoProject, autoproject_id)
+        return _autoproject_to_dict(autoproject) if autoproject is not None else None
 
 
-async def list_tasks(user_id: int, *, archived: bool = False) -> list[dict]:
-    """The user's unarchived (or, with ``archived=True``, archived) tasks,
+async def list_autoprojects(user_id: int, *, archived: bool = False) -> list[dict]:
+    """The user's unarchived (or, with ``archived=True``, archived) AutoProjects,
     newest ``last_activity_at`` first.
 
-    Each row is the task dict plus ``active_run``: ``{id, seq, status}`` or
-    None. The active runs come from one query over the listed tasks.
+    Each row is the AutoProject dict plus ``active_run``: ``{id, seq, status}`` or
+    None. The active runs come from one query over the listed AutoProjects.
     """
     async with AsyncSessionLocal() as db:
         listed = (
-            select(Task.id)
-            .where(Task.user_id == user_id, Task.archived == bool(archived))
+            select(AutoProject.id)
+            .where(AutoProject.user_id == user_id, AutoProject.archived == bool(archived))
         )
-        tasks = (await db.execute(
-            select(Task)
-            .where(Task.user_id == user_id, Task.archived == bool(archived))
-            .order_by(Task.last_activity_at.desc(), Task.created_at.desc(), Task.id)
+        autoprojects = (await db.execute(
+            select(AutoProject)
+            .where(AutoProject.user_id == user_id, AutoProject.archived == bool(archived))
+            .order_by(AutoProject.last_activity_at.desc(), AutoProject.created_at.desc(), AutoProject.id)
         )).scalars().all()
         active_runs = (await db.execute(
-            select(TaskRun)
+            select(AutoProjectRun)
             .where(
-                TaskRun.task_id.in_(listed),
-                TaskRun.status.in_(TASK_RUN_ACTIVE_STATUSES),
+                AutoProjectRun.autoproject_id.in_(listed),
+                AutoProjectRun.status.in_(AUTOPROJECT_RUN_ACTIVE_STATUSES),
             )
-            .order_by(TaskRun.seq.desc())
+            .order_by(AutoProjectRun.seq.desc())
         )).scalars().all()
-        # Lowest seq wins if a task ever has more than one (not in v1).
-        active_by_task = {run.task_id: _active_run_summary(run) for run in active_runs}
+        # Lowest seq wins if an AutoProject ever has more than one (not in v1).
+        active_by_autoproject = {run.autoproject_id: _active_run_summary(run) for run in active_runs}
         rows = []
-        for task in tasks:
-            row = _task_to_dict(task)
-            row["active_run"] = active_by_task.get(task.id)
+        for autoproject in autoprojects:
+            row = _autoproject_to_dict(autoproject)
+            row["active_run"] = active_by_autoproject.get(autoproject.id)
             rows.append(row)
         return rows
 
 
-async def count_active_tasks(user_id: int) -> int:
-    """How many unarchived tasks the user has (what the cap counts)."""
+async def count_active_autoprojects(user_id: int) -> int:
+    """How many unarchived AutoProjects the user has (what the cap counts)."""
     async with AsyncSessionLocal() as db:
         return await _count_unarchived(db, user_id)
 
 
-async def update_task(
+async def update_autoproject(
     user_id: int,
-    task_id: str,
+    autoproject_id: str,
     *,
     title: Any = UNSET,
     model: Any = UNSET,
     thinking_effort: Any = UNSET,
 ) -> dict:
-    """Edit the user-owned fields of a task. Fields left at :data:`UNSET`
+    """Edit the user-owned fields of an AutoProject. Fields left at :data:`UNSET`
     stay; ``model`` and ``thinking_effort`` accept None to clear.
 
     Setting ``title`` (even to the same text) clears ``title_is_default``:
-    the user has named the task, so no run may rename it. ``event_seq`` and
+    the user has named the AutoProject, so no run may rename it. ``event_seq`` and
     ``updated_at`` move only when something changed.
 
     Returns:
-        The task dict.
+        The AutoProject dict.
 
     Raises:
-        TaskValidationError, TaskNotFoundError.
+        AutoProjectValidationError, AutoProjectNotFoundError.
     """
     values: dict = {}
     if title is not UNSET:
@@ -729,49 +729,49 @@ async def update_task(
         values["thinking_effort"] = _validate_thinking_effort(thinking_effort)
 
     async with AsyncSessionLocal() as db:
-        task = await _owned_task(db, user_id, task_id)
-        if task is None:
-            raise TaskNotFoundError(task_id)
+        autoproject = await _owned_autoproject(db, user_id, autoproject_id)
+        if autoproject is None:
+            raise AutoProjectNotFoundError(autoproject_id)
         changed = False
         for field, value in values.items():
-            if getattr(task, field) != value:
-                setattr(task, field, value)
+            if getattr(autoproject, field) != value:
+                setattr(autoproject, field, value)
                 changed = True
-        if "title" in values and task.title_is_default:
-            task.title_is_default = False
+        if "title" in values and autoproject.title_is_default:
+            autoproject.title_is_default = False
             changed = True
         if not changed:
-            return _task_to_dict(task)
-        task.event_seq = Task.event_seq + 1
-        task.updated_at = _now()
+            return _autoproject_to_dict(autoproject)
+        autoproject.event_seq = AutoProject.event_seq + 1
+        autoproject.updated_at = _now()
         await db.commit()
-        return _task_to_dict(await _reload_task(db, task_id))
+        return _autoproject_to_dict(await _reload_autoproject(db, autoproject_id))
 
 
-async def set_title_from_run(task_id: str, title: str) -> bool:
-    """Apply a run's ``task_title``, only while the title is still the one
+async def set_title_from_run(autoproject_id: str, title: str) -> bool:
+    """Apply a run's ``autoproject_title``, only while the title is still the one
     cut from the first prompt.
 
     The ``title_is_default`` check is in the UPDATE's WHERE and the UPDATE
     clears the flag, so at most one model-side rename ever lands and none
-    after the user renamed the task (invariant 4).
+    after the user renamed the AutoProject (invariant 4).
 
     Returns:
         Whether the title was applied.
 
     Raises:
-        TaskValidationError ``invalid_title``.
+        AutoProjectValidationError ``invalid_title``.
     """
     clean = normalize_title(title)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(Task)
-            .where(Task.id == task_id, Task.title_is_default == True)  # noqa: E712
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id, AutoProject.title_is_default == True)  # noqa: E712
             .values({
-                Task.title: clean,
-                Task.title_is_default: False,
-                Task.event_seq: Task.event_seq + 1,
-                Task.updated_at: _now(),
+                AutoProject.title: clean,
+                AutoProject.title_is_default: False,
+                AutoProject.event_seq: AutoProject.event_seq + 1,
+                AutoProject.updated_at: _now(),
             })
             .execution_options(synchronize_session=False)
         )
@@ -779,95 +779,95 @@ async def set_title_from_run(task_id: str, title: str) -> bool:
         return result.rowcount == 1
 
 
-async def set_task_archived(user_id: int, task_id: str, archived: bool) -> dict:
-    """Archive (True) or unarchive (False) a task.
+async def set_autoproject_archived(user_id: int, autoproject_id: str, archived: bool) -> dict:
+    """Archive (True) or unarchive (False) an AutoProject.
 
-    A no-op when the task is already in that state. Only the flag,
+    A no-op when the AutoProject is already in that state. Only the flag,
     ``event_seq`` and ``updated_at`` change; ``last_activity_at`` is kept so
-    an unarchived task returns to its place in the list.
+    an unarchived AutoProject returns to its place in the list.
 
     Returns:
-        The task dict.
+        The AutoProject dict.
 
     Raises:
-        TaskNotFoundError; TaskRunActiveError when archiving a task with an
-        active run; TaskCapReachedError when unarchiving would exceed
-        ``MAX_ACTIVE_TASKS_PER_USER``.
+        AutoProjectNotFoundError; AutoProjectRunActiveError when archiving an AutoProject with an
+        active run; AutoProjectCapReachedError when unarchiving would exceed
+        ``MAX_ACTIVE_AUTOPROJECTS_PER_USER``.
     """
     archived = bool(archived)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(Task)
+            update(AutoProject)
             .where(
-                Task.id == task_id,
-                Task.user_id == user_id,
-                Task.archived != archived,
+                AutoProject.id == autoproject_id,
+                AutoProject.user_id == user_id,
+                AutoProject.archived != archived,
             )
             .values({
-                Task.archived: archived,
-                Task.event_seq: Task.event_seq + 1,
-                Task.updated_at: _now(),
+                AutoProject.archived: archived,
+                AutoProject.event_seq: AutoProject.event_seq + 1,
+                AutoProject.updated_at: _now(),
             })
             .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
             await db.rollback()
-            task = await _owned_task(db, user_id, task_id)
-            if task is None:
-                raise TaskNotFoundError(task_id)
-            return _task_to_dict(task)
+            autoproject = await _owned_autoproject(db, user_id, autoproject_id)
+            if autoproject is None:
+                raise AutoProjectNotFoundError(autoproject_id)
+            return _autoproject_to_dict(autoproject)
         if archived:
-            active = await _first_active_run(db, task_id)
+            active = await _first_active_run(db, autoproject_id)
             if active is not None:
                 # Read before the rollback expires the instance.
                 summary = _active_run_summary(active)
                 await db.rollback()
-                raise TaskRunActiveError(
+                raise AutoProjectRunActiveError(
                     summary,
-                    f"Run {summary['seq']} of this task is still "
-                    f"{summary['status']}. Stop it before archiving the task.",
+                    f"Run {summary['seq']} of this AutoProject is still "
+                    f"{summary['status']}. Stop it before archiving the AutoProject.",
                 )
-        elif await _count_unarchived(db, user_id) > MAX_ACTIVE_TASKS_PER_USER:
+        elif await _count_unarchived(db, user_id) > MAX_ACTIVE_AUTOPROJECTS_PER_USER:
             await db.rollback()
-            raise TaskCapReachedError(MAX_ACTIVE_TASKS_PER_USER)
+            raise AutoProjectCapReachedError(MAX_ACTIVE_AUTOPROJECTS_PER_USER)
         await db.commit()
-        return _task_to_dict(await _reload_task(db, task_id))
+        return _autoproject_to_dict(await _reload_autoproject(db, autoproject_id))
 
 
-async def delete_task(user_id: int, task_id: str) -> list[str]:
-    """Delete a task row; its runs, brief versions and run conversations
+async def delete_autoproject(user_id: int, autoproject_id: str) -> list[str]:
+    """Delete an AutoProject row; its runs, brief versions and run conversations
     cascade through the foreign keys.
 
-    Returns the ids of every conversation that carried this ``task_id``
+    Returns the ids of every conversation that carried this ``autoproject_id``
     (abandoned run conversations with no run row included), collected
     inside the deleting transaction, so the caller can sweep their
     ``CHATS_DIR`` directories. Neither the filesystem nor a live run is
     touched here: the caller stops an active run first and removes
-    ``TASKS_DIR/<id>`` after.
+    ``AUTOPROJECTS_DIR/<id>`` after.
 
     Raises:
-        TaskNotFoundError.
+        AutoProjectNotFoundError.
     """
     async with AsyncSessionLocal() as db:
         # Take the write lock first so no run conversation can be added
         # between the collection and the delete.
         result = await db.execute(
-            update(Task)
-            .where(Task.id == task_id, Task.user_id == user_id)
-            .values({Task.event_seq: Task.event_seq + 1})
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id, AutoProject.user_id == user_id)
+            .values({AutoProject.event_seq: AutoProject.event_seq + 1})
             .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
             await db.rollback()
-            raise TaskNotFoundError(task_id)
+            raise AutoProjectNotFoundError(autoproject_id)
         conversation_ids = set((await db.execute(
-            select(Conversation.id).where(Conversation.task_id == task_id)
+            select(Conversation.id).where(Conversation.autoproject_id == autoproject_id)
         )).scalars().all())
         conversation_ids.update((await db.execute(
-            select(TaskRun.conversation_id).where(TaskRun.task_id == task_id)
+            select(AutoProjectRun.conversation_id).where(AutoProjectRun.autoproject_id == autoproject_id)
         )).scalars().all())
         # Delete the conversations explicitly too: a run whose conversation
-        # somehow lacks the task_id still loses its transcript row.
+        # somehow lacks the autoproject_id still loses its transcript row.
         if conversation_ids:
             await db.execute(
                 delete(Conversation)
@@ -875,40 +875,40 @@ async def delete_task(user_id: int, task_id: str) -> list[str]:
                 .execution_options(synchronize_session=False)
             )
         await db.execute(
-            delete(Task)
-            .where(Task.id == task_id)
+            delete(AutoProject)
+            .where(AutoProject.id == autoproject_id)
             .execution_options(synchronize_session=False)
         )
         await db.commit()
         return sorted(conversation_ids)
 
 
-async def list_task_conversation_ids(task_id: str) -> list[str]:
-    """Every conversation id that belongs to the task: ``conversations``
-    rows carrying its ``task_id`` (abandoned run conversations included)
+async def list_autoproject_conversation_ids(autoproject_id: str) -> list[str]:
+    """Every conversation id that belongs to the AutoProject: ``conversations``
+    rows carrying its ``autoproject_id`` (abandoned run conversations included)
     plus every run's ``conversation_id``. Not owner-scoped.
 
-    The task-delete service reads it BEFORE :func:`delete_task` to stop
+    The AutoProject-delete service reads it BEFORE :func:`delete_autoproject` to stop
     live turns, cancel wait handles and close approval cards while the
-    conversations still exist; :func:`delete_task` returns the same set
+    conversations still exist; :func:`delete_autoproject` returns the same set
     collected inside its own transaction.
     """
     async with AsyncSessionLocal() as db:
         ids = set((await db.execute(
-            select(Conversation.id).where(Conversation.task_id == task_id)
+            select(Conversation.id).where(Conversation.autoproject_id == autoproject_id)
         )).scalars().all())
         ids.update((await db.execute(
-            select(TaskRun.conversation_id).where(TaskRun.task_id == task_id)
+            select(AutoProjectRun.conversation_id).where(AutoProjectRun.autoproject_id == autoproject_id)
         )).scalars().all())
     return sorted(ids)
 
 
-async def list_task_ids_for_user(user_id: int) -> list[str]:
-    """Every task id of the user, archived included (the account-delete
-    sweep of ``TASKS_DIR``)."""
+async def list_autoproject_ids_for_user(user_id: int) -> list[str]:
+    """Every AutoProject id of the user, archived included (the account-delete
+    sweep of ``AUTOPROJECTS_DIR``)."""
     async with AsyncSessionLocal() as db:
         return list((await db.execute(
-            select(Task.id).where(Task.user_id == user_id).order_by(Task.created_at)
+            select(AutoProject.id).where(AutoProject.user_id == user_id).order_by(AutoProject.created_at)
         )).scalars().all())
 
 
@@ -918,7 +918,7 @@ async def list_task_ids_for_user(user_id: int) -> list[str]:
 
 
 async def allocate_run(
-    task_id: str,
+    autoproject_id: str,
     *,
     conversation_id: str,
     prompt: str,
@@ -928,15 +928,15 @@ async def allocate_run(
 
     One write transaction that bumps ``next_run_seq``, ``event_seq`` and
     ``last_activity_at`` first (taking the write lock), then refuses an
-    archived task or one with an active run (invariant 6; this is the one
+    archived AutoProject or one with an active run (invariant 6; this is the one
     place it is checked), then inserts the run with the pre-bump
     ``next_run_seq`` as its ``seq``. A refusal rolls back, so its seq is not
     consumed; a seq once used is never reused, run deletes included.
 
     Args:
-        task_id: The task.
-        conversation_id: The run's conversation, created for this task
-            (``conversations.task_id == task_id``).
+        autoproject_id: The AutoProject.
+        conversation_id: The run's conversation, created for this AutoProject
+            (``conversations.autoproject_id == autoproject_id``).
         prompt: The user's message, stored verbatim.
         model: The model the run uses.
 
@@ -944,53 +944,53 @@ async def allocate_run(
         The run dict.
 
     Raises:
-        TaskValidationError ``invalid_prompt``, TaskNotFoundError,
-        TaskArchivedError, TaskRunActiveError, TaskRunExistsError (the
+        AutoProjectValidationError ``invalid_prompt``, AutoProjectNotFoundError,
+        AutoProjectArchivedError, AutoProjectRunActiveError, AutoProjectRunExistsError (the
         conversation already has its run).
-        ValueError: the conversation is not a run conversation of this task.
+        ValueError: the conversation is not a run conversation of this AutoProject.
     """
     clean_prompt = _validate_prompt(prompt)
     now = _now()
     async with AsyncSessionLocal() as db:
         bumped = (await db.execute(
-            update(Task)
-            .where(Task.id == task_id)
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id)
             .values({
-                Task.next_run_seq: Task.next_run_seq + 1,
-                Task.event_seq: Task.event_seq + 1,
-                Task.last_activity_at: now,
+                AutoProject.next_run_seq: AutoProject.next_run_seq + 1,
+                AutoProject.event_seq: AutoProject.event_seq + 1,
+                AutoProject.last_activity_at: now,
             })
-            .returning(Task.next_run_seq, Task.archived)
+            .returning(AutoProject.next_run_seq, AutoProject.archived)
             .execution_options(synchronize_session=False)
         )).first()
         if bumped is None:
             await db.rollback()
-            raise TaskNotFoundError(task_id)
+            raise AutoProjectNotFoundError(autoproject_id)
         next_run_seq, archived = bumped
         if archived:
             await db.rollback()
-            raise TaskArchivedError(task_id)
-        active = await _first_active_run(db, task_id)
+            raise AutoProjectArchivedError(autoproject_id)
+        active = await _first_active_run(db, autoproject_id)
         if active is not None:
             summary = _active_run_summary(active)
             await db.rollback()
-            raise TaskRunActiveError(summary)
-        conv_task_id = (await db.execute(
-            select(Conversation.task_id).where(Conversation.id == conversation_id)
+            raise AutoProjectRunActiveError(summary)
+        conv_autoproject_id = (await db.execute(
+            select(Conversation.autoproject_id).where(Conversation.id == conversation_id)
         )).first()
-        if conv_task_id is None or conv_task_id[0] != task_id:
+        if conv_autoproject_id is None or conv_autoproject_id[0] != autoproject_id:
             await db.rollback()
             raise ValueError(
                 f"Conversation {conversation_id} is not a run conversation of "
-                f"task {task_id}."
+                f"AutoProject {autoproject_id}."
             )
-        run = TaskRun(
+        run = AutoProjectRun(
             id=str(uuid.uuid4()),
-            task_id=task_id,
+            autoproject_id=autoproject_id,
             seq=next_run_seq - 1,
             conversation_id=conversation_id,
             prompt=clean_prompt,
-            status=TASK_RUN_STATUS_RUNNING,
+            status=AUTOPROJECT_RUN_STATUS_RUNNING,
             model=model,
             started_at=now,
         )
@@ -1001,15 +1001,15 @@ async def allocate_run(
             # The unique conversation_id index: this conversation already
             # has its run.
             await db.rollback()
-            raise TaskRunExistsError(conversation_id) from None
+            raise AutoProjectRunExistsError(conversation_id) from None
         await db.commit()
-        return _run_to_dict(await db.get(TaskRun, run.id, populate_existing=True))
+        return _run_to_dict(await db.get(AutoProjectRun, run.id, populate_existing=True))
 
 
 async def get_run(run_id: str) -> Optional[dict]:
     """The run dict, or None."""
     async with AsyncSessionLocal() as db:
-        run = await db.get(TaskRun, run_id)
+        run = await db.get(AutoProjectRun, run_id)
         return _run_to_dict(run) if run is not None else None
 
 
@@ -1018,24 +1018,24 @@ async def get_run_by_conversation(conversation_id: str) -> Optional[dict]:
     a run conversation)."""
     async with AsyncSessionLocal() as db:
         run = (await db.execute(
-            select(TaskRun).where(TaskRun.conversation_id == conversation_id)
+            select(AutoProjectRun).where(AutoProjectRun.conversation_id == conversation_id)
         )).scalar_one_or_none()
         return _run_to_dict(run) if run is not None else None
 
 
-async def get_run_by_seq(task_id: str, seq: int) -> Optional[dict]:
-    """Run number ``seq`` of the task, or None (never allocated, or deleted)."""
+async def get_run_by_seq(autoproject_id: str, seq: int) -> Optional[dict]:
+    """Run number ``seq`` of the AutoProject, or None (never allocated, or deleted)."""
     async with AsyncSessionLocal() as db:
         run = (await db.execute(
-            select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.seq == seq)
+            select(AutoProjectRun).where(AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.seq == seq)
         )).scalar_one_or_none()
         return _run_to_dict(run) if run is not None else None
 
 
-async def get_active_run(task_id: str) -> Optional[dict]:
-    """The task's active run (``running`` or ``waiting``), or None."""
+async def get_active_run(autoproject_id: str) -> Optional[dict]:
+    """The AutoProject's active run (``running`` or ``waiting``), or None."""
     async with AsyncSessionLocal() as db:
-        run = await _first_active_run(db, task_id)
+        run = await _first_active_run(db, autoproject_id)
         return _run_to_dict(run) if run is not None else None
 
 
@@ -1051,7 +1051,7 @@ async def set_run_status(
 
     ``expected_from`` is the set of statuses the run must be in, checked in
     the UPDATE's WHERE (default: the active statuses, so a finished run is
-    never reopened). Finished statuses set ``finished_at``. The task's
+    never reopened). Finished statuses set ``finished_at``. The AutoProject's
     ``event_seq`` and ``last_activity_at`` move in the same transaction.
 
     Returns:
@@ -1068,28 +1068,28 @@ async def set_run_status(
             "complete_run()."
         )
     allowed = (
-        TASK_RUN_ACTIVE_STATUSES if expected_from is None else frozenset(expected_from)
+        AUTOPROJECT_RUN_ACTIVE_STATUSES if expected_from is None else frozenset(expected_from)
     )
     now = _now()
-    values: dict = {TaskRun.status: status}
-    if status in TASK_RUN_FINISHED_STATUSES:
-        values[TaskRun.finished_at] = now
-    if status == TASK_RUN_STATUS_FAILED:
-        values[TaskRun.error] = error
+    values: dict = {AutoProjectRun.status: status}
+    if status in AUTOPROJECT_RUN_FINISHED_STATUSES:
+        values[AutoProjectRun.finished_at] = now
+    if status == AUTOPROJECT_RUN_STATUS_FAILED:
+        values[AutoProjectRun.error] = error
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
-            update(TaskRun)
-            .where(TaskRun.id == run_id, TaskRun.status.in_(allowed))
+            update(AutoProjectRun)
+            .where(AutoProjectRun.id == run_id, AutoProjectRun.status.in_(allowed))
             .values(values)
-            .returning(TaskRun.task_id)
+            .returning(AutoProjectRun.autoproject_id)
             .execution_options(synchronize_session=False)
         )).first()
         if row is None:
             await db.rollback()
             return None
-        await _touch_task(db, row[0], activity=True, now=now)
+        await _touch_autoproject(db, row[0], activity=True, now=now)
         await db.commit()
-        return _run_to_dict(await db.get(TaskRun, run_id, populate_existing=True))
+        return _run_to_dict(await db.get(AutoProjectRun, run_id, populate_existing=True))
 
 
 async def complete_run(
@@ -1104,44 +1104,44 @@ async def complete_run(
 
     The entry goes through :func:`validate_run_entry` first, so a refused
     entry writes nothing. ``handoff_missing`` marks an entry the run driver
-    filled in because the run never called ``complete_task_run``.
+    filled in because the run never called ``complete_autoproject_run``.
 
     Returns:
         The run dict.
 
     Raises:
-        TaskValidationError, TaskRunNotFoundError, TaskRunFinishedError.
+        AutoProjectValidationError, AutoProjectRunNotFoundError, AutoProjectRunFinishedError.
     """
     clean_summary, clean_result, clean_notes = validate_run_entry(summary, result, notes)
     now = _now()
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
-            update(TaskRun)
+            update(AutoProjectRun)
             .where(
-                TaskRun.id == run_id,
-                TaskRun.status.in_(TASK_RUN_ACTIVE_STATUSES),
+                AutoProjectRun.id == run_id,
+                AutoProjectRun.status.in_(AUTOPROJECT_RUN_ACTIVE_STATUSES),
             )
             .values({
-                TaskRun.summary: clean_summary,
-                TaskRun.result: clean_result,
-                TaskRun.notes: clean_notes,
-                TaskRun.handoff_missing: bool(handoff_missing),
-                TaskRun.status: TASK_RUN_STATUS_COMPLETED,
-                TaskRun.error: None,
-                TaskRun.finished_at: now,
+                AutoProjectRun.summary: clean_summary,
+                AutoProjectRun.result: clean_result,
+                AutoProjectRun.notes: clean_notes,
+                AutoProjectRun.handoff_missing: bool(handoff_missing),
+                AutoProjectRun.status: AUTOPROJECT_RUN_STATUS_COMPLETED,
+                AutoProjectRun.error: None,
+                AutoProjectRun.finished_at: now,
             })
-            .returning(TaskRun.task_id)
+            .returning(AutoProjectRun.autoproject_id)
             .execution_options(synchronize_session=False)
         )).first()
         if row is None:
             await db.rollback()
-            run = await db.get(TaskRun, run_id, populate_existing=True)
+            run = await db.get(AutoProjectRun, run_id, populate_existing=True)
             if run is None:
-                raise TaskRunNotFoundError(run_id)
-            raise TaskRunFinishedError(run_id, run.status)
-        await _touch_task(db, row[0], activity=True, now=now)
+                raise AutoProjectRunNotFoundError(run_id)
+            raise AutoProjectRunFinishedError(run_id, run.status)
+        await _touch_autoproject(db, row[0], activity=True, now=now)
         await db.commit()
-        return _run_to_dict(await db.get(TaskRun, run_id, populate_existing=True))
+        return _run_to_dict(await db.get(AutoProjectRun, run_id, populate_existing=True))
 
 
 async def save_run_entry(
@@ -1149,45 +1149,45 @@ async def save_run_entry(
 ) -> dict:
     """Save an active run's log entry WITHOUT finishing the run.
 
-    The pending-entry state of a ``brief_conflict`` (chat/tasks/runs.py):
-    ``complete_task_run`` could not apply its brief because the user edited
+    The pending-entry state of a ``brief_conflict`` (chat/autoprojects/runs.py):
+    ``complete_autoproject_run`` could not apply its brief because the user edited
     it during the run, so the entry is kept while the model merges and
     retries. An active run whose ``summary`` is not None has a pending
     entry; :func:`complete_run` later overwrites or finalizes it.
 
     The entry goes through :func:`validate_run_entry` first, so a refused
-    entry writes nothing. ``status``, ``finished_at`` and the task's
+    entry writes nothing. ``status``, ``finished_at`` and the AutoProject's
     ``event_seq`` are left alone: a pending entry is not a thread change.
 
     Returns:
         The run dict.
 
     Raises:
-        TaskValidationError, TaskRunNotFoundError, TaskRunFinishedError.
+        AutoProjectValidationError, AutoProjectRunNotFoundError, AutoProjectRunFinishedError.
     """
     clean_summary, clean_result, clean_notes = validate_run_entry(summary, result, notes)
     async with AsyncSessionLocal() as db:
         result_proxy = await db.execute(
-            update(TaskRun)
+            update(AutoProjectRun)
             .where(
-                TaskRun.id == run_id,
-                TaskRun.status.in_(TASK_RUN_ACTIVE_STATUSES),
+                AutoProjectRun.id == run_id,
+                AutoProjectRun.status.in_(AUTOPROJECT_RUN_ACTIVE_STATUSES),
             )
             .values({
-                TaskRun.summary: clean_summary,
-                TaskRun.result: clean_result,
-                TaskRun.notes: clean_notes,
+                AutoProjectRun.summary: clean_summary,
+                AutoProjectRun.result: clean_result,
+                AutoProjectRun.notes: clean_notes,
             })
             .execution_options(synchronize_session=False)
         )
         if result_proxy.rowcount != 1:
             await db.rollback()
-            run = await db.get(TaskRun, run_id, populate_existing=True)
+            run = await db.get(AutoProjectRun, run_id, populate_existing=True)
             if run is None:
-                raise TaskRunNotFoundError(run_id)
-            raise TaskRunFinishedError(run_id, run.status)
+                raise AutoProjectRunNotFoundError(run_id)
+            raise AutoProjectRunFinishedError(run_id, run.status)
         await db.commit()
-        return _run_to_dict(await db.get(TaskRun, run_id, populate_existing=True))
+        return _run_to_dict(await db.get(AutoProjectRun, run_id, populate_existing=True))
 
 
 async def get_run_context(run_id: str) -> Optional[tuple[str, int]]:
@@ -1196,8 +1196,8 @@ async def get_run_context(run_id: str) -> Optional[tuple[str, int]]:
     is missing."""
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
-            select(TaskRun.context, TaskRun.context_brief_version)
-            .where(TaskRun.id == run_id)
+            select(AutoProjectRun.context, AutoProjectRun.context_brief_version)
+            .where(AutoProjectRun.id == run_id)
         )).first()
     if row is None or row[0] is None or row[1] is None:
         return None
@@ -1207,7 +1207,7 @@ async def get_run_context(run_id: str) -> Optional[tuple[str, int]]:
 async def freeze_run_context(
     run_id: str, *, context: str, brief_version: int,
 ) -> tuple[str, int]:
-    """Freeze the run's starting context: the ``## Task`` block its system
+    """Freeze the run's starting context: the ``## AutoProject`` block its system
     prompt is built with and the brief version that block shows.
 
     One compare-and-set UPDATE that writes both columns only while
@@ -1220,15 +1220,15 @@ async def freeze_run_context(
         The ``(context, context_brief_version)`` stored on the row.
 
     Raises:
-        TaskRunNotFoundError.
+        AutoProjectRunNotFoundError.
         ValueError: ``context`` is not a string or is over
-            ``TASK_CONTEXT_MAX_CHARS``, or ``brief_version`` is not a
+            ``AUTOPROJECT_CONTEXT_MAX_CHARS``, or ``brief_version`` is not a
             non-negative integer.
     """
-    if not isinstance(context, str) or len(context) > TASK_CONTEXT_MAX_CHARS:
+    if not isinstance(context, str) or len(context) > AUTOPROJECT_CONTEXT_MAX_CHARS:
         raise ValueError(
             "context must be a string of at most "
-            f"{TASK_CONTEXT_MAX_CHARS} characters."
+            f"{AUTOPROJECT_CONTEXT_MAX_CHARS} characters."
         )
     if (
         isinstance(brief_version, bool) or not isinstance(brief_version, int)
@@ -1237,11 +1237,11 @@ async def freeze_run_context(
         raise ValueError("brief_version must be a non-negative integer.")
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(TaskRun)
-            .where(TaskRun.id == run_id, TaskRun.context.is_(None))
+            update(AutoProjectRun)
+            .where(AutoProjectRun.id == run_id, AutoProjectRun.context.is_(None))
             .values({
-                TaskRun.context: context,
-                TaskRun.context_brief_version: brief_version,
+                AutoProjectRun.context: context,
+                AutoProjectRun.context_brief_version: brief_version,
             })
             .execution_options(synchronize_session=False)
         )
@@ -1250,45 +1250,45 @@ async def freeze_run_context(
             return context, brief_version
         await db.rollback()
         row = (await db.execute(
-            select(TaskRun.context, TaskRun.context_brief_version)
-            .where(TaskRun.id == run_id)
+            select(AutoProjectRun.context, AutoProjectRun.context_brief_version)
+            .where(AutoProjectRun.id == run_id)
         )).first()
         if row is None:
-            raise TaskRunNotFoundError(run_id)
+            raise AutoProjectRunNotFoundError(run_id)
         return row[0], row[1]
 
 
-async def delete_run(user_id: int, task_id: str, run_id: str) -> str:
+async def delete_run(user_id: int, autoproject_id: str, run_id: str) -> str:
     """Delete a finished run's log entry together with its conversation.
 
     Deletes the conversation row (the run row cascades from it) and returns
     its id for the caller's ``CHATS_DIR`` sweep. ``next_run_seq`` is left
-    alone, so the seq is never reused. Bumps the task's ``event_seq``.
+    alone, so the seq is never reused. Bumps the AutoProject's ``event_seq``.
 
     Raises:
-        TaskNotFoundError, TaskRunNotFoundError (not a run of that task),
-        TaskRunActiveError (the run is still running or waiting).
+        AutoProjectNotFoundError, AutoProjectRunNotFoundError (not a run of that AutoProject),
+        AutoProjectRunActiveError (the run is still running or waiting).
     """
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(Task)
-            .where(Task.id == task_id, Task.user_id == user_id)
-            .values({Task.event_seq: Task.event_seq + 1})
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id, AutoProject.user_id == user_id)
+            .values({AutoProject.event_seq: AutoProject.event_seq + 1})
             .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
             await db.rollback()
-            raise TaskNotFoundError(task_id)
+            raise AutoProjectNotFoundError(autoproject_id)
         run = (await db.execute(
-            select(TaskRun).where(TaskRun.id == run_id, TaskRun.task_id == task_id)
+            select(AutoProjectRun).where(AutoProjectRun.id == run_id, AutoProjectRun.autoproject_id == autoproject_id)
         )).scalar_one_or_none()
         if run is None:
             await db.rollback()
-            raise TaskRunNotFoundError(run_id)
-        if run.status in TASK_RUN_ACTIVE_STATUSES:
+            raise AutoProjectRunNotFoundError(run_id)
+        if run.status in AUTOPROJECT_RUN_ACTIVE_STATUSES:
             summary = _active_run_summary(run)
             await db.rollback()
-            raise TaskRunActiveError(
+            raise AutoProjectRunActiveError(
                 summary,
                 f"Run {summary['seq']} is still {summary['status']}. Stop it "
                 "before deleting it.",
@@ -1302,8 +1302,8 @@ async def delete_run(user_id: int, task_id: str, run_id: str) -> str:
         # The FK cascade already removed it; this covers a database opened
         # without PRAGMA foreign_keys.
         await db.execute(
-            delete(TaskRun)
-            .where(TaskRun.id == run_id)
+            delete(AutoProjectRun)
+            .where(AutoProjectRun.id == run_id)
             .execution_options(synchronize_session=False)
         )
         await db.commit()
@@ -1311,7 +1311,7 @@ async def delete_run(user_id: int, task_id: str, run_id: str) -> str:
 
 
 async def list_runs_page(
-    task_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
+    autoproject_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
 ) -> dict:
     """One page of the thread, newest first, keyset-paged on ``seq``.
 
@@ -1322,12 +1322,12 @@ async def list_runs_page(
         None when there is nothing older.
     """
     limit = max(1, min(int(limit), _RUNS_PAGE_MAX_LIMIT))
-    stmt = select(TaskRun).where(TaskRun.task_id == task_id)
+    stmt = select(AutoProjectRun).where(AutoProjectRun.autoproject_id == autoproject_id)
     if before_seq is not None:
-        stmt = stmt.where(TaskRun.seq < before_seq)
+        stmt = stmt.where(AutoProjectRun.seq < before_seq)
     async with AsyncSessionLocal() as db:
         runs = (await db.execute(
-            stmt.order_by(TaskRun.seq.desc()).limit(limit + 1)
+            stmt.order_by(AutoProjectRun.seq.desc()).limit(limit + 1)
         )).scalars().all()
     has_more = len(runs) > limit
     runs = runs[:limit]
@@ -1337,66 +1337,66 @@ async def list_runs_page(
     }
 
 
-async def get_run_seqs(task_id: str, run_ids: Iterable[str]) -> dict[str, int]:
-    """``{run_id: seq}`` for the runs of ``task_id`` among ``run_ids`` (one
-    query). Deleted runs and runs of another task are absent. The thread
+async def get_run_seqs(autoproject_id: str, run_ids: Iterable[str]) -> dict[str, int]:
+    """``{run_id: seq}`` for the runs of ``autoproject_id`` among ``run_ids`` (one
+    query). Deleted runs and runs of another AutoProject are absent. The thread
     resolves brief sources ``run:<id>`` to "run N" with it."""
     ids = sorted({rid for rid in run_ids if isinstance(rid, str) and rid})
     if not ids:
         return {}
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
-            select(TaskRun.id, TaskRun.seq)
-            .where(TaskRun.task_id == task_id, TaskRun.id.in_(ids))
+            select(AutoProjectRun.id, AutoProjectRun.seq)
+            .where(AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.id.in_(ids))
         )).all()
     return {run_id: seq for run_id, seq in rows}
 
 
-async def list_runs(task_id: str, *, offset: int = 0, limit: int = 50) -> list[dict]:
-    """The task's runs newest first, offset-paged (``limit`` clamped to
-    1..500), results included. For the ``list_task_runs`` tool; the
+async def list_runs(autoproject_id: str, *, offset: int = 0, limit: int = 50) -> list[dict]:
+    """The AutoProject's runs newest first, offset-paged (``limit`` clamped to
+    1..500), results included. For the ``list_autoproject_runs`` tool; the
     context builder uses :func:`list_context_runs`."""
     offset = max(0, int(offset))
     limit = max(1, min(int(limit), _LIST_RUNS_MAX_LIMIT))
     async with AsyncSessionLocal() as db:
         runs = (await db.execute(
-            select(TaskRun)
-            .where(TaskRun.task_id == task_id)
-            .order_by(TaskRun.seq.desc())
+            select(AutoProjectRun)
+            .where(AutoProjectRun.autoproject_id == autoproject_id)
+            .order_by(AutoProjectRun.seq.desc())
             .offset(offset)
             .limit(limit)
         )).scalars().all()
         return [_run_to_dict(r) for r in runs]
 
 
-async def list_context_runs(task_id: str, *, before_seq: int, limit: int) -> list[dict]:
-    """The runs the task context of run ``before_seq`` shows: ``seq <
+async def list_context_runs(autoproject_id: str, *, before_seq: int, limit: int) -> list[dict]:
+    """The runs the AutoProject context of run ``before_seq`` shows: ``seq <
     before_seq``, newest first, at most ``limit`` (clamped to 1..500).
 
-    The ``result`` column (up to ``TASK_RUN_RESULT_MAX_CHARS`` each) is
+    The ``result`` column (up to ``AUTOPROJECT_RUN_RESULT_MAX_CHARS`` each) is
     never loaded: each row is the run dict without its ``result`` key. The
-    context builder (chat/tasks/context.py) reads no result, so loading the
+    context builder (chat/autoprojects/context.py) reads no result, so loading the
     window and the index costs no more than their prompts, summaries and
     notes.
     """
     limit = max(1, min(int(limit), _LIST_RUNS_MAX_LIMIT))
     async with AsyncSessionLocal() as db:
         runs = (await db.execute(
-            select(TaskRun)
-            .options(defer(TaskRun.result, raiseload=True))
-            .where(TaskRun.task_id == task_id, TaskRun.seq < int(before_seq))
-            .order_by(TaskRun.seq.desc())
+            select(AutoProjectRun)
+            .options(defer(AutoProjectRun.result, raiseload=True))
+            .where(AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.seq < int(before_seq))
+            .order_by(AutoProjectRun.seq.desc())
             .limit(limit)
         )).scalars().all()
         return [_run_to_dict(r, include_result=False) for r in runs]
 
 
 async def list_run_index(
-    task_id: str, *, offset: int = 0, limit: int = 50, prompt_chars: int = 200,
+    autoproject_id: str, *, offset: int = 0, limit: int = 50, prompt_chars: int = 200,
 ) -> list[dict]:
-    """One page of the task's run log as index rows, newest first,
-    offset-paged (``limit`` clamped to 1..500). For the ``list_task_runs``
-    tool (chat/gemini_api/tool_handlers/task_runs.py).
+    """One page of the AutoProject's run log as index rows, newest first,
+    offset-paged (``limit`` clamped to 1..500). For the ``list_autoproject_runs``
+    tool (chat/gemini_api/tool_handlers/autoproject_runs.py).
 
     Reads only the short columns: ``result``, ``notes``, ``error`` and the
     frozen ``context`` are never loaded, and of the prompt only its first
@@ -1415,12 +1415,12 @@ async def list_run_index(
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(
-                TaskRun.id, TaskRun.seq, TaskRun.status, TaskRun.summary,
-                TaskRun.handoff_missing, TaskRun.started_at, TaskRun.finished_at,
-                func.substr(TaskRun.prompt, 1, max(0, int(prompt_chars))),
+                AutoProjectRun.id, AutoProjectRun.seq, AutoProjectRun.status, AutoProjectRun.summary,
+                AutoProjectRun.handoff_missing, AutoProjectRun.started_at, AutoProjectRun.finished_at,
+                func.substr(AutoProjectRun.prompt, 1, max(0, int(prompt_chars))),
             )
-            .where(TaskRun.task_id == task_id)
-            .order_by(TaskRun.seq.desc())
+            .where(AutoProjectRun.autoproject_id == autoproject_id)
+            .order_by(AutoProjectRun.seq.desc())
             .offset(offset)
             .limit(limit)
         )).all()
@@ -1439,12 +1439,12 @@ async def list_run_index(
     ]
 
 
-async def count_runs(task_id: str, *, before_seq: Optional[int] = None) -> int:
-    """How many runs the task has (deleted runs not counted); with
+async def count_runs(autoproject_id: str, *, before_seq: Optional[int] = None) -> int:
+    """How many runs the AutoProject has (deleted runs not counted); with
     ``before_seq``, only those with ``seq < before_seq``."""
-    stmt = select(func.count()).select_from(TaskRun).where(TaskRun.task_id == task_id)
+    stmt = select(func.count()).select_from(AutoProjectRun).where(AutoProjectRun.autoproject_id == autoproject_id)
     if before_seq is not None:
-        stmt = stmt.where(TaskRun.seq < int(before_seq))
+        stmt = stmt.where(AutoProjectRun.seq < int(before_seq))
     async with AsyncSessionLocal() as db:
         return (await db.execute(stmt)).scalar_one()
 
@@ -1453,7 +1453,7 @@ async def fail_interrupted_runs(error: str = "interrupted by a restart") -> list
     """Startup sweep: mark every ``running`` run ``failed`` with ``error``.
 
     ``waiting`` runs are left alone: their wait handles survive a restart
-    and resume them. Each affected task's ``event_seq`` and
+    and resume them. Each affected AutoProject's ``event_seq`` and
     ``last_activity_at`` move in the same transaction.
 
     Returns:
@@ -1462,26 +1462,26 @@ async def fail_interrupted_runs(error: str = "interrupted by a restart") -> list
     now = _now()
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
-            update(TaskRun)
-            .where(TaskRun.status == TASK_RUN_STATUS_RUNNING)
+            update(AutoProjectRun)
+            .where(AutoProjectRun.status == AUTOPROJECT_RUN_STATUS_RUNNING)
             .values({
-                TaskRun.status: TASK_RUN_STATUS_FAILED,
-                TaskRun.error: error,
-                TaskRun.finished_at: now,
+                AutoProjectRun.status: AUTOPROJECT_RUN_STATUS_FAILED,
+                AutoProjectRun.error: error,
+                AutoProjectRun.finished_at: now,
             })
-            .returning(TaskRun.id, TaskRun.task_id)
+            .returning(AutoProjectRun.id, AutoProjectRun.autoproject_id)
             .execution_options(synchronize_session=False)
         )).all()
         if not rows:
             await db.rollback()
             return []
-        for task_id in {task_id for _, task_id in rows}:
-            await _touch_task(db, task_id, activity=True, now=now)
+        for autoproject_id in {autoproject_id for _, autoproject_id in rows}:
+            await _touch_autoproject(db, autoproject_id, activity=True, now=now)
         await db.commit()
         runs = (await db.execute(
-            select(TaskRun)
-            .where(TaskRun.id.in_([run_id for run_id, _ in rows]))
-            .order_by(TaskRun.task_id, TaskRun.seq)
+            select(AutoProjectRun)
+            .where(AutoProjectRun.id.in_([run_id for run_id, _ in rows]))
+            .order_by(AutoProjectRun.autoproject_id, AutoProjectRun.seq)
             .execution_options(populate_existing=True)
         )).scalars().all()
         return [_run_to_dict(r) for r in runs]
@@ -1493,34 +1493,34 @@ async def fail_interrupted_runs(error: str = "interrupted by a restart") -> list
 
 
 async def _write_brief(
-    db, task_id: str, content: str, *, expected_version: int, source: str,
+    db, autoproject_id: str, content: str, *, expected_version: int, source: str,
 ) -> dict:
     """The one brief write, inside the caller's session: conditional UPDATE
     on the version token, the new version's row, then pruning to
-    ``TASK_BRIEF_MAX_VERSIONS``. Commits on success, rolls back on refusal.
+    ``AUTOPROJECT_BRIEF_MAX_VERSIONS``. Commits on success, rolls back on refusal.
     """
     now = _now()
     result = await db.execute(
-        update(Task)
-        .where(Task.id == task_id, Task.brief_version == expected_version)
+        update(AutoProject)
+        .where(AutoProject.id == autoproject_id, AutoProject.brief_version == expected_version)
         .values({
-            Task.brief: content,
-            Task.brief_version: Task.brief_version + 1,
-            Task.brief_updated_at: now,
-            Task.event_seq: Task.event_seq + 1,
-            Task.updated_at: now,
+            AutoProject.brief: content,
+            AutoProject.brief_version: AutoProject.brief_version + 1,
+            AutoProject.brief_updated_at: now,
+            AutoProject.event_seq: AutoProject.event_seq + 1,
+            AutoProject.updated_at: now,
         })
         .execution_options(synchronize_session=False)
     )
     if result.rowcount != 1:
         await db.rollback()
-        task = await _reload_task(db, task_id)
-        if task is None:
-            raise TaskNotFoundError(task_id)
-        raise StaleBriefError(_brief_state(task))
+        autoproject = await _reload_autoproject(db, autoproject_id)
+        if autoproject is None:
+            raise AutoProjectNotFoundError(autoproject_id)
+        raise StaleBriefError(_brief_state(autoproject))
     new_version = expected_version + 1
-    db.add(TaskBriefVersion(
-        task_id=task_id,
+    db.add(AutoProjectBriefVersion(
+        autoproject_id=autoproject_id,
         version=new_version,
         content=content,
         source=source,
@@ -1528,33 +1528,33 @@ async def _write_brief(
     ))
     await db.flush()
     kept = (
-        select(TaskBriefVersion.id)
-        .where(TaskBriefVersion.task_id == task_id)
-        .order_by(TaskBriefVersion.version.desc())
-        .limit(TASK_BRIEF_MAX_VERSIONS)
+        select(AutoProjectBriefVersion.id)
+        .where(AutoProjectBriefVersion.autoproject_id == autoproject_id)
+        .order_by(AutoProjectBriefVersion.version.desc())
+        .limit(AUTOPROJECT_BRIEF_MAX_VERSIONS)
     )
     await db.execute(
-        delete(TaskBriefVersion)
+        delete(AutoProjectBriefVersion)
         .where(
-            TaskBriefVersion.task_id == task_id,
-            TaskBriefVersion.id.not_in(kept),
+            AutoProjectBriefVersion.autoproject_id == autoproject_id,
+            AutoProjectBriefVersion.id.not_in(kept),
         )
         .execution_options(synchronize_session=False)
     )
     await db.commit()
-    return _brief_state(await _reload_task(db, task_id))
+    return _brief_state(await _reload_autoproject(db, autoproject_id))
 
 
 async def set_brief(
-    task_id: str, content: str, *, expected_version: int, source: str,
+    autoproject_id: str, content: str, *, expected_version: int, source: str,
 ) -> dict:
     """Write a new brief.
 
     In one transaction: the conditional UPDATE (``brief_version`` must still
-    be ``expected_version``; it becomes ``expected_version + 1``), a
-    ``task_brief_versions`` row holding the new text under the new version
-    with ``source`` as its author, and pruning of that task's versions
-    beyond ``TASK_BRIEF_MAX_VERSIONS`` (oldest first). Not owner-scoped:
+    be ``expected_version``; it becomes ``expected_version + 1``), an
+    ``autoproject_brief_versions`` row holding the new text under the new version
+    with ``source`` as its author, and pruning of that AutoProject's versions
+    beyond ``AUTOPROJECT_BRIEF_MAX_VERSIONS`` (oldest first). Not owner-scoped:
     callers do the access check.
 
     Args:
@@ -1566,8 +1566,8 @@ async def set_brief(
         ``{brief, brief_version, brief_updated_at}`` after the write.
 
     Raises:
-        TaskValidationError, StaleBriefError (``.current`` is the brief as
-        it now is), TaskNotFoundError.
+        AutoProjectValidationError, StaleBriefError (``.current`` is the brief as
+        it now is), AutoProjectNotFoundError.
         ValueError: malformed ``source`` or ``expected_version``.
     """
     clean = validate_brief(content)
@@ -1575,24 +1575,24 @@ async def set_brief(
     _validate_expected_version(expected_version)
     async with AsyncSessionLocal() as db:
         return await _write_brief(
-            db, task_id, clean, expected_version=expected_version, source=source,
+            db, autoproject_id, clean, expected_version=expected_version, source=source,
         )
 
 
-async def list_brief_versions(task_id: str, *, excerpt_chars: int = 200) -> list[dict]:
+async def list_brief_versions(autoproject_id: str, *, excerpt_chars: int = 200) -> list[dict]:
     """The stored brief versions, newest first, as ``{version, source,
     created_at, excerpt}`` (the text with whitespace collapsed, cut to
     ``excerpt_chars`` with a trailing "…" when cut)."""
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(
-                TaskBriefVersion.version,
-                TaskBriefVersion.source,
-                TaskBriefVersion.created_at,
-                TaskBriefVersion.content,
+                AutoProjectBriefVersion.version,
+                AutoProjectBriefVersion.source,
+                AutoProjectBriefVersion.created_at,
+                AutoProjectBriefVersion.content,
             )
-            .where(TaskBriefVersion.task_id == task_id)
-            .order_by(TaskBriefVersion.version.desc())
+            .where(AutoProjectBriefVersion.autoproject_id == autoproject_id)
+            .order_by(AutoProjectBriefVersion.version.desc())
         )).all()
     return [
         {
@@ -1605,14 +1605,14 @@ async def list_brief_versions(task_id: str, *, excerpt_chars: int = 200) -> list
     ]
 
 
-async def get_brief_version(task_id: str, version: int) -> Optional[dict]:
+async def get_brief_version(autoproject_id: str, version: int) -> Optional[dict]:
     """One stored version as ``{version, source, created_at, content}``, or
     None (never written, or pruned)."""
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
-            select(TaskBriefVersion).where(
-                TaskBriefVersion.task_id == task_id,
-                TaskBriefVersion.version == version,
+            select(AutoProjectBriefVersion).where(
+                AutoProjectBriefVersion.autoproject_id == autoproject_id,
+                AutoProjectBriefVersion.version == version,
             )
         )).scalar_one_or_none()
         if row is None:
@@ -1625,21 +1625,21 @@ async def get_brief_version(task_id: str, version: int) -> Optional[dict]:
         }
 
 
-async def get_brief_version_source(task_id: str, version: int) -> Optional[str]:
+async def get_brief_version_source(autoproject_id: str, version: int) -> Optional[str]:
     """The ``source`` of stored version ``version`` (``ui``, ``run:<id>``,
     ``restore:<n>``), or None (version 0, never written, or pruned). Reads
     no brief text."""
     async with AsyncSessionLocal() as db:
         return (await db.execute(
-            select(TaskBriefVersion.source).where(
-                TaskBriefVersion.task_id == task_id,
-                TaskBriefVersion.version == version,
+            select(AutoProjectBriefVersion.source).where(
+                AutoProjectBriefVersion.autoproject_id == autoproject_id,
+                AutoProjectBriefVersion.version == version,
             )
         )).scalar_one_or_none()
 
 
 async def restore_brief_version(
-    task_id: str, version: int, *, expected_version: int,
+    autoproject_id: str, version: int, *, expected_version: int,
 ) -> dict:
     """Write stored version ``version``'s text as a new brief version with
     ``source = "restore:<version>"``, through the same transaction as
@@ -1650,23 +1650,23 @@ async def restore_brief_version(
         ``{brief, brief_version, brief_updated_at}`` after the write.
 
     Raises:
-        TaskNotFoundError, BriefVersionNotFoundError, StaleBriefError,
-        TaskValidationError (the stored text is over today's cap).
+        AutoProjectNotFoundError, BriefVersionNotFoundError, StaleBriefError,
+        AutoProjectValidationError (the stored text is over today's cap).
     """
     _validate_expected_version(expected_version)
     async with AsyncSessionLocal() as db:
         content = (await db.execute(
-            select(TaskBriefVersion.content).where(
-                TaskBriefVersion.task_id == task_id,
-                TaskBriefVersion.version == version,
+            select(AutoProjectBriefVersion.content).where(
+                AutoProjectBriefVersion.autoproject_id == autoproject_id,
+                AutoProjectBriefVersion.version == version,
             )
         )).scalar_one_or_none()
         if content is None:
-            if await db.get(Task, task_id) is None:
-                raise TaskNotFoundError(task_id)
+            if await db.get(AutoProject, autoproject_id) is None:
+                raise AutoProjectNotFoundError(autoproject_id)
             raise BriefVersionNotFoundError(version)
         return await _write_brief(
-            db, task_id, validate_brief(content),
+            db, autoproject_id, validate_brief(content),
             expected_version=expected_version, source=f"restore:{int(version)}",
         )
 
@@ -1676,37 +1676,37 @@ async def restore_brief_version(
 # ---------------------------------------------------------------------------
 
 
-async def bump_event_seq(task_id: str) -> Optional[int]:
+async def bump_event_seq(autoproject_id: str) -> Optional[int]:
     """Bump ``event_seq`` for a thread change made outside this module (a
     question posted or answered). Returns the new seq, or None when the
-    task is gone."""
+    AutoProject is gone."""
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
-            update(Task)
-            .where(Task.id == task_id)
-            .values({Task.event_seq: Task.event_seq + 1})
-            .returning(Task.event_seq)
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id)
+            .values({AutoProject.event_seq: AutoProject.event_seq + 1})
+            .returning(AutoProject.event_seq)
             .execution_options(synchronize_session=False)
         )).first()
         await db.commit()
         return row[0] if row is not None else None
 
 
-async def mark_task_unread(task_id: str) -> bool:
+async def mark_autoproject_unread(autoproject_id: str) -> bool:
     """Raise ``unread_seq`` to ``event_seq`` (the run left something for the
     user to look at). Returns whether it moved; it never lowers."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(Task)
-            .where(Task.id == task_id, Task.event_seq > Task.unread_seq)
-            .values({Task.unread_seq: Task.event_seq})
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id, AutoProject.event_seq > AutoProject.unread_seq)
+            .values({AutoProject.unread_seq: AutoProject.event_seq})
             .execution_options(synchronize_session=False)
         )
         await db.commit()
         return result.rowcount == 1
 
 
-async def mark_task_read(user_id: int, task_id: str, *, up_to_seq: int) -> bool:
+async def mark_autoproject_read(user_id: int, autoproject_id: str, *, up_to_seq: int) -> bool:
     """Acknowledge the thread up to ``up_to_seq``: ``read_seq`` becomes
     ``max(read_seq, min(up_to_seq, event_seq))``, so a late or repeated
     acknowledgement never hides newer output.
@@ -1715,20 +1715,20 @@ async def mark_task_read(user_id: int, task_id: str, *, up_to_seq: int) -> bool:
         Whether ``read_seq`` moved.
 
     Raises:
-        TaskNotFoundError: missing, or owned by someone else.
+        AutoProjectNotFoundError: missing, or owned by someone else.
     """
-    target = func.min(literal(int(up_to_seq)), Task.event_seq)
+    target = func.min(literal(int(up_to_seq)), AutoProject.event_seq)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            update(Task)
-            .where(Task.id == task_id, Task.user_id == user_id, target > Task.read_seq)
-            .values({Task.read_seq: target})
+            update(AutoProject)
+            .where(AutoProject.id == autoproject_id, AutoProject.user_id == user_id, target > AutoProject.read_seq)
+            .values({AutoProject.read_seq: target})
             .execution_options(synchronize_session=False)
         )
         if result.rowcount == 1:
             await db.commit()
             return True
         await db.rollback()
-        if await _owned_task(db, user_id, task_id) is None:
-            raise TaskNotFoundError(task_id)
+        if await _owned_autoproject(db, user_id, autoproject_id) is None:
+            raise AutoProjectNotFoundError(autoproject_id)
         return False

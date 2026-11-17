@@ -15,7 +15,7 @@ from typing import Optional
 from sqlalchemy import Select, and_, delete, func, or_, select
 
 from db.engine import AsyncSessionLocal
-from db.models import Conversation, Project, TaskRun, User
+from db.models import Conversation, Project, AutoProjectRun, User
 
 
 async def create_conversation(
@@ -27,7 +27,7 @@ async def create_conversation(
     model: Optional[str] = None,
     origin: Optional[str] = None,
     custom_name: Optional[str] = None,
-    task_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
 ) -> dict:
     """Insert a new conversations row, optionally linked to a project.
 
@@ -44,8 +44,8 @@ async def create_conversation(
             runs are named after their routine). Truncated to
             ``MAX_CONVERSATION_NAME_LENGTH``; None leaves the auto-title path
             in charge.
-        task_id: Optional Quest Task id when the conversation is one run of
-            that task (origin ``"task"``). Such a row never has a
+        autoproject_id: Optional AutoProject id when the conversation is one run of
+            that AutoProject (origin ``"autoproject"``). Such a row never has a
             ``project_id``.
 
     Returns:
@@ -62,7 +62,7 @@ async def create_conversation(
             model=model,
             origin=origin,
             custom_name=custom_name,
-            task_id=task_id,
+            autoproject_id=autoproject_id,
             created_at=created_at,
             last_message_at=created_at,  # initialised to created_at; updated on first message
         )
@@ -146,7 +146,7 @@ async def list_conversations_meta(
     include_slack: bool = True,
     include_inference: bool = True,
     include_routines: bool = True,
-    include_task_runs: bool = False,
+    include_autoproject_runs: bool = False,
     limit: Optional[int] = None,
     before: Optional[tuple[datetime, str]] = None,
 ) -> list[dict]:
@@ -166,9 +166,9 @@ async def list_conversations_meta(
         include_routines: If False, drop conversations a routine created
             (``routine_id`` set). Runs whose routine was since deleted
             have ``routine_id`` nulled and are kept.
-        include_task_runs: If True, keep the run conversations of Quest
-            Tasks (``task_id`` set). Off by default: a run is shown in its
-            task's thread and never appears in the Conversations sidebar or
+        include_autoproject_runs: If True, keep the run conversations of
+            AutoProjects (``autoproject_id`` set). Off by default: a run is shown in its
+            AutoProject's thread and never appears in the Conversations sidebar or
             search. Account delete passes True so their directories are
             swept too.
         limit: Optional row cap (already-validated by the caller).
@@ -201,8 +201,8 @@ async def list_conversations_meta(
             )
         if not include_routines:
             stmt = stmt.where(Conversation.routine_id.is_(None))
-        if not include_task_runs:
-            stmt = stmt.where(Conversation.task_id.is_(None))
+        if not include_autoproject_runs:
+            stmt = stmt.where(Conversation.autoproject_id.is_(None))
         if before is not None:
             before_ts, before_id = before
             stmt = stmt.where(
@@ -282,9 +282,9 @@ async def record_messages_appended(
 # Origins whose conversations take unread state: the ones the owner reads and
 # answers in the web UI. Slack, inference API and cross-user subagent
 # conversations are driven and read elsewhere (their web view is read-only),
-# so a dot on them would never clear in normal use. Quest Task runs (origin
-# "task") are left out too: unread is tracked on the task, not on each run's
-# conversation, and the unread queries below also skip ``task_id`` rows.
+# so a dot on them would never clear in normal use. AutoProject runs (origin
+# "autoproject") are left out too: unread is tracked on the AutoProject, not on each run's
+# conversation, and the unread queries below also skip ``autoproject_id`` rows.
 UNREAD_ORIGINS = (None, "web")
 
 
@@ -409,8 +409,8 @@ async def list_unread_summaries() -> list[dict]:
     reminder (``chat/slack_notifier.py``).
 
     Conversations in an archived project are left out: the project is
-    hidden, so the reminder should not send the user there. Quest Task run
-    conversations are left out as well; their unread state lives on the task.
+    hidden, so the reminder should not send the user there. AutoProject run
+    conversations are left out as well; their unread state lives on the AutoProject.
 
     Returns:
         ``[{"user_id", "unread_count", "oldest_unread_at"}, ...]``.
@@ -428,7 +428,7 @@ async def list_unread_summaries() -> list[dict]:
             .where(
                 _is_unread(),
                 _outside_archived_projects(),
-                Conversation.task_id.is_(None),
+                Conversation.autoproject_id.is_(None),
             )
             .group_by(Conversation.user_id)
         )
@@ -455,7 +455,7 @@ async def list_unread_conversations(user_id: int, limit: int) -> list[dict]:
                 Conversation.user_id == user_id,
                 _is_unread(),
                 _outside_archived_projects(),
-                Conversation.task_id.is_(None),
+                Conversation.autoproject_id.is_(None),
             )
             .order_by(Conversation.last_message_at.desc(), Conversation.id.desc())
             .limit(limit)
@@ -515,7 +515,7 @@ async def set_conversation_project(
     Only standalone conversations can be moved -- a conversation that already
     belongs to a project is left untouched (its workspace files live in the
     old project's shared workspace, so re-pointing the row alone would be
-    wrong). A Quest Task run (``task_id`` set) is refused too: a task run
+    wrong). An AutoProject run (``autoproject_id`` set) is refused too: an AutoProject run
     never belongs to a project.
 
     Args:
@@ -525,7 +525,7 @@ async def set_conversation_project(
 
     Returns:
         Updated conversation dict, or None if not found / not owned /
-        already in a project / a task run.
+        already in a project / an AutoProject run.
     """
     async with AsyncSessionLocal() as db:
         conv = await db.get(Conversation, conversation_id)
@@ -533,7 +533,7 @@ async def set_conversation_project(
             conv is None
             or conv.user_id != user_id
             or conv.project_id is not None
-            or conv.task_id is not None
+            or conv.autoproject_id is not None
         ):
             return None
         conv.project_id = project_id
@@ -706,15 +706,15 @@ def _conversation_to_dict(conv: Conversation) -> dict:
         "auto_title": conv.auto_title,
         "origin": conv.origin,
         "flags": conv.flags or [],
-        "task_id": conv.task_id,
+        "autoproject_id": conv.autoproject_id,
     }
 
 
-async def delete_abandoned_task_conversations(created_before: datetime) -> list[str]:
-    """Delete Quest Task conversations that never got a run row.
+async def delete_abandoned_autoproject_conversations(created_before: datetime) -> list[str]:
+    """Delete AutoProject conversations that never got a run row.
 
-    ``POST /tasks/{id}/runs`` creates the run's conversation before the
-    first message allocates its ``task_runs`` row; a start the user never
+    ``POST /autoprojects/{id}/runs`` creates the run's conversation before the
+    first message allocates its ``autoproject_runs`` row; a start the user never
     followed with a message leaves an empty conversation behind. The startup
     sweep calls this to drop those rows once they are older than
     ``created_before``.
@@ -733,14 +733,14 @@ async def delete_abandoned_task_conversations(created_before: datetime) -> list[
         The deleted conversation ids. The caller removes their
         ``CHATS_DIR`` directories; no filesystem work happens here.
     """
-    no_run = ~select(TaskRun.id).where(
-        TaskRun.conversation_id == Conversation.id
+    no_run = ~select(AutoProjectRun.id).where(
+        AutoProjectRun.conversation_id == Conversation.id
     ).exists()
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             delete(Conversation)
             .where(
-                Conversation.task_id.isnot(None),
+                Conversation.autoproject_id.isnot(None),
                 Conversation.created_at < created_before,
                 no_run,
             )

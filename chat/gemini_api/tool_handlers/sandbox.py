@@ -22,7 +22,7 @@ from chat.sandbox_tokens import TOKEN_GRACE_SECONDS, sandbox_token_lease
 from chat.gemini_api.tool_handlers._common import (
     conversation_workspace_dir,
     project_workspace_dir,
-    task_workspace_dir,
+    autoproject_workspace_dir,
     _publish_file_list_changed,
 )
 
@@ -36,7 +36,7 @@ def _build_script_podman_cmd(
     public: bool = False,
     interactive: bool = False,
     project_dir=None,
-    task_dir=None,
+    autoproject_dir=None,
 ) -> list[str]:
     """Build the ``podman run`` argv for a sandboxed script execution.
 
@@ -45,11 +45,10 @@ def _build_script_podman_cmd(
     working directory) in every conversation, plus, for project
     conversations, the project workspace at ``/project`` with the SHARED
     ``:z`` relabel, since sibling conversations of one project can run
-    containers concurrently against the same host directory, and for task
-    runs of a Quest Task the task workspace at ``/task``, also ``:z``
-    (runs of one task share it, and later parallel runs may use it at the
+    containers concurrently against the same host directory, and for runs of an AutoProject the AutoProject workspace at ``/autoproject``, also ``:z``
+    (runs of one AutoProject share it, and later parallel runs may use it at the
     same time). All mounts are writable. With ``project_dir=None`` and
-    ``task_dir=None`` (standalone conversations) the argv is exactly the
+    ``autoproject_dir=None`` (standalone conversations) the argv is exactly the
     single-mount one.
 
     Two profiles share the resource limits, workspace mounts, the
@@ -95,8 +94,8 @@ def _build_script_podman_cmd(
         interactive: Add ``-i`` (stdin piping, used by run_python).
         project_dir: Project workspace root, mounted read-write at /project
             (``:z``); ``None`` outside project conversations (no mount).
-        task_dir: Task workspace root, mounted read-write at /task
-            (``:z``); ``None`` outside task runs (no mount).
+        autoproject_dir: AutoProject workspace root, mounted read-write at /autoproject
+            (``:z``); ``None`` outside AutoProject runs (no mount).
 
     Returns:
         Full podman argv list.
@@ -161,8 +160,8 @@ def _build_script_podman_cmd(
     ]
     if project_dir is not None:
         cmd += ["-v", f"{project_dir}:/project:z"]
-    if task_dir is not None:
-        cmd += ["-v", f"{task_dir}:/task:z"]
+    if autoproject_dir is not None:
+        cmd += ["-v", f"{autoproject_dir}:/autoproject:z"]
     cmd += [
         "-w", "/workspace",
         "--memory=512m",
@@ -193,18 +192,18 @@ def _publish_mount_changes(
     user_id: int,
     conversation_id: str,
     project_id: str | None,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> None:
     """Publish ``file_list_changed`` for every workspace the container had
     mounted: the conversation scope always, the project scope too in
-    project conversations (``/project`` was writable), the task scope in
-    task runs (``/task`` was writable)."""
+    project conversations (``/project`` was writable), the AutoProject scope in
+    AutoProject runs (``/autoproject`` was writable)."""
     _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
     if project_id:
         _publish_file_list_changed(user_id, "project", conversation_id, project_id)
-    if task_id:
+    if autoproject_id:
         _publish_file_list_changed(
-            user_id, "task", conversation_id, project_id, task_id=task_id,
+            user_id, "autoproject", conversation_id, project_id, autoproject_id=autoproject_id,
         )
 
 
@@ -230,15 +229,15 @@ async def _handle_run_script(
     project_id: str | None = None,
     public: bool = False,
     block_mutating_tools: bool = False,
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> str:
     """Run a script from the workspace inside an ephemeral Podman container.
 
     The default (restricted) profile uses the quest-script-runner image
     (Python 3.12), mounts the conversation workspace read-write at
     /workspace (and the project workspace at /project in project
-    conversations, the task workspace at /task in task runs), and uses
+    conversations, the AutoProject workspace at /autoproject in AutoProject runs), and uses
     slirp4netns networking which blocks all external network access. The
     container's
     entrypoint runs a socat forwarder so scripts can reach the sandbox tool
@@ -257,7 +256,7 @@ async def _handle_run_script(
         user_id: User's integer ID.
         conversation_id: Conversation UUID.
         path: Relative path to the script within the CONVERSATION
-            workspace (never the project or task workspace; such a script
+            workspace (never the project or AutoProject workspace; such a script
             is copied over first or run from run_python).
         args: Optional command-line arguments to pass to the script.
         timeout: Execution timeout in seconds (default 60, max 150).
@@ -268,12 +267,12 @@ async def _handle_run_script(
             no proxy bridge, no API key; see _build_script_podman_cmd).
         block_mutating_tools: Lease flag for read-only runs (inference,
             cross-user subagents).
-        task_id: The Quest Task of a task run (mounts the task workspace
-            at /task and adds the task-scope file_list_changed event);
-            None outside task runs.
-        task_run_id: The task run's id. Stored on the sandbox lease with
-            task_id, so the script's tool calls reach the task-run tools
-            (list_task_runs, read_task_run) for this task.
+        autoproject_id: The AutoProject of an AutoProject run (mounts the AutoProject workspace
+            at /autoproject and adds the AutoProject-scope file_list_changed event);
+            None outside AutoProject runs.
+        autoproject_run_id: The AutoProject run's id. Stored on the sandbox lease with
+            autoproject_id, so the script's tool calls reach the AutoProject-run tools
+            (list_autoproject_runs, read_autoproject_run) for this AutoProject.
 
     Returns:
         JSON string with path, exit_code, stdout, stderr, timed_out, and truncated.
@@ -285,7 +284,7 @@ async def _handle_run_script(
         project_dir = (
             await project_workspace_dir(project_id) if project_id else None
         )
-        task_dir = await task_workspace_dir(task_id) if task_id else None
+        autoproject_dir = await autoproject_workspace_dir(autoproject_id) if autoproject_id else None
 
         # Validate the path (same pattern as _handle_get_workspace_file)
         clean_path = path.lstrip("/").lstrip("\\")
@@ -310,14 +309,14 @@ async def _handle_run_script(
                         "from run_python"
                     )
                 })
-            if task_id:
+            if autoproject_id:
                 return json.dumps({
                     "error": (
                         f"File not found: {path}. run_script takes "
-                        "paths in this task run's workspace; copy the "
-                        "script in with copy_file from task:// to chat://, "
-                        "or run it from run_python (the task workspace is "
-                        "/task in scripts)"
+                        "paths in this run's workspace; copy the "
+                        "script in with copy_file from autoproject:// to chat://, "
+                        "or run it from run_python (the AutoProject workspace is "
+                        "/autoproject in scripts)"
                     )
                 })
             return json.dumps({"error": f"File not found: {path}"})
@@ -355,15 +354,15 @@ async def _handle_run_script(
             project_id=project_id,
             is_public=public,
             block_mutating_tools=block_mutating_tools,
-            task_id=task_id,
-            task_run_id=task_run_id,
+            autoproject_id=autoproject_id,
+            autoproject_run_id=autoproject_run_id,
         ) as sandbox_token:
             # Build the Podman command (see _build_script_podman_cmd for
             # the full networking / privilege-drop rationale of both
             # profiles).
             podman_cmd = _build_script_podman_cmd(
                 workspace_dir, exec_cmd, sandbox_token, public=public,
-                project_dir=project_dir, task_dir=task_dir,
+                project_dir=project_dir, autoproject_dir=autoproject_dir,
             )
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -407,7 +406,7 @@ async def _handle_run_script(
         # ``:Z`` / ``:z`` mounts; we cannot cheaply diff so emit
         # unconditionally and let the FE silent-fetch be a no-op when nothing
         # actually changed.
-        _publish_mount_changes(user_id, conversation_id, project_id, task_id)
+        _publish_mount_changes(user_id, conversation_id, project_id, autoproject_id)
 
         return json.dumps({
             "path": clean_path,
@@ -435,8 +434,8 @@ async def _handle_run_python(
     project_id: str | None = None,
     public: bool = False,
     block_mutating_tools: bool = False,
-    task_id: str | None = None,
-    task_run_id: str | None = None,
+    autoproject_id: str | None = None,
+    autoproject_run_id: str | None = None,
 ) -> str:
     """Run inline Python code inside an ephemeral Podman container.
 
@@ -458,12 +457,12 @@ async def _handle_run_python(
             no proxy bridge, no API key; see _build_script_podman_cmd).
         block_mutating_tools: Lease flag for read-only runs (inference,
             cross-user subagents).
-        task_id: The Quest Task of a task run (mounts the task workspace
-            at /task and adds the task-scope file_list_changed event);
-            None outside task runs.
-        task_run_id: The task run's id. Stored on the sandbox lease with
-            task_id, so the script's tool calls reach the task-run tools
-            (list_task_runs, read_task_run) for this task.
+        autoproject_id: The AutoProject of an AutoProject run (mounts the AutoProject workspace
+            at /autoproject and adds the AutoProject-scope file_list_changed event);
+            None outside AutoProject runs.
+        autoproject_run_id: The AutoProject run's id. Stored on the sandbox lease with
+            autoproject_id, so the script's tool calls reach the AutoProject-run tools
+            (list_autoproject_runs, read_autoproject_run) for this AutoProject.
 
     Returns:
         JSON string with exit_code, stdout, stderr, timed_out, and truncated.
@@ -474,7 +473,7 @@ async def _handle_run_python(
         project_dir = (
             await project_workspace_dir(project_id) if project_id else None
         )
-        task_dir = await task_workspace_dir(task_id) if task_id else None
+        autoproject_dir = await autoproject_workspace_dir(autoproject_id) if autoproject_id else None
 
         # Clamp timeout
         clamped_timeout = timeout if timeout is not None else SCRIPT_RUNNER_TIMEOUT
@@ -496,15 +495,15 @@ async def _handle_run_python(
             project_id=project_id,
             is_public=public,
             block_mutating_tools=block_mutating_tools,
-            task_id=task_id,
-            task_run_id=task_run_id,
+            autoproject_id=autoproject_id,
+            autoproject_run_id=autoproject_run_id,
         ) as sandbox_token:
             # Build the Podman command (identical flags to
             # _handle_run_script, plus -i for stdin piping)
             podman_cmd = _build_script_podman_cmd(
                 workspace_dir, exec_cmd, sandbox_token, public=public,
                 interactive=True, project_dir=project_dir,
-                task_dir=task_dir,
+                autoproject_dir=autoproject_dir,
             )
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -549,7 +548,7 @@ async def _handle_run_python(
         # See _handle_run_script: the inline script may have written files
         # via either mount, so emit unconditionally after the container
         # exits.
-        _publish_mount_changes(user_id, conversation_id, project_id, task_id)
+        _publish_mount_changes(user_id, conversation_id, project_id, autoproject_id)
 
         return json.dumps({
             "exit_code": exit_code,

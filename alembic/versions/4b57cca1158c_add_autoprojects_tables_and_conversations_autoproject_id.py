@@ -1,25 +1,25 @@
-"""add tasks, task_runs, task_brief_versions and conversations.task_id
+"""add autoprojects, autoproject_runs, autoproject_brief_versions and conversations.autoproject_id
 
 Revision ID: 4b57cca1158c
 Revises: a3d9e5c7f2b4
 Create Date: 2026-11-10 12:00:00.000000
 
-Quest Tasks: a ``tasks`` row holds a task's title, the brief (with its
-version counter) and the counters the thread and the unread dot run on. Each prompt is answered by a run, a
-``task_runs`` row numbered per task by ``seq`` and tied one-to-one to its own
-conversation; ``task_brief_versions`` keeps the recent brief texts. A run's
-conversation carries ``conversations.task_id``.
+AutoProjects: an ``autoprojects`` row holds an AutoProject's title, the brief (with its
+version counter) and the counters the thread and the unread dot run on. Each prompt is answered by a run, an
+``autoproject_runs`` row numbered per AutoProject by ``seq`` and tied one-to-one to its own
+conversation; ``autoproject_brief_versions`` keeps the recent brief texts. A run's
+conversation carries ``conversations.autoproject_id``.
 
 SQLite cannot add a constraint with ALTER TABLE, and a batch (copy and move)
 rebuild of ``conversations`` would drop the table under ``PRAGMA
 foreign_keys=ON`` (alembic/env.py) and cascade away every row referencing
 it (memory suggestions, Slack thread mappings, doc note suggestions, ...).
-So ``task_id`` is added with a raw ``ADD COLUMN ... REFERENCES``, which
+So ``autoproject_id`` is added with a raw ``ADD COLUMN ... REFERENCES``, which
 SQLite allows for a column whose default is NULL; ``alembic/env.py``
 (``_INLINE_FKS``) keeps autogenerate from proposing to re-create the key,
 whose ON DELETE SQLAlchemy's reflection cannot read from an inline clause.
 
-Existing rows need no backfill: no conversation is a task run.
+Existing rows need no backfill: no conversation is an AutoProject run.
 """
 from typing import Sequence, Union
 
@@ -35,9 +35,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Create the three task tables and add conversations.task_id."""
+    """Create the three AutoProject tables and add conversations.autoproject_id."""
     op.create_table(
-        'tasks',
+        'autoprojects',
         sa.Column('id', sa.String(length=36), nullable=False),
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('title', sa.String(length=255), nullable=False),
@@ -68,22 +68,22 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index(
-        'ix_tasks_user_id_archived_last_activity', 'tasks',
+        'ix_autoprojects_user_id_archived_last_activity', 'autoprojects',
         ['user_id', 'archived', 'last_activity_at'],
     )
 
     # Inline foreign key: see the module docstring. Never batch-rebuild
     # ``conversations``.
     op.execute(
-        "ALTER TABLE conversations ADD COLUMN task_id VARCHAR(36) "
-        "REFERENCES tasks(id) ON DELETE CASCADE"
+        "ALTER TABLE conversations ADD COLUMN autoproject_id VARCHAR(36) "
+        "REFERENCES autoprojects(id) ON DELETE CASCADE"
     )
-    op.create_index('ix_conversations_task_id', 'conversations', ['task_id'])
+    op.create_index('ix_conversations_autoproject_id', 'conversations', ['autoproject_id'])
 
     op.create_table(
-        'task_runs',
+        'autoproject_runs',
         sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('task_id', sa.String(length=36), nullable=False),
+        sa.Column('autoproject_id', sa.String(length=36), nullable=False),
         sa.Column('seq', sa.Integer(), nullable=False),
         sa.Column('conversation_id', sa.String(length=36), nullable=False),
         sa.Column('prompt', sa.Text(), nullable=False),
@@ -99,63 +99,63 @@ def upgrade() -> None:
         sa.Column('model', sa.String(length=100), nullable=True),
         sa.Column('started_at', sa.DateTime(), nullable=False),
         sa.Column('finished_at', sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(['task_id'], ['tasks.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['autoproject_id'], ['autoprojects.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(
             ['conversation_id'], ['conversations.id'], ondelete='CASCADE',
         ),
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index(
-        'ix_task_runs_task_id_seq', 'task_runs', ['task_id', 'seq'], unique=True,
+        'ix_autoproject_runs_autoproject_id_seq', 'autoproject_runs', ['autoproject_id', 'seq'], unique=True,
     )
     op.create_index(
-        'ix_task_runs_task_id_status', 'task_runs', ['task_id', 'status'],
+        'ix_autoproject_runs_autoproject_id_status', 'autoproject_runs', ['autoproject_id', 'status'],
     )
     op.create_index(
-        'ix_task_runs_conversation_id', 'task_runs', ['conversation_id'],
+        'ix_autoproject_runs_conversation_id', 'autoproject_runs', ['conversation_id'],
         unique=True,
     )
 
     op.create_table(
-        'task_brief_versions',
+        'autoproject_brief_versions',
         sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('task_id', sa.String(length=36), nullable=False),
+        sa.Column('autoproject_id', sa.String(length=36), nullable=False),
         sa.Column('version', sa.Integer(), nullable=False),
         sa.Column('content', sa.Text(), nullable=False),
         sa.Column('source', sa.String(length=50), nullable=False),
         sa.Column('created_at', sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(['task_id'], ['tasks.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['autoproject_id'], ['autoprojects.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index(
-        'ix_task_brief_versions_task_id_version', 'task_brief_versions',
-        ['task_id', 'version'], unique=True,
+        'ix_autoproject_brief_versions_autoproject_id_version', 'autoproject_brief_versions',
+        ['autoproject_id', 'version'], unique=True,
     )
 
 
 def downgrade() -> None:
-    """Drop the task tables and conversations.task_id (all tasks are lost).
+    """Drop the AutoProject tables and conversations.autoproject_id (all AutoProjects are lost).
 
     The run conversations are deleted first (their dependent rows cascade):
-    without ``task_id`` they would turn into ordinary chats the older code
-    lists in the sidebar. Their ``CHATS_DIR`` directories, and ``TASKS_DIR``,
-    stay on disk. ``task_id`` goes with a native ``ALTER TABLE DROP
+    without ``autoproject_id`` they would turn into ordinary chats the older code
+    lists in the sidebar. Their ``CHATS_DIR`` directories, and ``AUTOPROJECTS_DIR``,
+    stay on disk. ``autoproject_id`` goes with a native ``ALTER TABLE DROP
     COLUMN``, no table rebuild.
     """
     op.drop_index(
-        'ix_task_brief_versions_task_id_version',
-        table_name='task_brief_versions',
+        'ix_autoproject_brief_versions_autoproject_id_version',
+        table_name='autoproject_brief_versions',
     )
-    op.drop_table('task_brief_versions')
+    op.drop_table('autoproject_brief_versions')
 
-    op.drop_index('ix_task_runs_conversation_id', table_name='task_runs')
-    op.drop_index('ix_task_runs_task_id_status', table_name='task_runs')
-    op.drop_index('ix_task_runs_task_id_seq', table_name='task_runs')
-    op.drop_table('task_runs')
+    op.drop_index('ix_autoproject_runs_conversation_id', table_name='autoproject_runs')
+    op.drop_index('ix_autoproject_runs_autoproject_id_status', table_name='autoproject_runs')
+    op.drop_index('ix_autoproject_runs_autoproject_id_seq', table_name='autoproject_runs')
+    op.drop_table('autoproject_runs')
 
-    op.execute("DELETE FROM conversations WHERE task_id IS NOT NULL")
-    op.drop_index('ix_conversations_task_id', table_name='conversations')
-    op.drop_column('conversations', 'task_id')
+    op.execute("DELETE FROM conversations WHERE autoproject_id IS NOT NULL")
+    op.drop_index('ix_conversations_autoproject_id', table_name='conversations')
+    op.drop_column('conversations', 'autoproject_id')
 
-    op.drop_index('ix_tasks_user_id_archived_last_activity', table_name='tasks')
-    op.drop_table('tasks')
+    op.drop_index('ix_autoprojects_user_id_archived_last_activity', table_name='autoprojects')
+    op.drop_table('autoprojects')

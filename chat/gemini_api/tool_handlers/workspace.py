@@ -6,8 +6,8 @@ A project conversation has two file spaces (devplan 00009, revised
 2026-10-08: scheme-qualified file tools): its own conversation workspace
 (``chat://``, the default target of every file-producing tool) and the
 project workspace shared by every conversation of the project
-(``proj://``). A task run of a Quest Task (issue #213) has ``chat://`` and
-the task workspace shared by every run of the task (``task://``) instead;
+(``proj://``). A run of an AutoProject (issue #213) has ``chat://`` and
+the AutoProject workspace shared by every run of the AutoProject (``autoproject://``) instead;
 it has no ``proj://``. The ``*_workspace_file`` tools take bare paths in
 the conversation workspace; the space-aware tools take a mandatory scheme
 (parsed by ``file_paths.parse_space_path`` against the conversation's
@@ -19,10 +19,10 @@ results and errors. ``copy_file`` lives in ``workspace_copy.py``.
 
 Read-before-edit sidecar keys: the ``*_workspace_file`` tools use bare
 paths (``notes.md``), the space-aware tools the canonical scheme path
-(``chat://notes.md``, ``proj://reports/q3.md``, ``task://brief.md``). A
+(``chat://notes.md``, ``proj://reports/q3.md``, ``autoproject://brief.md``). A
 read or write of a conversation file records BOTH keys, so either tool
-family licenses an edit through either; ``proj://`` and ``task://`` keys
-never collide with a bare key. The sidecar is per conversation, so a task
+family licenses an edit through either; ``proj://`` and ``autoproject://`` keys
+never collide with a bare key. The sidecar is per conversation, so an AutoProject
 file read in an earlier run does not license an edit in a later one.
 """
 
@@ -44,18 +44,18 @@ from chat.gemini_api.constants import (
 )
 from chat.gemini_api.tool_handlers._common import (
     _invalid_project_result,
-    _invalid_task_result,
+    _invalid_autoproject_result,
     _no_project_result,
-    _no_task_result,
+    _no_autoproject_result,
     _publish_file_list_changed,
     conversation_workspace_dir,
     project_workspace_dir,
-    task_workspace_dir,
+    autoproject_workspace_dir,
 )
 from chat.gemini_api.tool_handlers.file_paths import (
     SPACE_CHAT,
     SPACE_PROJECT,
-    SPACE_TASK,
+    SPACE_AUTOPROJECT,
     SpacePathError,
     conversation_spaces,
     format_space_path,
@@ -69,19 +69,19 @@ logger = logging.getLogger(__name__)
 class _FileSpace:
     """How the shared internals address one file space for one tool family."""
 
-    # SPACE_CHAT, SPACE_PROJECT or SPACE_TASK.
+    # SPACE_CHAT, SPACE_PROJECT or SPACE_AUTOPROJECT.
     space: str
     # True for the space-aware tools: paths are shown scheme-qualified.
     qualified: bool
     # file_list_changed scope published after a write / edit.
     scope: str
     # Words used in error text.
-    noun: str          # "File" / "Project file" / "Task file"
-    root_label: str    # "workspace" / "project workspace" / "task workspace"
+    noun: str          # "File" / "Project file" / "AutoProject file"
+    root_label: str    # "workspace" / "project workspace" / "AutoProject workspace"
     get_tool: str
     write_tool: str
     # Where sandbox scripts see this space's files besides /workspace
-    # ("/project", "/task"); None for the conversation workspace.
+    # ("/project", "/autoproject"); None for the conversation workspace.
     sandbox_mount: str | None = None
 
     def show(self, clean_path: str) -> str:
@@ -93,9 +93,9 @@ class _FileSpace:
     def read_keys(self, canonical_path: str) -> list[str]:
         """Sidecar keys recorded for a read / write, and accepted by the
         edit gate. Conversation files carry both the bare and the
-        ``chat://`` key (cross-family licensing); project and task files
-        only their ``proj://`` / ``task://`` key."""
-        if self.space in (SPACE_PROJECT, SPACE_TASK):
+        ``chat://`` key (cross-family licensing); project and AutoProject files
+        only their ``proj://`` / ``autoproject://`` key."""
+        if self.space in (SPACE_PROJECT, SPACE_AUTOPROJECT):
             return [format_space_path(self.space, canonical_path)]
         chat_key = format_space_path(SPACE_CHAT, canonical_path)
         if self.qualified:
@@ -137,22 +137,22 @@ _PROJECT_SPACE = _FileSpace(
     sandbox_mount="/project",
 )
 
-# Space-aware tools on task:// paths (task runs of a Quest Task only).
-_TASK_SPACE = _FileSpace(
-    space=SPACE_TASK,
+# Space-aware tools on autoproject:// paths (runs of an AutoProject only).
+_AUTOPROJECT_SPACE = _FileSpace(
+    space=SPACE_AUTOPROJECT,
     qualified=True,
-    scope="task",
-    noun="Task file",
-    root_label="task workspace",
+    scope="autoproject",
+    noun="AutoProject file",
+    root_label="AutoProject workspace",
     get_tool="read_file",
     write_tool="write_file",
-    sandbox_mount="/task",
+    sandbox_mount="/autoproject",
 )
 
 _SPACES = {
     SPACE_CHAT: _CHAT_SPACE,
     SPACE_PROJECT: _PROJECT_SPACE,
-    SPACE_TASK: _TASK_SPACE,
+    SPACE_AUTOPROJECT: _AUTOPROJECT_SPACE,
 }
 
 
@@ -161,18 +161,18 @@ def _publish_space_changed(
     space: str,
     conversation_id: str | None,
     project_id: str | None,
-    task_id: str | None,
+    autoproject_id: str | None,
 ) -> None:
     """Publish ``file_list_changed`` for a write into ``space``.
 
-    The task id rides along only for the task scope, so conversation and
-    project events (also those of a task run's ``chat://`` space) keep
+    The AutoProject id rides along only for the AutoProject scope, so conversation and
+    project events (also those of an AutoProject run's ``chat://`` space) keep
     their exact shape.
     """
     scope = _SPACES[space].scope
-    if space == SPACE_TASK:
+    if space == SPACE_AUTOPROJECT:
         _publish_file_list_changed(
-            user_id, scope, conversation_id, project_id, task_id=task_id,
+            user_id, scope, conversation_id, project_id, autoproject_id=autoproject_id,
         )
     else:
         _publish_file_list_changed(user_id, scope, conversation_id, project_id)
@@ -201,8 +201,8 @@ def _format_mb(size_bytes: int) -> str:
 
 
 def _sandbox_hint(space: _FileSpace, clean_path: str) -> str:
-    """Extra sentence for suggestions about a project or task file: scripts
-    see it under the space's mount (``/project``, ``/task``) and their
+    """Extra sentence for suggestions about a project or AutoProject file: scripts
+    see it under the space's mount (``/project``, ``/autoproject``) and their
     output belongs in ``/workspace``."""
     if space.sandbox_mount is None:
         return ""
@@ -532,11 +532,11 @@ async def _write_file(
     path: str,
     content: str,
     space: _FileSpace,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> str:
     """Create or overwrite a text file below ``root`` (see
     ``_handle_write_workspace_file``); publishes ``file_list_changed`` for
-    ``space.scope`` (with ``task_id`` for a task file) and records the
+    ``space.scope`` (with ``autoproject_id`` for an AutoProject file) and records the
     write as a read."""
     clean_path, file_path, err = _resolve_in_root(
         root, path, space, allow_empty=False,
@@ -560,7 +560,7 @@ async def _write_file(
         await asyncio.to_thread(_write_text_with_parents, file_path, content)
 
         _publish_space_changed(
-            user_id, space.space, conversation_id, project_id, task_id,
+            user_id, space.space, conversation_id, project_id, autoproject_id,
         )
         # Writing counts as having read the file (the model authored the
         # full content), licensing later edits.
@@ -587,7 +587,7 @@ async def _edit_file(
     new_string: str,
     replace_all: bool,
     space: _FileSpace,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> str:
     """Exact string replacement in a text file below ``root`` (see
     ``_handle_edit_workspace_file``), gated on the file's
@@ -697,7 +697,7 @@ async def _edit_file(
         return json.dumps({"error": f"Failed to write file: {e}"})
 
     _publish_space_changed(
-        user_id, space.space, conversation_id, project_id, task_id,
+        user_id, space.space, conversation_id, project_id, autoproject_id,
     )
     _mark_workspace_file_read(conversation_id, keys)
     return json.dumps({
@@ -1010,7 +1010,7 @@ async def _handle_edit_workspace_file(
 
 
 # ---------------------------------------------------------------------------
-# Space-aware tools (chat://, proj:// and task:// paths)
+# Space-aware tools (chat://, proj:// and autoproject:// paths)
 # ---------------------------------------------------------------------------
 
 
@@ -1022,22 +1022,22 @@ async def resolve_space_root(
     space: str,
     conversation_id: str,
     project_id: str | None,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> tuple[Path | None, str | None]:
     """Root directory of ``space`` for this conversation (created if
     missing), or ``(None, error_json)``: ``no_project`` for ``proj://``
     outside a project, ``invalid_project`` for an unresolvable project id,
-    ``no_task`` for ``task://`` outside a task run, ``invalid_task`` for an
-    unresolvable task id."""
+    ``no_autoproject`` for ``autoproject://`` outside an AutoProject run, ``invalid_autoproject`` for an
+    unresolvable AutoProject id."""
     if space == SPACE_CHAT:
         return await conversation_workspace_dir(conversation_id), None
-    if space == SPACE_TASK:
-        if not task_id:
-            return None, _no_task_result()
+    if space == SPACE_AUTOPROJECT:
+        if not autoproject_id:
+            return None, _no_autoproject_result()
         try:
-            return await task_workspace_dir(task_id), None
+            return await autoproject_workspace_dir(autoproject_id), None
         except ValueError:  # InvalidStorageIdError
-            return None, _invalid_task_result()
+            return None, _invalid_autoproject_result()
     if not project_id:
         return None, _no_project_result()
     try:
@@ -1052,19 +1052,19 @@ async def _open_space(
     project_id: str | None,
     *,
     allow_root: bool,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> tuple[_FileSpace | None, str, Path | None, str | None]:
     """Parse ``raw_path`` against the conversation's spaces and resolve its
     root: ``(space, rel, root, None)`` or ``(None, "", None, error_json)``."""
     try:
         space_name, rel = parse_space_path(
             raw_path, allow_root=allow_root,
-            spaces=conversation_spaces(task_id),
+            spaces=conversation_spaces(autoproject_id),
         )
     except SpacePathError as exc:
         return None, "", None, _path_error(exc)
     root, err = await resolve_space_root(
-        space_name, conversation_id, project_id, task_id,
+        space_name, conversation_id, project_id, autoproject_id,
     )
     if err is not None:
         return None, "", None, err
@@ -1077,20 +1077,20 @@ async def _handle_list_files(
     project_id: str | None,
     path,
     *,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> str:
     """List the files below a space root or one of its folders
-    (``chat://``, ``proj://``, ``proj://reports``, ``task://`` in a task
+    (``chat://``, ``proj://``, ``proj://reports``, ``autoproject://`` in an AutoProject
     run).
 
     Same output shape as ``list_workspace_files``: paths are relative to
     the SPACE root (prefix them with the scheme to address them), so
     ``chat://`` alone matches ``list_workspace_files`` exactly.
-    ``task_id`` is the conversation's Quest Task when it is a task run:
-    it switches the spaces to ``chat://`` + ``task://``.
+    ``autoproject_id`` is the conversation's AutoProject when it is an AutoProject run:
+    it switches the spaces to ``chat://`` + ``autoproject://``.
     """
     space, rel, root, err = await _open_space(
-        path, conversation_id, project_id, allow_root=True, task_id=task_id,
+        path, conversation_id, project_id, allow_root=True, autoproject_id=autoproject_id,
     )
     if err is not None:
         return err
@@ -1118,14 +1118,14 @@ async def _handle_read_file(
     path,
     model: str = "",
     *,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> tuple[str, list]:
-    """Read a ``chat://``, ``proj://`` or ``task://`` file: every behaviour
+    """Read a ``chat://``, ``proj://`` or ``autoproject://`` file: every behaviour
     of ``_handle_get_workspace_file`` (inline text, image/PDF parts,
     attach-cap pre-flight, unsupported-type hint). A ``chat://`` read also
     licenses edit_workspace_file of the same file, and vice versa."""
     space, rel, root, err = await _open_space(
-        path, conversation_id, project_id, allow_root=False, task_id=task_id,
+        path, conversation_id, project_id, allow_root=False, autoproject_id=autoproject_id,
     )
     if err is not None:
         return err, []
@@ -1141,13 +1141,13 @@ async def _handle_write_file(
     path,
     content: str,
     *,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> str:
-    """Create or overwrite a ``chat://``, ``proj://`` or ``task://`` text
+    """Create or overwrite a ``chat://``, ``proj://`` or ``autoproject://`` text
     file (same rules as ``write_workspace_file``); publishes
     ``file_list_changed`` for the file's space."""
     space, rel, root, err = await _open_space(
-        path, conversation_id, project_id, allow_root=False, task_id=task_id,
+        path, conversation_id, project_id, allow_root=False, autoproject_id=autoproject_id,
     )
     if err is not None:
         return err
@@ -1155,7 +1155,7 @@ async def _handle_write_file(
         return json.dumps({"error": "content must be a string", "code": "invalid_content"})
     return await _write_file(
         user_id, conversation_id, project_id, root, rel, content, space,
-        task_id=task_id,
+        autoproject_id=autoproject_id,
     )
 
 
@@ -1168,18 +1168,18 @@ async def _handle_edit_file(
     new_string: str,
     replace_all: bool = False,
     *,
-    task_id: str | None = None,
+    autoproject_id: str | None = None,
 ) -> str:
-    """Exact string replacement in a ``chat://``, ``proj://`` or ``task://``
+    """Exact string replacement in a ``chat://``, ``proj://`` or ``autoproject://``
     text file (same rules as ``edit_workspace_file``), gated on the read
     sidecar: the file must have been read or written earlier in THIS
     conversation (for a conversation file, through either tool family)."""
     space, rel, root, err = await _open_space(
-        path, conversation_id, project_id, allow_root=False, task_id=task_id,
+        path, conversation_id, project_id, allow_root=False, autoproject_id=autoproject_id,
     )
     if err is not None:
         return err
     return await _edit_file(
         user_id, conversation_id, project_id, root, rel,
-        old_string, new_string, replace_all, space, task_id=task_id,
+        old_string, new_string, replace_all, space, autoproject_id=autoproject_id,
     )
