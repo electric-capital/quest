@@ -127,7 +127,7 @@ FEATURE_DREAMING = "dreaming"
 
 # AutoProjects (see spec issue #213): long-lived, user-owned units of work
 # answered by runs that each start with a fresh model context over the
-# AutoProject's instructions, brief and work log (``autoprojects`` / ``autoproject_runs`` /
+# AutoProject's brief and work log (``autoprojects`` / ``autoproject_runs`` /
 # ``autoproject_brief_versions`` in quest.db, the AutoProject workspace under
 # ``<data_dir>/autoprojects/<id>/workspace`` resolved only via
 # ``ChatStorage.get_autoproject_dir``). Closed for a user = the AutoProject tools and the
@@ -265,8 +265,8 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
         "description": (
             "Lets users keep long-lived AutoProjects they prompt into again and "
             "again. Each prompt is answered by a run that starts with a "
-            "fresh context and inherits only the AutoProject's instructions, a "
-            "brief the model keeps current, a log of earlier runs and the "
+            "fresh context and inherits only a brief the model keeps "
+            "current, a log of earlier runs and the "
             "AutoProject's shared files. Access can be granted to all users or "
             "only to specific users. Turning it off hides AutoProjects; nothing is "
             "deleted."

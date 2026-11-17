@@ -10,8 +10,8 @@ export function AutoProjectsGateClosed() {
   return (
     <div className="autoprojects-gate-closed" role="status">
       <ListChecks size={32} className="autoprojects-gate-closed-icon" aria-hidden="true" />
-      <p className="autoprojects-gate-closed-title">AutoProjects is turned off for your account.</p>
-      <p className="autoprojects-gate-closed-hint">Ask an admin to enable it in Settings &gt; Features.</p>
+      <p className="autoprojects-gate-closed-title">AutoProjects are turned off for your account.</p>
+      <p className="autoprojects-gate-closed-hint">Ask an admin to turn them on in Settings &gt; Features.</p>
     </div>
   )
 }
