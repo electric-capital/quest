@@ -16,7 +16,7 @@ export interface AutoProjectQuestionCardProps {
    *  The thread refreshes its runs here. */
   onAnswered?: (question: AutoProjectQuestion | null) => void
   /** Replaces the pending question's hint under the options (by default it
-   *  points at the thread composer below the card). */
+   *  points at the page's composer, above the Updates card). */
   hint?: ReactNode
 }
 
@@ -166,8 +166,8 @@ export function AutoProjectQuestionCard({
           )}
           <p className="autoproject-question-hint">
             {hint ?? (options.length > 0
-              ? 'Or type your answer in the box below.'
-              : 'Type your answer in the box below.')}
+              ? 'Or type your answer in the box above.'
+              : 'Type your answer in the box above.')}
           </p>
           {error && (
             <p className="autoproject-question-error" role="alert">

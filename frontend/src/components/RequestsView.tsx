@@ -577,9 +577,7 @@ export function RequestsView() {
                     className="request-conversation-link"
                     onClick={() => handleGoToAutoProject(request.autoproject_id!, request)}
                   >
-                    {request.status === 'open'
-                      ? `Go to AutoProject: ${request.autoproject_title || 'Untitled AutoProject'}`
-                      : `Go to AutoProject: ${request.autoproject_title || 'Untitled AutoProject'}`}
+                    {`Go to AutoProject: ${request.autoproject_title || 'Untitled AutoProject'}`}
                   </span>
                 ) : (
                   <span

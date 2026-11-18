@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { AUTOPROJECT_BRIEF_MAX_CHARS, putAutoProjectBrief, staleBriefCurrent } from '../../api/autoprojectsApi'
 import type { AutoProject, AutoProjectBriefState } from '../../api/types'
+import { useAppConfig } from '../../contexts/AppConfigContext'
 import { briefWriterPhrase } from './autoprojectBriefSource'
 import {
   AutoProjectCharCounter,
@@ -70,6 +71,7 @@ export function AutoProjectBriefEditor({
   onStale: () => void
 }) {
   // The editor mounts when Edit is pressed: the AutoProject as of then is the start.
+  const { appName } = useAppConfig()
   const [draft, setDraft] = useState(autoproject.brief)
   const [base, setBase] = useState<BriefBase>({ version: autoproject.brief_version, text: autoproject.brief })
   const [merge, setMerge] = useState<MergeText | null>(null)
@@ -224,7 +226,7 @@ export function AutoProjectBriefEditor({
         value={draft}
         rows={14}
         spellCheck
-        placeholder="What Quest should know before each update: the goal, where things stand, open threads..."
+        placeholder={`What ${appName} should know before each update: the goal, where things stand, open threads...`}
         readOnly={saving}
         aria-busy={saving}
         aria-invalid={over || error !== null}

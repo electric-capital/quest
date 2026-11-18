@@ -190,7 +190,7 @@ export function useAutoProjectRuns(
       const error =
         err instanceof ApiClientError
           ? err
-          : new ApiClientError(err instanceof Error ? err.message : 'Failed to load the AutoProject thread');
+          : new ApiClientError(err instanceof Error ? err.message : 'Failed to load the AutoProject updates');
       commit({ ...EMPTY, id: autoprojectId, error, generation: prev.generation + 1 });
     } finally {
       if (pendingSeqRef.current === seq) {

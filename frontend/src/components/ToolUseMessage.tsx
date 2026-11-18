@@ -80,12 +80,12 @@ function extractAutoProjectEntryFields(
 function autoprojectLoopToolLabel(toolName: string, toolResult?: ToolResultMessageType): string | null {
   if (toolName === 'ask_autoproject_question') return 'Asked a question';
   if (toolName !== 'complete_autoproject_run') return null;
-  if (!toolResult) return 'Finishing the run';
+  if (!toolResult) return 'Finishing the update';
   // An accepted call returns {status: "completed", ...}; a refusal (a
   // validation error, brief_conflict) leaves the run open for a retry.
   const parsed = tryParseJsonContainer(toolResult.tool_output);
   const accepted = parsed !== null && !Array.isArray(parsed) && parsed.status === 'completed';
-  return accepted ? 'Finished the run' : 'Tried to finish the run';
+  return accepted ? 'Finished the update' : 'Tried to finish the update';
 }
 
 /**

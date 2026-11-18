@@ -74,11 +74,11 @@ const SPACE_LABEL: Record<CopyCard, string> = {
   autoproject: 'AutoProject files',
 };
 
-/** Row action wording per destination ("Copy to project", "Move to chat"). */
+/** Row action wording per destination ("Copy to project", "Move to chat", "Copy to AutoProject"). */
 const ACTION_NOUN: Record<CopyCard, string> = {
   conversation: 'chat',
   project: 'project',
-  autoproject: 'autoproject',
+  autoproject: 'AutoProject',
 };
 
 const NO_NOTICES: Record<CopyCard, WorkspaceCopyNotice | null> = {
@@ -276,9 +276,10 @@ export function useWorkspaceCopy(
     (from: CopyCard, to: CopyCard, row: FileRowContext): FileRowAction[] => {
       const disabled = promptOpen || inFlight.has(`${from}:${row.path}`);
       const noun = ACTION_NOUN[to];
+      const key = noun.toLowerCase();
       return [
-        { key: `copy-to-${noun}`, label: `Copy to ${noun}`, disabled, onSelect: () => void startCopy(from, row, false) },
-        { key: `move-to-${noun}`, label: `Move to ${noun}`, disabled, onSelect: () => void startCopy(from, row, true) },
+        { key: `copy-to-${key}`, label: `Copy to ${noun}`, disabled, onSelect: () => void startCopy(from, row, false) },
+        { key: `move-to-${key}`, label: `Move to ${noun}`, disabled, onSelect: () => void startCopy(from, row, true) },
       ];
     },
     [inFlight, promptOpen, startCopy],
