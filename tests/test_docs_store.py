@@ -117,7 +117,8 @@ class TestCreate:
             last_write_source="conversation:c1",
         )
         assert set(doc) == {
-            "id", "owner_id", "project_id", "title", "description", "mode",
+            "id", "owner_id", "project_id", "autoproject_id",
+            "title", "description", "mode",
             "content_size", "asset_count", "last_write_source",
             "require_approval", "has_instructions", "memory_count",
             "instructions_version", "memories_version",

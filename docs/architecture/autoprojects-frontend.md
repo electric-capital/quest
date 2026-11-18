@@ -2,7 +2,7 @@
 
 ## Overview
 
-The UI of [AutoProjects](autoprojects.md) at `/autoprojects`: the sidebar section, the AutoProjects list, New AutoProject, and the AutoProject page with its Brief, AutoProject files and Updates cards, its in-flow composer and its detail panel (a run's transcript or the brief History). It follows the Quest Docs and Quest Tables views in shape (the URL is the only state, a full main-pane takeover, a gate-closed fallback), so this doc covers the files and the rules that span them; each component's header comment describes its own behaviour. The routes it calls and the start sequence are in the [AutoProjects API](../api/autoprojects-api.md). Paths are under `frontend/src/` unless noted. User-visible text calls a run an "update".
+The UI of [AutoProjects](autoprojects.md) at `/autoprojects`: the sidebar section, the AutoProjects list, New AutoProject, and the AutoProject page with its Brief, AutoProject files, Docs and tables and Updates cards, its in-flow composer and its detail panel (a run's transcript or the brief History). It follows the Quest Docs and Quest Tables views in shape (the URL is the only state, a full main-pane takeover, a gate-closed fallback), so this doc covers the files and the rules that span them; each component's header comment describes its own behaviour. The routes it calls and the start sequence are in the [AutoProjects API](../api/autoprojects-api.md). Paths are under `frontend/src/` unless noted. User-visible text calls a run an "update".
 
 ## Key Files
 
@@ -20,6 +20,7 @@ The UI of [AutoProjects](autoprojects.md) at `/autoprojects`: the sidebar sectio
 | `components/autoprojects/AutoProjectsListView.tsx`, `NewAutoProjectPage.tsx` | The list (and the archived list) and New AutoProject |
 | `components/autoprojects/AutoProjectPage.tsx`, `AutoProjectMainColumn.tsx`, `AutoProjectHeader.tsx` | The page, its main column (composer state, scrolling, cards, arrivals) and its title unit |
 | `components/autoprojects/AutoProjectBrief.tsx`, `AutoProjectBriefEditor.tsx`, `AutoProjectBriefHistory.tsx`, `AutoProjectBriefControls.tsx` | The Brief card, its in-place editor, the History view and the shared counters and confirms |
+| `components/autoprojects/AutoProjectArtifacts.tsx` | The Docs and tables card: the Quest Docs and Quest Tables the AutoProject owns, New doc and New table |
 | `components/autoprojects/AutoProjectUpdates.tsx`, `AutoProjectRunEntry.tsx`, `AutoProjectActivityLine.tsx`, `AutoProjectQuestionCard.tsx`, `AutoProjectRunError.tsx` | The Updates card and one update: prompt, activity line, question cards, approval and connect cards, result or state line |
 | `components/autoprojects/AutoProjectDetailPanel.tsx`, `AutoProjectRunPanel.tsx`, `AutoProjectRunPanelContext.ts`, `AutoProjectQuestionMessage.tsx` | The detail panel, the run view with its tabs, and the transcript's question rows |
 | `components/autoprojects/AutoProjectComposer.tsx`, `autoprojectComposerSend.ts`, `autoprojectComposerState.ts` + `store/autoprojectDrafts.ts` | The shared composer set up for AutoProjects, the submission helper, the composer state machine, the kept drafts |
@@ -41,7 +42,7 @@ New AutoProject is an empty page whose composer creates the AutoProject on the f
 
 ## AutoProject Page
 
-`AutoProjectPage` lays out one readable-width main column and, while a detail view is open, the detail panel beside it. The main column (`AutoProjectMainColumn`) is the header, then the Brief card, the AutoProject files card, the composer in the page flow (not pinned) and the Updates card, in one scroller. Rules that span its parts:
+`AutoProjectPage` lays out one readable-width main column and, while a detail view is open, the detail panel beside it. The main column (`AutoProjectMainColumn`) is the header, then the Brief card, the AutoProject files card, the Docs and tables card, the composer in the page flow (not pinned) and the Updates card, in one scroller. Rules that span its parts:
 
 - **Opens at the top**, on the brief. A jump button in the header ("Latest" / "Brief") moves between the brief and the newest update and carries the working or unread mark while the newest update is off screen.
 - **Updates order.** Recent first (the default, so a new update appears right under the composer) or oldest first, one preference for every AutoProject kept in `localStorage` (`autoprojectUpdatesOrder.ts`). "Show earlier updates" sits at the old end; oldest first keeps the previously first update in place while an older page is prepended.
@@ -51,7 +52,7 @@ New AutoProject is an empty page whose composer creates the AutoProject on the f
 - **Arrival animation.** An update and its result open and fade in (`autoprojectArrival.ts`) only for transitions the page saw live, each claimed once, so nothing animates on load, paging, a sort change or navigation; under `prefers-reduced-motion` only the highlight's colour fades.
 - **Model.** The composer is seeded with the AutoProject's model; a user's pick is PATCHed back as the AutoProject's default, and a refused PATCH is only logged, since the run still uses the composer's pick.
 
-The **Brief** card renders the markdown with its authorship byline, edits in place (`AutoProjectBriefEditor`: a 409 `stale_brief` opens a merge box above the untouched draft; Save never sends a version whose text the user has not been shown) and opens History in the detail panel. The **AutoProject files** card is a compact `FileBrowser` over the AutoProject space.
+The **Brief** card renders the markdown with its authorship byline, edits in place (`AutoProjectBriefEditor`: a 409 `stale_brief` opens a merge box above the untouched draft; Save never sends a version whose text the user has not been shown) and opens History in the detail panel. The **AutoProject files** card is a compact `FileBrowser` over the AutoProject space. The **Docs and tables** card (`AutoProjectArtifacts`) lists the docs and tables the AutoProject owns ([AutoProjects -- Docs and Tables](autoprojects.md#docs-and-tables)) as one newest-first list linking to the doc and table viewers. It reads `useDocs` and `useTables` with `autoprojectId`, so it follows `doc_list_changed` and `table_list_changed`; each kind shows only while its feature is in `enabledFeatures`, and with neither the card is absent. New doc and New table open `NewDocModal` and `NewTableDialog` with the AutoProject as their fixed location (no Location select; the request carries `autoproject_id`); an archived AutoProject keeps the list and has no buttons. In the viewers, `DocHeader` and `TableHeader` show an AutoProject chip linking back to the page.
 
 ## Detail Panel
 

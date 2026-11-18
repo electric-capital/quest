@@ -44,7 +44,10 @@ function LocationProbe() {
 
 const onClose = vi.fn();
 
-function renderDialog(initialProjectId: string | null = null) {
+function renderDialog(
+  initialProjectId: string | null = null,
+  autoproject: { id: string; title: string } | null = null,
+) {
   return render(
     <MemoryRouter initialEntries={['/tables']}>
       <Routes>
@@ -52,7 +55,13 @@ function renderDialog(initialProjectId: string | null = null) {
           path="*"
           element={
             <>
-              <NewTableDialog isOpen onClose={onClose} projects={PROJECTS} initialProjectId={initialProjectId} />
+              <NewTableDialog
+                isOpen
+                onClose={onClose}
+                projects={PROJECTS}
+                initialProjectId={initialProjectId}
+                autoproject={autoproject}
+              />
               <LocationProbe />
             </>
           }
@@ -92,6 +101,20 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('NewTableDialog', () => {
+  it('creates an AutoProject table when opened from an AutoProject: fixed location, autoproject_id sent', async () => {
+    mocks.createTable.mockResolvedValue(created('t7'));
+    renderDialog('p3', { id: 'ap1', title: 'Market study' });
+    expect(within(dialog()).queryByLabelText('Location')).toBeNull();
+    expect(within(dialog()).getByText('Market study')).toBeTruthy();
+    typeTitle('Leads');
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/tables/t7'));
+    const body = mocks.createTable.mock.calls[0][0];
+    expect(body.autoproject_id).toBe('ap1');
+    expect(body.project_id).toBeUndefined();
+  });
+
   it('builds the user-table request from the title, description and columns, then opens the table', async () => {
     mocks.createTable.mockResolvedValue(created('t9'));
     renderDialog();

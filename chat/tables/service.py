@@ -103,6 +103,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
+from chat import artifact_access
 from chat.storage import ChatStorage
 from chat.tables import filters, revert, schema_ops, storage
 from chat.tables.access import (
@@ -172,8 +173,11 @@ ROW_OPS = ("insert", "update", "upsert", "delete")
 # = this conversation's project tables (from a standalone conversation:
 # the tables of all of the user's own projects, read-only), ``public`` =
 # the public tables readable from here (a private project's doc sources;
-# a public conversation's own project), ``all`` = everything visible.
-TABLE_SCOPES = ("user", "project", "public", "all")
+# a public conversation's own project), ``autoproject`` = this run's
+# AutoProject tables (from a private standalone conversation outside a run:
+# the tables of all of the user's own AutoProjects, read-only), ``all`` =
+# everything visible.
+TABLE_SCOPES = ("user", "project", "public", "autoproject", "all")
 SAMPLE_ROWS_DEFAULT = 5
 
 
@@ -331,8 +335,10 @@ class Caller:
     ``run_kind`` is one of ``chat.tables.access.RUN_KINDS`` (incl. ``"ui"``).
     The UI has no conversation context (``conversation_id=None``,
     ``project_id=None``, ``is_public=False``). Sandbox scripts pass
-    ``conversation_id=None`` too but carry the ``project_id`` and
-    ``is_public`` of the conversation that ran them.
+    ``conversation_id=None`` too but carry the ``project_id``,
+    ``is_public`` and ``autoproject_id`` of the conversation that ran them.
+    ``autoproject_id`` is set for an AutoProject run (and its sub-agents
+    and scripts) and None everywhere else, the UI included.
     """
 
     user: dict
@@ -340,6 +346,7 @@ class Caller:
     project_id: Optional[str]
     is_public: bool
     run_kind: str
+    autoproject_id: Optional[str] = None
 
 
 def caller_for_ui(user: dict) -> Caller:
@@ -382,9 +389,10 @@ async def _doc_sources(caller: Caller) -> frozenset[str]:
 
 def _reaches_own_projects(caller: Caller) -> bool:
     """Whether this caller is a standalone conversation, which reads the
-    tables of all of the user's own projects (docs access rule 2): no
-    project, not public and not the UI (a script launched from a standalone
-    conversation carries no project and counts)."""
+    tables of all of the user's own projects and AutoProjects (docs access
+    rule 2): no project, not public and not the UI (a script launched from
+    a standalone conversation carries no project and counts; an AutoProject
+    run is a standalone conversation)."""
     return bool(
         caller.project_id is None
         and not caller.is_public
@@ -403,6 +411,8 @@ def resolve(
         project_id=caller.project_id,
         run_kind=caller.run_kind,
         doc_source_project_ids=doc_source_project_ids,
+        autoproject_id=caller.autoproject_id,
+        autoprojects_enabled=artifact_access.autoprojects_open(caller.user, table),
     )
 
 
@@ -601,7 +611,10 @@ async def list_visible_tables(
     user tables are always private), this conversation's project tables
     (from a standalone conversation: the tables of all of the user's own
     projects, read-only), and the public tables of the doc-source projects
-    (a private project conversation). Each candidate goes through the access rule; pages
+    (a private project conversation), and AutoProject tables (scope
+    ``autoproject``: the run's own AutoProject in a run, all of the user's
+    AutoProjects from another standalone conversation; ``all`` has both).
+    Each candidate goes through the access rule; pages
     through the store's keyset cursor so hidden rows never eat into
     ``limit``. Payload shaping and limit clamping are the tool's job.
     """
@@ -619,7 +632,15 @@ async def list_visible_tables(
     )
     include_own_projects = scope in ("project", "all") and _reaches_own_projects(caller)
     sources = await _doc_sources(caller) if scope in ("public", "all") else frozenset()
-    if not include_user and not include_project and not include_own_projects and not sources:
+    in_run = bool(caller.autoproject_id) and caller.run_kind != "ui"
+    include_autoproject = in_run and scope in ("autoproject", "all")
+    include_own_autoprojects = _reaches_own_projects(caller) and (
+        scope == "all" or (scope == "autoproject" and not in_run)
+    )
+    if not (
+        include_user or include_project or include_own_projects or sources
+        or include_autoproject or include_own_autoprojects
+    ):
         return []
 
     out: list[tuple[dict, TableAccess]] = []
@@ -632,6 +653,9 @@ async def list_visible_tables(
             include_project_tables=include_project,
             include_owned_project_tables=include_own_projects,
             source_project_ids=sources,
+            autoproject_id=caller.autoproject_id,
+            include_autoproject_tables=include_autoproject,
+            include_owned_autoproject_tables=include_own_autoprojects,
             mode="public" if caller.is_public else None,
             limit=limit,
             before=before,
@@ -1163,10 +1187,13 @@ async def preview_schema_change(
             if await table_store.title_taken(
                 fresh["owner_id"], fresh["project_id"], fresh["mode"], clean_title,
                 exclude_table_id=fresh["id"],
+                autoproject_id=fresh.get("autoproject_id"),
             ):
                 raise TableError(
                     "duplicate_title",
-                    str(table_store._duplicate_title_error(clean_title, fresh["project_id"])),
+                    str(table_store._duplicate_title_error(
+                        clean_title, fresh["project_id"], fresh.get("autoproject_id"),
+                    )),
                 )
         stats = await _file_call(
             fresh, storage.check_schema_violations, table_dir, columns, plan,
@@ -1373,6 +1400,7 @@ async def create_table(
     title: str,
     description: str = "",
     project_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
     columns: list,
     write_source: Optional[str] = None,
     actor_user_id: Optional[int] = None,
@@ -1386,8 +1414,11 @@ async def create_table(
     card's pre-card and approve-time checks); this function only checks
     the gate, the column specs (``schema.parse_columns``; errors propagate
     as ``ColumnSpecError``), the title / description, and for a project
-    table that the project exists and belongs to the owner. The owner is
-    ``owner_id`` or the caller. Mode: ``private`` for a user table, the
+    table that the project exists and belongs to the owner (for an
+    AutoProject table, ``autoproject_id``, never together with
+    ``project_id``, that the AutoProject does). The owner is
+    ``owner_id`` or the caller. Mode: ``private`` for a user or AutoProject
+    table, the
     project's ``public`` flag for a project table; a conversation caller
     (anything but ``ui``) must be in that same mode (``mode_mismatch``, the
     taint rule: a private conversation never creates a public table).
@@ -1405,7 +1436,7 @@ async def create_table(
 
     Raises:
         TableDisabled, TableError (``invalid_args``, ``project_not_found``,
-        ``mode_mismatch``, ``duplicate_title``, ``table_limit``,
+        ``autoproject_not_found``, ``mode_mismatch``, ``duplicate_title``, ``table_limit``,
         ``invalid_request``), ColumnSpecError, TableStorageError.
     """
     require_enabled(caller)
@@ -1417,6 +1448,22 @@ async def create_table(
     parsed = parse_columns(columns)
     owner = caller.user["id"] if owner_id is None else owner_id
     mode = "private"
+    if project_id is not None and autoproject_id is not None:
+        raise TableError(
+            "invalid_args", "A table belongs to a project or to an AutoProject, not both.",
+        )
+    if autoproject_id is not None:
+        from chat.autoprojects.constants import autoproject_not_found_message
+        from config import feature_gates
+        from db import autoproject_store
+
+        gate_open = feature_gates.autoprojects_enabled_for(
+            (caller.user or {}).get("email") or "",
+        )
+        if not gate_open or await autoproject_store.get_autoproject(owner, autoproject_id) is None:
+            raise TableError(
+                "autoproject_not_found", autoproject_not_found_message(autoproject_id),
+            )
     if project_id is not None:
         from db import project_store
 
@@ -1450,7 +1497,8 @@ async def create_table(
                 table = await table_store.create_table(
                     owner, clean_title,
                     mode=mode, schema=dump_schema(parsed), description=clean_description,
-                    project_id=project_id, last_write_source=source, table_id=table_id,
+                    project_id=project_id, autoproject_id=autoproject_id,
+                    last_write_source=source, table_id=table_id,
                 )
                 row_done = time.monotonic()
             except BaseException as exc:
@@ -1470,7 +1518,7 @@ async def create_table(
             logger.info(
                 "[tables] created %s (%s table, %s, %d columns) source=%s user=%s "
                 "lock_wait=%dms file=%dms row=%dms %s",
-                table_id, "project" if project_id is not None else "user", mode,
+                table_id, table_store.table_scope(table), mode,
                 len(parsed), source, _caller_email(caller), _ms(lock_wait),
                 _ms(row_started - file_started), _ms(row_done - row_started),
                 storage.describe_table_dir(table_dir),

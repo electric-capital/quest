@@ -25,15 +25,20 @@ the request body is looked at); rows are readable by every viewer.
 Routes
 ------
 
-- ``GET /tables`` -- three keyset-paged streams like docs: the caller's OWN
+- ``GET /tables`` -- four keyset-paged streams like docs: the caller's OWN
   user tables (default), one of the caller's projects' tables
   (``project_id``; 404 ``project_not_found`` unless the caller owns the
-  project), tables shared WITH the caller (``shared=true``, user and project
-  tables; with ``project_id`` 400 ``invalid_request``). ``limit`` 1..200
+  project), one of the caller's AutoProjects' tables (``autoproject_id``;
+  404 ``autoproject_not_found`` unless the caller owns it and the
+  ``autoprojects`` gate is open for them; with ``project_id`` 400
+  ``invalid_request``), tables shared WITH the caller (``shared=true``,
+  user, project and AutoProject tables; with ``project_id`` or
+  ``autoproject_id`` 400 ``invalid_request``). ``limit`` 1..200
   (422 outside; omitted = the whole stream, as docs), ``cursor`` =
   ``<updated_at>|<id>`` from ``next_cursor`` (400 ``invalid_cursor``).
   Returns ``{"tables": [list row], "has_more", "next_cursor"}``.
-- ``POST /tables`` ``{title, description?, project_id?, columns}`` -> 201
+- ``POST /tables`` ``{title, description?, project_id?, autoproject_id?,
+  columns}`` (at most one of the two ids; an AutoProject table is private) -> 201
   detail row. Change #1 "Created table" with source ``ui:<user_id>``.
 - ``GET /tables/{id}`` -> detail row (+ ``last_write_conversation``).
 - ``PUT /tables/{id}`` ``{title?, description?, require_approval?
@@ -117,6 +122,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool
 
+from chat import artifact_access
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.tables import filters, service, storage
 from chat.tables.access import TableAccess, effective_share, resolve_table_access
@@ -127,8 +133,15 @@ from chat.tables.constants import (
 )
 from chat.tables.schema import TableSchemaError
 from chat.tables.schema_ops import SchemaOperationError
-from config.feature_gates import tables_enabled_for
-from db import action_request_store, project_store, table_store, user_store
+from chat.autoprojects.constants import autoproject_not_found_message
+from config.feature_gates import autoprojects_enabled_for, tables_enabled_for
+from db import (
+    action_request_store,
+    autoproject_store,
+    project_store,
+    table_store,
+    user_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +157,7 @@ _ERROR_STATUS = {
     "denied": 403,
     "table_not_found": 404,
     "project_not_found": 404,
+    "autoproject_not_found": 404,
     "unknown_change": 404,
     "user_not_found": 404,
     "share_not_found": 404,
@@ -174,6 +188,7 @@ class CreateTableRequest(BaseModel):
     title: Optional[Any] = None
     description: Optional[Any] = None
     project_id: Optional[Any] = None
+    autoproject_id: Optional[Any] = None
     columns: Optional[Any] = None
 
 
@@ -212,6 +227,7 @@ def _require_tables_enabled(user: dict) -> None:
 def _ui_access(user: dict, table: dict) -> TableAccess:
     return resolve_table_access(
         table, user_id=user["id"], is_public=False, project_id=None, run_kind="ui",
+        autoprojects_enabled=artifact_access.autoprojects_open(user, table),
     )
 
 
@@ -346,7 +362,7 @@ def _table_row(
     is_owner = table["owner_id"] == user["id"]
     shares = table.get("shares") or []
     row = {k: v for k, v in table.items() if k not in ("shares", "schema")}
-    row["scope"] = "project" if table.get("project_id") else "user"
+    row["scope"] = table_store.table_scope(table)
     row["column_count"] = len(table.get("schema") or [])
     row["shared"] = bool(shares)
     row["shared_with_me"] = not is_owner
@@ -495,6 +511,7 @@ async def _visible_tables_page(
     before: Optional[tuple[datetime, str]],
     *,
     shared: bool = False,
+    autoproject_id: Optional[str] = None,
 ) -> tuple[list[tuple[dict, TableAccess]], bool, dict]:
     """Visible tables of one stream, newest-updated first, ``has_more``
     and the owners looked up on the way (for ``_ui_rows``' known_users).
@@ -511,8 +528,10 @@ async def _visible_tables_page(
             rows = await table_store.list_accessible_tables(
                 user["id"],
                 project_id=project_id,
-                include_user_tables=project_id is None,
+                include_user_tables=project_id is None and autoproject_id is None,
                 include_project_tables=project_id is not None,
+                autoproject_id=autoproject_id,
+                include_autoproject_tables=autoproject_id is not None,
                 owned_only=project_id is None,
                 limit=want,
                 before=before,
@@ -537,6 +556,19 @@ async def _visible_tables_page(
     if has_more:
         out = out[:limit]
     return out, has_more, owners
+
+
+async def _require_ui_autoproject(user: dict, autoproject_id: str) -> dict:
+    """The AutoProject, owned by the user with the ``autoprojects`` gate
+    open, else 404 ``autoproject_not_found`` (one body for all three)."""
+    found = None
+    if autoprojects_enabled_for(user.get("email") or ""):
+        found = await autoproject_store.get_autoproject(user["id"], autoproject_id)
+    if found is None:
+        raise _http_error(
+            404, "autoproject_not_found", autoproject_not_found_message(autoproject_id),
+        )
+    return found
 
 
 def _parse_json_param(raw: Optional[str], code: str, path: str) -> Any:
@@ -574,6 +606,7 @@ def _parse_int_param(raw: Optional[str], code: str, path: str) -> Optional[int]:
 @router.get("/tables")
 async def list_ui_tables(
     project_id: Optional[str] = Query(None),
+    autoproject_id: Optional[str] = Query(None, max_length=64),
     shared: bool = Query(False),
     limit: Optional[int] = Query(None, ge=1, le=200),
     cursor: Optional[str] = Query(None),
@@ -582,18 +615,25 @@ async def list_ui_tables(
     """List tables, newest-updated first (module docstring, ``GET /tables``)."""
     _require_tables_enabled(user)
     project_id = project_id or None
-    if shared and project_id is not None:
+    autoproject_id = autoproject_id or None
+    if shared and (project_id is not None or autoproject_id is not None):
         raise _http_error(
             400, "invalid_request",
             "shared=true lists tables shared with you across all projects; "
-            "it cannot be combined with project_id.",
+            "it cannot be combined with project_id or autoproject_id.",
+        )
+    if project_id is not None and autoproject_id is not None:
+        raise _http_error(
+            400, "invalid_request", "project_id and autoproject_id cannot be combined.",
         )
     if project_id is not None:
         if await project_store.get_project(user["id"], project_id) is None:
             raise _http_error(404, "project_not_found", "Project not found.")
+    if autoproject_id is not None:
+        await _require_ui_autoproject(user, autoproject_id)
     before = _parse_cursor(cursor) if cursor else None
     page, has_more, owners = await _visible_tables_page(
-        user, project_id, limit, before, shared=shared,
+        user, project_id, limit, before, shared=shared, autoproject_id=autoproject_id,
     )
     rows = await _ui_rows(user, page, known_users=owners)
     next_cursor = None
@@ -608,10 +648,12 @@ async def create_ui_table(
     body: CreateTableRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Create a table owned by the user (a user table, or a table in one of
-    the user's projects, taking the project's mode). 400 column-spec codes
+    """Create a table owned by the user (a user table, a table in one of
+    the user's projects, taking the project's mode, or a private table of
+    one of the user's AutoProjects). 400 column-spec codes
     (with ``column`` / ``field``), ``invalid_request``, ``table_limit``; 404
-    ``project_not_found``; 409 ``duplicate_title``. Returns the detail (201)."""
+    ``project_not_found`` / ``autoproject_not_found``; 409
+    ``duplicate_title``. Returns the detail (201)."""
     _require_tables_enabled(user)
     project_id = None if body.project_id in (None, "") else body.project_id
     if project_id is not None:
@@ -619,6 +661,16 @@ async def create_ui_table(
             raise _http_error(400, "invalid_request", "project_id must be a string.")
         if await project_store.get_project(user["id"], project_id) is None:
             raise _http_error(404, "project_not_found", "Project not found.")
+    autoproject_id = None if body.autoproject_id in (None, "") else body.autoproject_id
+    if autoproject_id is not None:
+        if not isinstance(autoproject_id, str):
+            raise _http_error(400, "invalid_request", "autoproject_id must be a string.")
+        if project_id is not None:
+            raise _http_error(
+                400, "invalid_request",
+                "A table belongs to a project or to an AutoProject, not both.",
+            )
+        await _require_ui_autoproject(user, autoproject_id)
     uid = user["id"]
     try:
         table = await service.create_table(
@@ -626,6 +678,7 @@ async def create_ui_table(
             title=body.title,
             description=body.description if body.description is not None else "",
             project_id=project_id,
+            autoproject_id=autoproject_id,
             columns=body.columns,
             write_source=f"ui:{uid}",
             actor_user_id=uid,

@@ -40,6 +40,7 @@ from chat.tables.filters import FilterError
 from chat.tables.schema import Column, TableSchemaError, load_schema
 from chat.tables.service import Caller, TableApprovalRequired, TableError
 from chat.tables.storage import TableStorageError
+from db import table_store
 from chat.tables.write_request import (
     WRITE_TABLE_ROWS,
     build_write_request_params,
@@ -185,11 +186,19 @@ def _column_info(column: Column) -> dict:
 
 
 def _scope(table: dict) -> str:
-    return "project" if table.get("project_id") else "user"
+    return table_store.table_scope(table)
+
+
+def _with_autoproject(table: dict, payload: dict) -> dict:
+    """``payload`` plus ``autoproject_id`` for an AutoProject table (other
+    tables keep their shape)."""
+    if table.get("autoproject_id"):
+        payload["autoproject_id"] = table["autoproject_id"]
+    return payload
 
 
 def _summary(table: dict, verdict: table_access.TableAccess, columns) -> dict:
-    return {
+    return _with_autoproject(table, {
         "id": table["id"],
         "title": table["title"],
         "description": table.get("description") or "",
@@ -203,11 +212,11 @@ def _summary(table: dict, verdict: table_access.TableAccess, columns) -> dict:
         "writable": verdict.rows,
         "write_note": table_access.write_note(verdict),
         "schema_change": verdict.schema,
-    }
+    })
 
 
 def _detail(table: dict, verdict: table_access.TableAccess, columns, sample: list) -> dict:
-    return {
+    return _with_autoproject(table, {
         "id": table["id"],
         "title": table["title"],
         "description": table.get("description") or "",
@@ -223,7 +232,7 @@ def _detail(table: dict, verdict: table_access.TableAccess, columns, sample: lis
         "schema_change": verdict.schema,
         "schema_note": table_access.schema_note(verdict),
         "sample_rows": sample,
-    }
+    })
 
 
 def _fit_rows(rows: list, total: int, offset: int, limit: int) -> dict:

@@ -1,6 +1,7 @@
 /**
  * Data layer for a Quest Docs list: the user's own user docs (no
- * `projectId`), one project's docs, or the docs other people shared with the
+ * `projectId`), one project's docs, one AutoProject's docs
+ * (`autoprojectId`), or the docs other people shared with the
  * user (`shared: true`, its own keyset stream; All Docs' "Shared with you").
  * Keyset-paged like the sidebar conversation list -- first
  * page on mount / whenever the arguments change, `loadMore` appends the next
@@ -31,9 +32,12 @@ export const DOCS_REFRESH_DEBOUNCE_MS = 300;
 export interface UseDocsOptions {
   /** A project's docs; omitted / null = the user's own user docs. */
   projectId?: string | null;
+  /** An AutoProject's docs; takes precedence over `projectId`. */
+  autoprojectId?: string | null;
   /**
    * The docs other people shared with the user (user and project docs).
-   * Takes precedence: `projectId` is ignored while this is set.
+   * Takes precedence: `projectId` and `autoprojectId` are ignored while
+   * this is set.
    */
   shared?: boolean;
   /** Page size (clamped to 1..200). */
@@ -68,19 +72,22 @@ const EMPTY: ListState = { key: null, docs: [], nextCursor: null, error: null };
 
 export function useDocs({
   projectId = null,
+  autoprojectId = null,
   shared = false,
   limit = DOCS_DEFAULT_PAGE_SIZE,
   enabled = true,
 }: UseDocsOptions = {}): DocsList {
   const pageSize = Math.min(DOCS_MAX_PAGE_SIZE, Math.max(1, Math.floor(limit)));
-  const project = shared ? null : projectId || null;
+  const autoproject = shared ? null : autoprojectId || null;
+  const project = shared || autoproject ? null : projectId || null;
   // Identity of the list being shown; null while disabled. The stream tag
-  // keeps the shared list apart from every project id.
-  const key = enabled ? `${shared ? 'shared' : `project:${project ?? ''}`}|${pageSize}` : null;
+  // keeps the shared and AutoProject lists apart from every project id.
+  const stream = shared ? 'shared' : autoproject ? `autoproject:${autoproject}` : `project:${project ?? ''}`;
+  const key = enabled ? `${stream}|${pageSize}` : null;
   // The list selector sent with every page request of this stream.
   const streamOpts = useMemo<FetchDocsOptions>(
-    () => (shared ? { shared: true } : { projectId: project }),
-    [shared, project],
+    () => (shared ? { shared: true } : autoproject ? { autoprojectId: autoproject } : { projectId: project }),
+    [shared, autoproject, project],
   );
 
   const [state, setState] = useState<ListState>(EMPTY);

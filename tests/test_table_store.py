@@ -156,7 +156,8 @@ class TestCreate:
             last_write_source="conversation:c1",
         )
         assert set(table) == {
-            "id", "owner_id", "project_id", "title", "description", "mode",
+            "id", "owner_id", "project_id", "autoproject_id",
+            "title", "description", "mode",
             "schema", "schema_version", "row_count", "last_write_source",
             "require_approval", "created_at", "updated_at", "shares",
         }

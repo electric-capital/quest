@@ -82,9 +82,12 @@ export function tableDownloadUrl(
 export interface ListTablesOptions {
   /** List this project's tables; omitted / null = the user's own user tables. */
   projectId?: string | null;
+  /** List this AutoProject's tables. Not combinable with `projectId`. */
+  autoprojectId?: string | null;
   /**
-   * List the tables other people shared with the viewer (user and project
-   * tables, its own keyset stream). Not combinable with `projectId`.
+   * List the tables other people shared with the viewer (user, project and
+   * AutoProject tables, its own keyset stream). Not combinable with
+   * `projectId` or `autoprojectId`.
    */
   shared?: boolean;
   /** Page size (1..200); omitted = the whole list, unpaged. */
@@ -95,12 +98,14 @@ export interface ListTablesOptions {
 
 /**
  * One page of tables, newest `updated_at` first. Rejects with
- * `project_not_found` (404), `invalid_cursor` or `invalid_request` (400).
+ * `project_not_found` / `autoproject_not_found` (404), `invalid_cursor` or
+ * `invalid_request` (400).
  */
 export function listTables(opts: ListTablesOptions = {}): Promise<ListTablesResponse> {
   return apiGet(tablesEndpoint(), {
     query: {
       project_id: opts.projectId || undefined,
+      autoproject_id: opts.autoprojectId || undefined,
       shared: opts.shared ? 'true' : undefined,
       limit: opts.limit,
       cursor: opts.cursor || undefined,

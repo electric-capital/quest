@@ -1,7 +1,8 @@
 """CreateTableHandler -- approve-to-create action request for Quest Tables.
 
-Params: ``{title, description?, target?: "user"|"project", columns}``.
-``target`` defaults to ``"user"`` (as the ``create_doc`` tool),
+Params: ``{title, description?, target?: "user"|"project"|"autoproject",
+columns}``. ``target`` defaults to ``"user"`` (as the ``create_doc`` tool;
+``"autoproject"`` is the proposing AutoProject run's AutoProject),
 ``description`` to ``""``. ``columns`` is the list of column specs
 (``chat.tables.schema.parse_column_spec``: name, type, required, unique,
 default, options, multiple, precision, description; never a ``key``).
@@ -38,15 +39,18 @@ from chat.tables import service
 from chat.tables.access import create_table_deny_reason
 from chat.tables.constants import TABLE_MAX_COLUMNS
 from chat.tables.schema import load_schema, parse_columns
+from db import table_store
 from db.models import ActionRequestType
 
-TARGETS = ("user", "project")
+TARGETS = ("user", "project", "autoproject")
 
 _ALL_PARAMS = frozenset({"title", "description", "target", "columns"})
 
 # Server-only preview keys written by the pre-card check; a model-supplied
 # copy is dropped by validate_params.
-SERVER_INJECTED_KEYS = frozenset({"table_mode", "project_title", "column_specs"})
+SERVER_INJECTED_KEYS = frozenset({
+    "table_mode", "project_title", "autoproject_title", "column_specs",
+})
 
 
 def _preview_columns(params: Mapping) -> list[dict]:
@@ -163,7 +167,8 @@ class CreateTableHandler(ActionRequestHandler):
         fields: list[dict] = [{"key": "Title", "value": str(params.get("title") or "")}]
         if params.get("description"):
             fields.append({"key": "Description", "value": str(params["description"])})
-        # table_mode / project_title / column_specs are server-injected by
+        # table_mode / project_title / autoproject_title / column_specs are
+        # server-injected by
         # the pre-card check (table_precard.precard_create_table).
         if params.get("table_mode"):
             fields.append({"key": "Mode", "value": str(params["table_mode"])})
@@ -171,6 +176,8 @@ class CreateTableHandler(ActionRequestHandler):
         fields.append({"key": "Scope", "value": str(target)})
         if target == "project" and params.get("project_title"):
             fields.append({"key": "Project", "value": str(params["project_title"])})
+        if target == "autoproject" and params.get("autoproject_title"):
+            fields.append({"key": "AutoProject", "value": str(params["autoproject_title"])})
         columns = _preview_columns(params)
         fields.append({
             "key": "Columns",
@@ -206,6 +213,10 @@ class CreateTableHandler(ActionRequestHandler):
             )
         source = write_source(request_id)
         caller = await execute_caller(user, project_id, conversation_id)
+        if target == "autoproject" and not caller.autoproject_id:
+            raise RuntimeError(
+                "invalid_args: target 'autoproject' needs an AutoProject run."
+            )
         reason = create_table_deny_reason(is_public=caller.is_public, run_kind=caller.run_kind)
         if reason:
             raise RuntimeError(f"denied: {reason}")
@@ -223,18 +234,22 @@ class CreateTableHandler(ActionRequestHandler):
                 title=title,
                 description=params.get("description") or "",
                 project_id=project_id if target == "project" else None,
+                autoproject_id=caller.autoproject_id if target == "autoproject" else None,
                 columns=columns,
                 write_source=source,
                 actor_user_id=user["id"],
             )
-        return {
+        result = {
             "table_id": table["id"],
             "title": table["title"],
             "mode": table["mode"],
-            "scope": "project" if table.get("project_id") else "user",
+            "scope": table_store.table_scope(table),
             "project_id": table.get("project_id"),
             "columns": [
                 {"name": c.name, "type": c.type} for c in load_schema(table["schema"])
             ],
             "schema_version": table["schema_version"],
         }
+        if table.get("autoproject_id"):
+            result["autoproject_id"] = table["autoproject_id"]
+        return result

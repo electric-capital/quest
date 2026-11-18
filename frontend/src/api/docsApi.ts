@@ -93,9 +93,12 @@ export function docDownloadUrl(id: string, format: DocDownloadFormat): string {
 export interface FetchDocsOptions {
   /** List this project's docs; omitted / null = the user's own user docs. */
   projectId?: string | null;
+  /** List this AutoProject's docs. Not combinable with `projectId`. */
+  autoprojectId?: string | null;
   /**
-   * List the docs other people shared with the viewer (user and project
-   * docs, its own keyset stream). Not combinable with `projectId`.
+   * List the docs other people shared with the viewer (user, project and
+   * AutoProject docs, its own keyset stream). Not combinable with
+   * `projectId` or `autoprojectId`.
    */
   shared?: boolean;
   /** Page size (1..200); omitted = the whole list, unpaged. */
@@ -106,12 +109,14 @@ export interface FetchDocsOptions {
 
 /**
  * One page of docs, newest `updated_at` first. Rejects with
- * `project_not_found` (404) or `invalid_cursor` (400).
+ * `project_not_found` / `autoproject_not_found` (404) or `invalid_cursor`
+ * (400).
  */
 export function fetchDocs(opts: FetchDocsOptions = {}): Promise<ListDocsResponse> {
   return apiGet(docsEndpoint(), {
     query: {
       project_id: opts.projectId || undefined,
+      autoproject_id: opts.autoprojectId || undefined,
       shared: opts.shared ? 'true' : undefined,
       limit: opts.limit,
       cursor: opts.cursor || undefined,

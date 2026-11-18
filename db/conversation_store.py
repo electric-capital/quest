@@ -930,3 +930,16 @@ def _admin_conversation_row(conv: Conversation, email: str, name: str | None) ->
         # "model used by the most recent model output".
         "last_model": conv.model,
     }
+
+
+async def get_conversation_autoproject_id(conversation_id: Optional[str]) -> Optional[str]:
+    """The AutoProject whose run this conversation is
+    (``conversations.autoproject_id``), or None for any other conversation,
+    an unknown id or no id. What an approval card's pre-card and execute
+    steps use to rebuild the proposing run's artifact caller."""
+    if not conversation_id:
+        return None
+    async with AsyncSessionLocal() as db:
+        return (await db.execute(
+            select(Conversation.autoproject_id).where(Conversation.id == conversation_id)
+        )).scalar_one_or_none()

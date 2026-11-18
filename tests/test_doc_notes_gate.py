@@ -382,6 +382,7 @@ _SUGGESTION_ALLOWED_BY_CAUSE = {
     "read_only_share": False,
     "public_from_private": False,
     "outside_project": False,
+    "outside_autoproject": False,
     "slack_needs_approval": True,
     "slack_approval_required": True,
     "ui_read_only": False,

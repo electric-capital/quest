@@ -108,14 +108,15 @@ class TestRegistry:
         def required(name):
             return TOOL_CALL_REGISTRY[name]["parameters"]["required"]
 
-        assert props("list_docs")["scope"]["enum"] == ["user", "project", "public", "all"]
-        assert props("search_docs")["scope"]["enum"] == ["user", "project", "public", "all"]
+        scopes = ["user", "project", "public", "autoproject", "all"]
+        assert props("list_docs")["scope"]["enum"] == scopes
+        assert props("search_docs")["scope"]["enum"] == scopes
         assert (props("list_docs")["limit"]["minimum"], props("list_docs")["limit"]["maximum"]) == (1, 200)
         assert props("search_docs")["limit"]["maximum"] == 50
         assert required("search_docs") == ["query"]
         assert required("read_doc") == ["doc_id"]
         assert required("create_doc") == ["title", "content"]
-        assert props("create_doc")["target"]["enum"] == ["user", "project"]
+        assert props("create_doc")["target"]["enum"] == ["user", "project", "autoproject"]
         assert required("edit_doc") == ["doc_id"]
         assert props("edit_doc")["edits"]["type"] == "array"
         assert props("edit_doc")["replace_all"]["type"] == "boolean"

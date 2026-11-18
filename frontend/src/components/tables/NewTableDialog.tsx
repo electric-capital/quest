@@ -6,7 +6,10 @@
  * Location: "Your tables" (a user table, always private) or one of the
  * user's projects (non-archived, plus the preselected one), preselected to
  * the project the list is filtered to. No mode is sent: a project table
- * takes its project's mode, which a line under the select names.
+ * takes its project's mode, which a line under the select names. Opened
+ * from an AutoProject page it takes `autoproject`: the location is that
+ * AutoProject (a read-only line, no select) and the table is created with
+ * its `autoproject_id`.
  *
  * Create validates the draft with the same rules as the Columns panel
  * (`validateDraft` with the title, on an empty table: the title is checked
@@ -62,9 +65,17 @@ export interface NewTableDialogProps {
   projects: Project[];
   /** Preselected location (the filtered project), or null for "Your tables". */
   initialProjectId: string | null;
+  /** The AutoProject the table is created in; the location is then fixed. */
+  autoproject?: { id: string; title: string } | null;
 }
 
-export function NewTableDialog({ isOpen, onClose, projects, initialProjectId }: NewTableDialogProps) {
+export function NewTableDialog({
+  isOpen,
+  onClose,
+  projects,
+  initialProjectId,
+  autoproject = null,
+}: NewTableDialogProps) {
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -115,7 +126,9 @@ export function NewTableDialog({ isOpen, onClose, projects, initialProjectId }: 
     [fullDraft],
   );
   const selectedProject =
-    location === USER_TABLES_LOCATION ? null : (projects.find((p) => p.id === location) ?? null);
+    autoproject || location === USER_TABLES_LOCATION
+      ? null
+      : (projects.find((p) => p.id === location) ?? null);
 
   const changeDraft = (next: SchemaDraft) => {
     setDraft(next);
@@ -133,6 +146,7 @@ export function NewTableDialog({ isOpen, onClose, projects, initialProjectId }: 
     try {
       const body = draftToCreateRequest(fullDraft, {
         projectId: location === USER_TABLES_LOCATION ? null : location,
+        autoprojectId: autoproject?.id ?? null,
         description,
       });
       const detail = await createTable(body);
@@ -221,23 +235,31 @@ export function NewTableDialog({ isOpen, onClose, projects, initialProjectId }: 
           disabled={creating}
         />
 
-        <label htmlFor="new-table-location-select" className="new-doc-label new-doc-label-spaced">
-          Location
-        </label>
-        <select
-          id="new-table-location-select"
-          className="new-doc-input new-doc-select"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          disabled={creating}
-        >
-          <option value={USER_TABLES_LOCATION}>Your tables</option>
-          {locationProjects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.archived ? `${p.name} (archived)` : p.name}
-            </option>
-          ))}
-        </select>
+        {autoproject ? (
+          <p className="new-doc-mode-inherited">
+            Location: <strong>{autoproject.title}</strong> — this AutoProject's tables
+          </p>
+        ) : (
+          <>
+            <label htmlFor="new-table-location-select" className="new-doc-label new-doc-label-spaced">
+              Location
+            </label>
+            <select
+              id="new-table-location-select"
+              className="new-doc-input new-doc-select"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              disabled={creating}
+            >
+              <option value={USER_TABLES_LOCATION}>Your tables</option>
+              {locationProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.archived ? `${p.name} (archived)` : p.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         {selectedProject && (
           <p className="new-doc-mode-inherited">
             Mode: <strong>{selectedProject.public ? 'Public' : 'Private'}</strong> — a project table takes its

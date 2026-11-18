@@ -57,6 +57,7 @@ import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any, Optional
 
+from chat import artifact_access
 from chat import storage as _storage
 from chat.docs import notes as doc_notes
 from chat.docs import service
@@ -70,7 +71,7 @@ from chat.docs.constants import (
     doc_notes_disabled_message,
 )
 from chat.docs.service import Caller, DocError, DocNotesUnseen
-from db import doc_memory_store, doc_store
+from db import doc_memory_store, doc_store, user_store
 from db import doc_note_suggestion_store as store
 from db.doc_memory_store import (
     DuplicateMemoryError,
@@ -189,10 +190,16 @@ def _is_version(value: Any) -> bool:
     )
 
 
-def _ui_access(user_id: int, doc: Mapping[str, Any]):
-    """The UI verdict (``run_kind="ui"``), as chat/docs/routes.py computes it."""
+async def _ui_access(user_id: int, doc: Mapping[str, Any]):
+    """The UI verdict (``run_kind="ui"``), as chat/docs/routes.py computes it.
+    The user row is read only for an AutoProject doc (the gate needs the
+    email)."""
+    user = None
+    if doc.get("autoproject_id") is not None:
+        user = await user_store.get_user_by_id(user_id)
     return resolve_doc_access(
         doc, user_id=user_id, is_public=False, project_id=None, run_kind="ui",
+        autoprojects_enabled=artifact_access.autoprojects_open(user, doc),
     )
 
 
@@ -658,7 +665,7 @@ async def accept_suggestion(
     if doc is None:
         raise _not_found()
     if row["kind"] == KIND_MEMORY:
-        if _ui_access(user_id, doc).write != "free":
+        if (await _ui_access(user_id, doc)).write != "free":
             raise NoteSuggestionError("forbidden", FORBIDDEN_MEMORY_MESSAGE)
         expected = None
     else:
@@ -767,7 +774,7 @@ async def review_rows(user_id: int, rows: Iterable[Mapping[str, Any]]) -> list[d
     states: dict[str, Optional[dict]] = {}
     for doc_id in dict.fromkeys(r["doc_id"] for r in rows):
         doc = await doc_store.get_doc(doc_id, with_shares=True)
-        if doc is None or not _ui_access(user_id, doc).visible:
+        if doc is None or not (await _ui_access(user_id, doc)).visible:
             visible[doc_id] = None
             continue
         visible[doc_id] = doc

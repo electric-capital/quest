@@ -410,7 +410,9 @@ def _orm_roundtrip(db_path) -> dict:
 def test_orm_reads_and_writes_the_migrated_schema(keyed):
     db_path = keyed.db_path
     _at_previous_seeded(keyed)
-    keyed.alembic("upgrade", REV)
+    # The ORM models are the current ones, so the schema they read is the
+    # head's (later revisions add columns to docs, e.g. autoproject_id).
+    keyed.alembic("upgrade", "head")
     execute(db_path, "UPDATE docs SET instructions = 'Newest first' WHERE id = 'd-user'")
 
     out = _orm_roundtrip(db_path)

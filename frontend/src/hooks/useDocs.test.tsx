@@ -88,6 +88,20 @@ describe('useDocs', () => {
     vi.useRealTimers();
   });
 
+  it('asks for an AutoProject stream, which wins over a project and loses to shared', async () => {
+    mocks.fetchDocs.mockResolvedValue(page(['a']));
+    const { result, rerender } = renderHook(
+      (props: { shared: boolean }) => useDocs({ autoprojectId: 'ap1', projectId: 'p1', limit: 5, ...props }),
+      { initialProps: { shared: false } },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mocks.fetchDocs).toHaveBeenLastCalledWith({ autoprojectId: 'ap1', limit: 5 });
+
+    rerender({ shared: true });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mocks.fetchDocs).toHaveBeenLastCalledWith({ shared: true, limit: 5 });
+  });
+
   it('loads the first page, appends the next one by cursor, and stops at has_more false', async () => {
     mocks.fetchDocs.mockResolvedValueOnce(page(['a', 'b'], 'cursor-1'));
     const { result } = renderHook(() => useDocs({ limit: 2 }));

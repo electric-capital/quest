@@ -597,6 +597,41 @@ _WORKSPACE_AUTOPROJECT_RUN_NOTE = (
 )
 
 
+# Prepended to system:quest_docs / system:tables in an AutoProject run: the
+# AutoProject scope exists only there, so the skills' own text (shared with
+# every other conversation) never names it.
+_QUEST_DOCS_AUTOPROJECT_RUN_NOTE = (
+    "**In an AutoProject run:** a doc can belong to this AutoProject. "
+    "`create_doc(target=\"autoproject\")` creates one (always private; "
+    "titles are unique per AutoProject); every run of this AutoProject "
+    "reads and writes it like one of the user's own docs, the user sees it "
+    "on the AutoProject page, and it is deleted with the AutoProject. "
+    "`list_docs` / `search_docs` take `scope: \"autoproject\"` for this "
+    "AutoProject's docs, and their rows carry scope `autoproject` and an "
+    "`autoproject_id`. Use this target for a doc that is part of this "
+    "AutoProject's work and `target=\"user\"` for one the user will use "
+    "outside it: the user's other chats can read an AutoProject doc but not "
+    "change it. The docs of the user's other AutoProjects are read-only "
+    "here. There is no `target=\"project\"` in a run."
+)
+
+_TABLES_AUTOPROJECT_RUN_NOTE = (
+    "**In an AutoProject run:** a table can belong to this AutoProject. "
+    "A `create_table` request with `target: \"autoproject\"` proposes one "
+    "(always private; titles are unique per AutoProject); every run of this "
+    "AutoProject reads it and writes its rows like one of the user's own "
+    "tables, the user sees it on the AutoProject page, and it is deleted "
+    "with the AutoProject. `list_tables` takes `scope: \"autoproject\"` "
+    "for this AutoProject's tables, and their rows carry scope "
+    "`autoproject` and an `autoproject_id`. Use this target for a table "
+    "that is part of this AutoProject's work and `target: \"user\"` for "
+    "one the user will use outside it: the user's other chats can read an "
+    "AutoProject table but not change it. The tables of the user's other "
+    "AutoProjects are read-only here. There is no `target: \"project\"` "
+    "in a run."
+)
+
+
 def _workspace_content(_base_url: str, _api_key: str) -> str:
     return f"""## Workspace files, run_python, and run_script
 
@@ -1876,6 +1911,10 @@ can grow, and point at it:
 Point at it from the result (for the user) and from the notes and the
 brief, by doc or table id or `autoproject://` path (for the next run). Quest
 Docs and Quest Tables are available when their system skills are listed.
+A doc or table that is part of this AutoProject's work belongs to the
+AutoProject: create it with `target` `autoproject` (the skills say how), so
+it shows on the AutoProject page and later runs find it with
+`list_docs` / `list_tables` and `scope: "autoproject"`.
 
 ### When the user edited the brief
 
@@ -2166,6 +2205,7 @@ _register(SystemSkill(
     when_to_load="Load when the user wants something kept as a doc, asks about their docs, or a routine maintains a running log.",
     requires=DOCS_SERVICE_KEY,
     content_builder=_quest_docs_content,
+    autoproject_run_note=_QUEST_DOCS_AUTOPROJECT_RUN_NOTE,
 ))
 
 # Gated on the "doc_notes" connected-services pseudo-key (the per-user Quest
@@ -2209,6 +2249,7 @@ _register(SystemSkill(
     when_to_load="Load when the user wants structured records kept, tracked or refreshed in Quest, or asks about their tables.",
     requires=TABLES_SERVICE_KEY,
     content_builder=_tables_content,
+    autoproject_run_note=_TABLES_AUTOPROJECT_RUN_NOTE,
 ))
 
 _register(SystemSkill(

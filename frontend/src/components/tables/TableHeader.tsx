@@ -84,6 +84,7 @@ import { ApiClientError } from '../../api/request';
 import type { TableDetail, TableListRow, TableShare } from '../../api/types';
 import { useProjects } from '../../contexts/ProjectsContext';
 import { shouldShowDocModeBadge } from '../../utils/docMode';
+import { autoprojectPath } from '../../utils/autoprojectsRoute';
 import { tablesListPath } from '../../utils/tablesRoute';
 import { DocConfirmDialog } from '../docs/DocConfirmDialog';
 import { DocModeBadge } from '../docs/DocModeBadge';
@@ -439,7 +440,12 @@ export function TableHeader({
   const hiddenShares = shares.slice(MAX_SHARE_CHIPS);
   const ownerName = table.owner?.name || table.owner?.email || 'someone';
   const hasMeta =
-    showModeBadge || table.require_approval || Boolean(table.project_id) || shares.length > 0 || table.shared_with_me;
+    showModeBadge ||
+    table.require_approval ||
+    Boolean(table.project_id) ||
+    Boolean(table.autoproject_id) ||
+    shares.length > 0 ||
+    table.shared_with_me;
 
   return (
     <div className="doc-header table-header">
@@ -628,6 +634,22 @@ export function TableHeader({
                   <span className="doc-header-project-name">
                     {table.shared_with_me ? 'Project table' : projectName}
                   </span>
+                </span>
+              )}
+              {table.autoproject_id && !table.shared_with_me && (
+                <Link
+                  to={autoprojectPath(table.autoproject_id)}
+                  className="doc-header-project-chip"
+                  title="Open the AutoProject this table belongs to"
+                >
+                  <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">AutoProject</span>
+                </Link>
+              )}
+              {table.autoproject_id && table.shared_with_me && (
+                <span className="doc-header-project-chip doc-header-chip--static" title="A table from an AutoProject">
+                  <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">AutoProject table</span>
                 </span>
               )}
               {shownShares.map((share) => (

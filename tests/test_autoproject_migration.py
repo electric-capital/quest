@@ -387,18 +387,22 @@ def test_fresh_database_matches_the_orm(keyed, tmp_path):
     keyed.alembic("upgrade", "head")
     assert set(NEW_TABLES) <= _tables(db_path)
 
-    # Autogenerate reports nothing for the new tables. The inline key on
-    # conversations.autoproject_id is the one known exception: reflection
-    # cannot read the ON DELETE of an inline clause, so alembic/env.py
-    # (_INLINE_FKS) skips it for autogenerate; it is checked from PRAGMA
-    # below instead.
+    # Autogenerate reports nothing for the new tables. The inline keys on
+    # conversations.autoproject_id and (migration c5e8a1d3f7b2)
+    # docs.autoproject_id / data_tables.autoproject_id are the known
+    # exceptions: reflection cannot read the ON DELETE of an inline clause,
+    # so alembic/env.py (_INLINE_FKS) skips them for autogenerate; they are
+    # checked from PRAGMA instead (below, and in
+    # tests/test_autoproject_artifacts_migration.py).
+    inline_tables = ("'conversations'", "'docs'", "'data_tables'")
+    drift = metadata_drift(db_path)
     mine = [
-        d for d in metadata_drift(db_path)
-        if "autoproject" in d and "'conversations'" not in d
+        d for d in drift
+        if "autoproject" in d and not any(t in d for t in inline_tables)
     ]
     assert mine == []
-    conv_drift = [d for d in metadata_drift(db_path) if "autoproject_id" in d
-                  and "'conversations'" in d]
+    conv_drift = [d for d in drift if "autoproject_id" in d
+                  and any(t in d for t in inline_tables)]
     assert all(d.startswith(("('remove_fk'", "('add_fk'")) for d in conv_drift)
 
     # Column for column (types, NOT NULL, primary keys), keys and indexes

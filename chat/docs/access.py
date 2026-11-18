@@ -73,6 +73,15 @@ Rules layered on the matrix, applied in this order:
    confined to their own project's docs, and a sandbox script reaches what
    the conversation that launched it reaches (it carries that
    conversation's project and mode; ``chat/sandbox_tokens.py``).
+   AutoProject docs (``autoproject_id`` set, always private) follow the
+   same shape: the matrix applies only from the runs of that AutoProject
+   (the caller's ``autoproject_id``) and from the UI. The OWNER's other
+   private standalone conversations, another AutoProject's runs included,
+   read them (``DENY_OUTSIDE_AUTOPROJECT``); project conversations, public
+   conversations and share recipients' conversations see Hidden. All of
+   this holds only while the ``autoprojects`` gate is open for the calling
+   user (``autoprojects_enabled``): without it an AutoProject doc is Hidden
+   from everyone, the owner and the UI included.
 3. A public conversation never learns of a private doc (Hidden, even for
    the owner and even with a write share).
 4. Read-only run kinds (sub-agents, inference-API runs, cross-user subagent
@@ -135,6 +144,7 @@ __all__ = [
     "APPROVAL_REQUIRED_WRITE_NOTE",
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
+    "DENY_OUTSIDE_AUTOPROJECT",
     "DENY_OUTSIDE_PROJECT",
     "DENY_PUBLIC_DOC_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
@@ -175,6 +185,10 @@ DENY_OUTSIDE_PROJECT = (
     "This doc belongs to a project and is written only from that project's "
     "conversations or in the Quest UI; here it is read-only."
 )
+DENY_OUTSIDE_AUTOPROJECT = (
+    "This doc belongs to an AutoProject and is written only from that "
+    "AutoProject's runs or in the Quest UI; here it is read-only."
+)
 DENY_SLACK_NEEDS_APPROVAL = (
     "This doc is shared, so changes need an approval card, which Slack-driven "
     "conversations cannot open. Continue from the Quest web UI."
@@ -200,6 +214,7 @@ _DENY_TEXT = {
     "read_only_share": DENY_READ_ONLY_SHARE,
     "public_from_private": DENY_PUBLIC_DOC_FROM_PRIVATE,
     "outside_project": DENY_OUTSIDE_PROJECT,
+    "outside_autoproject": DENY_OUTSIDE_AUTOPROJECT,
     "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
     "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
     "ui_read_only": DENY_UI_READ_ONLY,
@@ -292,6 +307,8 @@ def resolve_doc_access(
     project_id: str | None,
     run_kind: str,
     doc_source_project_ids: Collection[str] = (),
+    autoproject_id: str | None = None,
+    autoprojects_enabled: bool = False,
 ) -> DocAccess:
     """Decide visibility, readability and the write verdict for one doc.
 
@@ -300,7 +317,11 @@ def resolve_doc_access(
     ``project_id`` describe the calling conversation; ``run_kind`` is one
     of :data:`RUN_KINDS`; ``doc_source_project_ids`` are the public
     projects whose docs the calling (private) project may read (rule 2),
-    empty unless the caller is a private project conversation.
+    empty unless the caller is a private project conversation;
+    ``autoproject_id`` is the calling run's AutoProject, None outside a run;
+    ``autoprojects_enabled`` is whether the ``autoprojects`` gate is open
+    for the user (``artifact_access.autoprojects_open``), and an AutoProject
+    doc is hidden without it.
 
     A denied verdict carries both its text (``deny_reason``) and its cause
     (``deny_cause``); :data:`HIDDEN` carries neither.
@@ -315,6 +336,8 @@ def resolve_doc_access(
         project_id=project_id,
         run_kind=run_kind,
         source_project_ids=doc_source_project_ids,
+        autoproject_id=autoproject_id,
+        autoprojects_enabled=autoprojects_enabled,
         kind="doc",
     )
     if not core.visible:

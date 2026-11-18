@@ -101,6 +101,7 @@ Nothing is deleted: table rows and files survive, and restoring access brings th
 3. **Prompt and tools**: `get_user_connected_services()` sets the pseudo-key `autoprojects`, so the two read tools and `system:autoprojects` drop out like a disconnected service; an explicit `load_skills` returns the gate-closed text, and the read tools answer `autoprojects_disabled`. `get_public_connected_services()` pins the key to false whatever the gate.
 4. **Resume**: a wait handle resolved for a run after the gate closed stops the run instead of resuming it (`drive_autoproject_run()`); Stop itself is never gated.
 5. **Frontend**: `AUTOPROJECTS_FEATURE` (`frontend/src/api/autoprojectsApi.ts`) missing from `enabled_features` hides the sidebar section, renders `AutoProjectsGateClosed` on an `/autoprojects*` URL and keeps a run's `/chats/<id>` URL as a read-only transcript.
+6. **Docs and tables**: an AutoProject's docs and tables are Hidden from the user everywhere, shares included, by the access rule itself ([AutoProjects -- Docs and Tables](autoprojects.md#docs-and-tables)).
 
 Nothing is deleted: the rows, the run conversations and the workspace survive, and reopening the gate restores everything.
 

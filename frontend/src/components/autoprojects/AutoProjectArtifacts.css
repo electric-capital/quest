@@ -1,0 +1,88 @@
+/* The AutoProject page's "Docs and tables" card (AutoProjectArtifacts). Card
+ * chrome is AutoProjectPage.css's .autoproject-card-*. */
+
+.autoproject-artifacts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.75rem;
+}
+
+.autoproject-artifacts-list {
+  list-style: none;
+  margin: 0 -0.5rem;
+  padding: 0;
+}
+
+.autoproject-artifact {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.autoproject-artifact:hover {
+  background-color: var(--hover);
+}
+
+.autoproject-artifact-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.autoproject-artifact-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.autoproject-artifact-title {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autoproject-artifact-description {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autoproject-artifact-meta {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Colours are NewDocModal.css's .new-doc-error. */
+.autoproject-artifacts-error {
+  margin: 0;
+}
+
+.autoproject-artifacts-more {
+  align-self: flex-start;
+}
+
+@media (max-width: 640px) {
+  .autoproject-artifact {
+    align-items: flex-start;
+  }
+
+  .autoproject-artifact-meta {
+    display: none;
+  }
+}

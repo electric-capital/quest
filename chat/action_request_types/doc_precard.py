@@ -46,11 +46,13 @@ from chat.action_request_types._skill_content_edit import (
 from chat.action_request_types.write_doc import (
     OPERATION_TOOLS,
     operation_params,
+    conversation_autoproject_id,
     project_is_public,
 )
 from chat.docs import constants as doc_constants
 from chat.docs import notes as doc_notes
 from chat.docs import service as doc_service
+from db import doc_store
 
 # Line cap of each per-edit diff window on a multi_edit card (the group
 # holds up to DOC_MAX_EDITS_PER_CALL of them).
@@ -128,6 +130,7 @@ async def doc_precard_check(
         project_id=project_id,
         is_public=is_public,
         run_kind="top_level",
+        autoproject_id=await conversation_autoproject_id(conversation_id),
     )
     try:
         preview = await doc_service.preview_write_operation(
@@ -161,7 +164,7 @@ async def doc_precard_check(
     doc = preview["doc"]
     validated_params["current_title"] = doc["title"]
     validated_params["doc_mode"] = doc["mode"]
-    validated_params["doc_scope"] = "project" if doc.get("project_id") else "user"
+    validated_params["doc_scope"] = doc_store.doc_scope(doc)
     validated_params["share_summary"] = share_summary(doc.get("shares") or [])
     validated_params["require_approval"] = bool(doc.get("require_approval", False))
 

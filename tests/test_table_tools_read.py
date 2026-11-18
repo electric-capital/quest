@@ -130,7 +130,7 @@ class TestRegistry:
             return TOOL_CALL_REGISTRY[name]["parameters"]
 
         assert params("list_tables")["properties"]["scope"]["enum"] == [
-            "user", "project", "public", "all",
+            "user", "project", "public", "autoproject", "all",
         ]
         limit = params("list_tables")["properties"]["limit"]
         assert (limit["minimum"], limit["maximum"], limit["default"]) == (1, 200, 50)
