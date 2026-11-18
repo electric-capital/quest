@@ -277,22 +277,22 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
       ? `${subagentRun.caller_name} (${subagentRun.caller_email})`
       : subagentRun.caller_email)
     : 'another user';
-  const readOnlyNotice: ReactNode = origin === 'user_subagent'
+  const readOnlyNotice = origin === 'user_subagent'
     ? `Subagent run by ${subagentCallerDisplay} — read-only. Interact via the approval card when it appears.`
     : origin === 'inference_api'
       ? 'Inference API run — a read-only transcript of a one-shot request made by an application with your API key.'
-      : origin === 'autoproject'
-        // The link only while the AutoProjects gate is open for the user: with it
-        // closed the AutoProject page would only say the feature is off.
-        ? (autoprojectId && autoprojectsEnabled
-          ? (
-            <>
-              This is the work behind one update of an AutoProject.{' '}
-              <Link to={autoprojectPath(autoprojectId)}>Continue in the AutoProject.</Link>
-            </>
-          )
-          : 'This is the work behind one update of an AutoProject.')
-        : null;
+      : null;
+  // An AutoProject run's notice line, shown in place of the composer. The
+  // link only while the AutoProjects gate is open for the user: with it
+  // closed the AutoProject page would only say the feature is off.
+  const autoprojectRunNotice: ReactNode = autoprojectId && autoprojectsEnabled
+    ? (
+      <>
+        This is the work behind one update of an AutoProject.{' '}
+        <Link to={autoprojectPath(autoprojectId)}>Continue in the AutoProject.</Link>
+      </>
+    )
+    : 'This is the work behind one update of an AutoProject.';
 
   // (The composer's disabled state and placeholder copy now live in
   // <Composer>, derived from the isStreaming/isReadOnly/hasPendingWait props
@@ -959,7 +959,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
           disabled input box would only look like a chat. */}
       {origin === 'autoproject' ? (
         <div className="chat-panel-notice-footer">
-          <p className="slack-thread-link-note">{readOnlyNotice}</p>
+          <p className="slack-thread-link-note">{autoprojectRunNotice}</p>
         </div>
       ) : (
       <Composer

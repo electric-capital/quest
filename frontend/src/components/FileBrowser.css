@@ -568,7 +568,6 @@
   border-radius: 6px;
 }
 
-/* Light mode support */
 /* Compact variant (`compact`, the AutoProject page's cards): Upload and New
    folder are icon buttons in the toolbar row, rows are one line (name, then
    size and date), the empty state is one line with an upload link. */
@@ -636,6 +635,7 @@
   cursor: default;
 }
 
+/* Light mode support */
 @media (prefers-color-scheme: light) {
   .file-browser.drag-over {
     background-color: rgb(var(--accent-rgb) / 0.05);

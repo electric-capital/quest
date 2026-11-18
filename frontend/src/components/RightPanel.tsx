@@ -254,10 +254,10 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
   const showTables = legacyTables.tables.length > 0 || legacyTables.error !== null;
 
   const layout: Layout = !projectId
-      ? 'single'
-      : conversationId
-        ? (showTables ? 'three' : 'files')
-        : (showTables ? 'two' : 'single');
+    ? 'single'
+    : conversationId
+      ? (showTables ? 'three' : 'files')
+      : (showTables ? 'two' : 'single');
 
   const chatSource = useMemo(
     () => (conversationId ? conversationSource(conversationId) : null),
@@ -268,16 +268,14 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
     [projectId],
   );
 
-  // Copy / Move between the two file cards: actions only in a project
-  // conversation.
+  // Copy / Move between the two file cards: actions only in a project conversation.
   const copy = useWorkspaceCopy(conversationId, conversationId ? projectFilesSource : null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
-  // Card shares while dragging (or after a drag), for the layout and the
-  // project they were made in; otherwise the stored/default shares for what
-  // is on screen.
+  // Card shares while dragging (or after a drag), for the layout+project they
+  // were made in; otherwise the stored/default shares for what is on screen.
   const layoutKey = `${layout}:${projectId ?? ''}`;
   const [dragSizes, setDragSizes] = useState<{ key: string; sizes: number[] } | null>(null);
   const loadedSizes = useMemo(() => loadSizes(layout, projectId), [layout, projectId]);

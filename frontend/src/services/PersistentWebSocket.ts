@@ -343,12 +343,6 @@ class PersistentWebSocketClient {
       || type === 'memory_suggestions_changed'
       || type === 'project_memory_suggestions_changed'
       || type === 'doc_note_suggestions_changed'
-      // AutoProjects globals. Neither carries a conversation_id today; listed
-      // defensively so a later field (e.g. the run's conversation) can never
-      // divert them to the per-conversation channel, where the AutoProject hooks
-      // would never see them.
-      || type === 'autoproject_list_changed'
-      || type === 'autoproject_changed'
     );
     if (conversationId && !isPerUserGlobalWithConversationId) {
       // Track high-water seq from durable events so a reconnect can issue

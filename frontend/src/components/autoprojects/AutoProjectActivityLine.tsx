@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { parseUTCTimestamp } from '../../utils/formatters'
+// The chat's typing dots (`.typing-indicator`).
+import '../ChatPanel.css'
 
 /**
  * The compact activity line under an active run on the AutoProject page: a

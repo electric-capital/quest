@@ -7,7 +7,6 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import '../ChatPanel.css'
 import type { FileSource } from '../../api/fileApi'
 import { apiErrorCode } from '../../api/request'
 import { answerAutoProjectQuestion, deleteAutoProjectRun, unarchiveAutoProject, updateAutoProject } from '../../api/autoprojectsApi'
