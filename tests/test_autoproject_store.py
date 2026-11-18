@@ -1166,6 +1166,46 @@ def test_missing_and_foreign_errors_are_identical(env):
     _run(go())
 
 
+def test_concurrent_writers_cannot_both_pass_a_check(env):
+    """Each check-then-write runs in the transaction that holds the write
+    lock: of two concurrent starts, brief writes on one token, or creates
+    at the cap, exactly one lands."""
+    store = env.store
+
+    async def go():
+        ap = await env.new_ap()
+        convs = [await env.conv(env.alice, ap["id"]) for _ in range(2)]
+        results = await asyncio.gather(
+            *(store.allocate_run(ap["id"], conversation_id=c, prompt="p") for c in convs),
+            return_exceptions=True,
+        )
+        started = [r for r in results if isinstance(r, dict)]
+        refused = [r for r in results if isinstance(r, store.AutoProjectRunActiveError)]
+        assert (len(started), len(refused)) == (1, 1)
+        assert started[0]["seq"] == 1 and await store.count_runs(ap["id"]) == 1
+        assert (await store.get_autoproject(env.alice, ap["id"]))["next_run_seq"] == 2
+
+        results = await asyncio.gather(
+            *(store.set_brief(ap["id"], text, expected_brief_version=0, source="ui")
+              for text in ("one", "two")),
+            return_exceptions=True,
+        )
+        assert sorted(type(r).__name__ for r in results) == ["StaleBriefError", "dict"]
+        assert [v["version"] for v in await store.list_brief_versions(ap["id"])] == [1]
+
+        for i in range(MAX_ACTIVE_AUTOPROJECTS_PER_USER - 2):
+            await env.new_ap(title=f"filler {i}")
+        results = await asyncio.gather(
+            *(env.new_ap(title=f"race {i}") for i in range(2)), return_exceptions=True,
+        )
+        assert sorted(type(r).__name__ for r in results) == [
+            "AutoProjectCapReachedError", "dict",
+        ]
+        assert len(await store.list_autoprojects(env.alice)) == MAX_ACTIVE_AUTOPROJECTS_PER_USER
+
+    _run(go())
+
+
 # ---------------------------------------------------------------------------
 # 8. Cascades and account-delete helpers
 # ---------------------------------------------------------------------------
