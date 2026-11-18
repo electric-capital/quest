@@ -104,9 +104,13 @@ _HARD_CUT_MARKER = "\n\n[The AutoProject context was cut here at its size limit.
 _INDEX_ERROR_CHARS = 80
 
 # The ``<`` of any of the block's own tag names, opening or closing, with
-# optional whitespace (``run`` also covers ``run-index``).
+# optional whitespace (``run`` also covers ``run-index``). The look-alike
+# brackets and the invisible characters count too, since a model may read
+# ``＜/brief>`` or a tag split by a zero-width space as the tag itself.
+_TAG_GAP = r"[\s\u200b-\u200d\u2060\ufeff]*"
 _OWN_TAG_RE = re.compile(
-    r"<(?=\s*/?\s*(?:brief|run|prompt|summary|outcome|notes)\b)",
+    r"[<\uff1c\ufe64](?=" + _TAG_GAP + "/?" + _TAG_GAP
+    + r"(?:brief|run|prompt|summary|outcome|notes)\b)",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
