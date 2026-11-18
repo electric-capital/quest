@@ -10,7 +10,7 @@ a missing AutoProject and for one owned by someone else
 ill-typed body or query parameter comes before the handler runs.
 
 Handlers stay thin: the rules are in chat/autoprojects/service.py, the response
-shapes in chat/autoprojects/thread.py. Every refusal is an ``AutoProjectStoreError``
+shapes in chat/autoprojects/views.py. Every refusal is an ``AutoProjectStoreError``
 mapped through ``autoproject_http_exception`` to ``{"detail": {"error": code,
 "message", **details}}``.
 
@@ -55,18 +55,22 @@ The AutoProject workspace file routes live in chat/file_routes.py.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, Field, StrictInt
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
-from chat.autoprojects import service, thread
+from chat.autoprojects import service, views
 from chat.autoprojects.http import require_autoproject_for_route, autoproject_http_exception
 from db import autoproject_store
 from db.autoproject_store import AutoProjectStoreError
 
 router = APIRouter(prefix="/app/api", tags=["autoprojects"])
+
+# Upper bound of every integer a route accepts (seqs and versions are small
+# counters): a larger value is a 422 instead of an overflow deeper down.
+_MAX_INT = 2**31 - 1
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +95,11 @@ class UpdateAutoProjectRequest(BaseModel):
 
 class SetBriefRequest(BaseModel):
     brief: str
-    expected_brief_version: StrictInt = Field(ge=0)
+    expected_brief_version: StrictInt = Field(ge=0, le=_MAX_INT)
 
 
 class RestoreBriefRequest(BaseModel):
-    expected_brief_version: StrictInt = Field(ge=0)
+    expected_brief_version: StrictInt = Field(ge=0, le=_MAX_INT)
 
 
 class AnswerQuestionRequest(BaseModel):
@@ -104,7 +108,7 @@ class AnswerQuestionRequest(BaseModel):
 
 class MarkAutoProjectReadRequest(BaseModel):
     # The AutoProject's event_seq the client is showing.
-    seq: int = Field(ge=0)
+    seq: int = Field(ge=0, le=_MAX_INT)
 
 
 def _require_enabled(user: dict) -> None:
@@ -128,7 +132,7 @@ async def list_autoprojects_endpoint(
     ``?archived=true``)."""
     _require_enabled(user)
     rows = await autoproject_store.list_autoprojects(user["id"], archived=archived)
-    return {"autoprojects": [thread.autoproject_list_row(row) for row in rows]}
+    return {"autoprojects": [views.autoproject_list_row(row) for row in rows]}
 
 
 @router.post("/autoprojects", status_code=201)
@@ -148,7 +152,7 @@ async def create_autoproject_endpoint(
         )
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await thread.build_autoproject_detail(autoproject)
+    return await views.build_autoproject_detail(autoproject)
 
 
 @router.get("/autoprojects/{autoproject_id}")
@@ -158,7 +162,7 @@ async def get_autoproject_endpoint(
 ):
     """The AutoProject detail."""
     autoproject = await require_autoproject_for_route(user, autoproject_id)
-    return await thread.build_autoproject_detail(autoproject)
+    return await views.build_autoproject_detail(autoproject)
 
 
 @router.patch("/autoprojects/{autoproject_id}")
@@ -178,7 +182,7 @@ async def update_autoproject_endpoint(
         autoproject = await service.update_autoproject(user, autoproject_id, **fields)
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await thread.build_autoproject_detail(autoproject)
+    return await views.build_autoproject_detail(autoproject)
 
 
 @router.put("/autoprojects/{autoproject_id}/archive")
@@ -192,7 +196,7 @@ async def archive_autoproject_endpoint(
         autoproject = await service.set_autoproject_archived(user, autoproject_id, True)
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await thread.build_autoproject_detail(autoproject)
+    return await views.build_autoproject_detail(autoproject)
 
 
 @router.put("/autoprojects/{autoproject_id}/unarchive")
@@ -206,7 +210,7 @@ async def unarchive_autoproject_endpoint(
         autoproject = await service.set_autoproject_archived(user, autoproject_id, False)
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await thread.build_autoproject_detail(autoproject)
+    return await views.build_autoproject_detail(autoproject)
 
 
 @router.delete("/autoprojects/{autoproject_id}")
@@ -237,7 +241,7 @@ async def mark_autoproject_read_endpoint(
         autoproject = await service.mark_autoproject_read(user, autoproject_id, seq=body.seq)
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return thread.read_state(autoproject)
+    return views.read_state(autoproject)
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +259,12 @@ async def set_brief_endpoint(
     await require_autoproject_for_route(user, autoproject_id)
     try:
         state = await service.set_brief(
-            user, autoproject_id, body.brief, expected_version=body.expected_brief_version,
+            user, autoproject_id, body.brief,
+            expected_brief_version=body.expected_brief_version,
         )
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await thread.build_brief_state(autoproject_id, state)
+    return await views.build_brief_state(autoproject_id, state)
 
 
 @router.get("/autoprojects/{autoproject_id}/brief/versions")
@@ -269,19 +274,19 @@ async def list_brief_versions_endpoint(
 ):
     """The stored brief versions, newest first."""
     await require_autoproject_for_route(user, autoproject_id)
-    return {"versions": await thread.build_brief_versions(autoproject_id)}
+    return {"versions": await views.build_brief_versions(autoproject_id)}
 
 
 @router.get("/autoprojects/{autoproject_id}/brief/versions/{version}")
 async def get_brief_version_endpoint(
     autoproject_id: str,
-    version: int,
+    version: Annotated[int, Path(le=_MAX_INT)],
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """One stored brief version with its full text."""
     await require_autoproject_for_route(user, autoproject_id)
     try:
-        return await thread.build_brief_version(autoproject_id, version)
+        return await views.build_brief_version(autoproject_id, version)
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
 
@@ -289,7 +294,7 @@ async def get_brief_version_endpoint(
 @router.post("/autoprojects/{autoproject_id}/brief/versions/{version}/restore")
 async def restore_brief_version_endpoint(
     autoproject_id: str,
-    version: int,
+    version: Annotated[int, Path(le=_MAX_INT)],
     body: RestoreBriefRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
@@ -297,11 +302,12 @@ async def restore_brief_version_endpoint(
     await require_autoproject_for_route(user, autoproject_id)
     try:
         state = await service.restore_brief(
-            user, autoproject_id, version, expected_version=body.expected_brief_version,
+            user, autoproject_id, version,
+            expected_brief_version=body.expected_brief_version,
         )
     except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await thread.build_brief_state(autoproject_id, state)
+    return await views.build_brief_state(autoproject_id, state)
 
 
 # ---------------------------------------------------------------------------
@@ -312,13 +318,13 @@ async def restore_brief_version_endpoint(
 @router.get("/autoprojects/{autoproject_id}/runs")
 async def list_runs_endpoint(
     autoproject_id: str,
-    before_seq: Optional[int] = Query(None, ge=1),
+    before_seq: Optional[int] = Query(None, ge=1, le=_MAX_INT),
     limit: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """One page of the thread, newest first."""
     await require_autoproject_for_route(user, autoproject_id)
-    return await thread.build_runs_page(autoproject_id, before_seq=before_seq, limit=limit)
+    return await views.build_runs_page(autoproject_id, before_seq=before_seq, limit=limit)
 
 
 @router.post("/autoprojects/{autoproject_id}/runs", status_code=201)

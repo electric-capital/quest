@@ -552,9 +552,8 @@ async def run_conversation_turn(
             reach every top-level tool call (``ToolContext.autoproject_id`` /
             ``autoproject_run_id``). The run's AutoProject context (frozen on the run row
             on its first turn, chat.autoprojects.context.load_run_autoproject_context)
-            becomes the system prompt's ``## AutoProject`` section, its
-            ``brief_version`` lands on ``RunContext.autoproject_context_brief_version``,
-            the session gets ``AUTOPROJECT_RUN_TOOLS``, and ``flags`` are ignored.
+            becomes the system prompt's ``## AutoProject`` section, the
+            session gets ``AUTOPROJECT_RUN_TOOLS``, and ``flags`` are ignored.
             An AutoProject run never belongs to a project. Raises RuntimeError when
             the run row or the AutoProject is missing.
 
@@ -1055,9 +1054,6 @@ async def run_conversation_turn(
             workspace_notice_flags=notice_flags,
             autoproject_id=autoproject_id,
             autoproject_run_id=autoproject_run["id"] if autoproject_run else None,
-            autoproject_context_brief_version=(
-                run_autoproject_context.brief_version if run_autoproject_context else None
-            ),
         )
 
         wrapped_message = _wrap_message_with_metadata(

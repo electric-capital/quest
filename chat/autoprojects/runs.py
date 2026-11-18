@@ -49,10 +49,10 @@ import asyncio
 from dataclasses import dataclass
 import json
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Iterable, Optional
 
 from chat.routine_runs import run_ended_suspended
-from chat.storage import utc_timestamp
+from chat.storage import read_conversation_with_retry, utc_timestamp
 from chat.autoprojects.constants import (
     MAX_AUTOPROJECT_COMPLETION_NUDGES,
     AUTOPROJECT_RUN_ACTIVE_STATUSES,
@@ -65,7 +65,10 @@ from chat.autoprojects.constants import (
     AUTOPROJECT_RUN_SUMMARY_MAX_CHARS,
 )
 from chat.autoprojects.events import publish_autoproject_state
-from db import autoproject_store
+from config import feature_gates
+from chat.gemini_api.session import cancel_pending_wait_handles_for_conversation
+from chat.realtime.bus import publish_request_count_changed
+from db import action_request_store, autoproject_store, tool_wait_handle_store, user_store
 from db.autoproject_store import (
     StaleBriefError,
     AutoProjectNotFoundError,
@@ -108,7 +111,7 @@ AUTOPROJECT_BRIEF_CONFLICT_NUDGE = (
     "stays open until the brief is settled. Merge your changes into the "
     "current brief from that brief_conflict result, keeping the user's "
     "edits where they overlap, and call complete_autoproject_run again with the "
-    "merged brief, brief_expected_version set to that result's "
+    "merged brief, expected_brief_version set to that result's "
     "brief_version, and the same summary, result and notes. If your changes "
     "to the brief no longer apply, call it again without brief."
 )
@@ -152,6 +155,9 @@ _SUMMARY_LEADING_MARKERS = "#>*- \t"
 # ``failed`` runs keep at most this much of the exception text.
 _RUN_ERROR_MAX_CHARS = 2000
 
+# The ``result.reason`` of an action request closed because its run ended.
+RUN_FINISHED_REASON = "autoproject_run_finished"
+
 
 def make_autoproject_nudge_message(attempt: int, content: str) -> dict:
     """Build the durable transcript notice for one nudge turn."""
@@ -187,23 +193,122 @@ async def _after_status_change(run: dict, *, mark_unread: bool) -> None:
     await publish_autoproject_state(autoproject_id)
 
 
-async def _cancel_run_wait_handles(user_id: int, conversation_id: str) -> None:
-    """Cancel the pending wait handles of a run's conversation (a card or
-    question still open on a run that just finished). Best-effort."""
-    from chat.gemini_api.session import cancel_pending_wait_handles_for_conversation
+async def close_conversation_cards(
+    user_id: int, conversation_ids: Iterable[str], *, reason: str,
+) -> list[int]:
+    """Close what is still open on run conversations whose run has ended
+    (or is about to be deleted): cancel their pending wait handles (approval,
+    connect and question cards; one query finds the conversations that have
+    any) and close their open action requests as ``stopped`` with
+    ``reason`` (``action_requests`` has no link to the run, so an open card
+    would otherwise stay approvable in the inbox and execute its write with
+    no run behind it). Publishes ``request_count_changed`` when a request
+    was closed. Best-effort per step: never raises.
 
+    Returns:
+        The ids of the action requests closed.
+    """
+    ids = list(dict.fromkeys(cid for cid in conversation_ids if cid))
+    if not ids:
+        return []
     try:
-        await cancel_pending_wait_handles_for_conversation(user_id, conversation_id)
+        pending = await tool_wait_handle_store.list_pending_for_conversations(ids)
     except Exception:
-        logger.warning(
-            "[autoproject-run] cancelling pending wait handles failed (conversation=%s)",
-            conversation_id, exc_info=True,
+        logger.exception(
+            "[autoproject-run] listing pending wait handles failed (conversations=%s)", ids,
         )
+        pending = []
+    for conversation_id in dict.fromkeys(h["conversation_id"] for h in pending):
+        try:
+            await cancel_pending_wait_handles_for_conversation(user_id, conversation_id)
+        except Exception:
+            logger.exception(
+                "[autoproject-run] cancelling pending wait handles failed (conversation=%s)",
+                conversation_id,
+            )
+    try:
+        closed = await action_request_store.stop_open_action_requests_for_conversations(
+            user_id, ids, reason=reason,
+        )
+    except Exception:
+        logger.exception(
+            "[autoproject-run] closing open action requests failed (conversations=%s)", ids,
+        )
+        return []
+    if closed:
+        await publish_request_count_changed(user_id)
+    return closed
+
+
+async def settle_finished_run(
+    run: dict, *, mark_unread: bool, user_id: Optional[int] = None,
+) -> None:
+    """Everything that follows a run reaching a finished status (completed,
+    stopped or failed), after the status write: close the run
+    conversation's open cards (:func:`close_conversation_cards`, reason
+    ``autoproject_run_finished``), then mark the AutoProject unread when
+    ``mark_unread`` and publish (:func:`_after_status_change`).
+
+    The one follow-up of every finish: ``complete_autoproject_run``, a
+    run completed without it, the user's Stop, a cancelled or failed
+    turn, a resume refused because the gate closed, a run that never
+    started and the startup sweep.
+
+    Args:
+        run: The run dict after the status write.
+        mark_unread: Whether the run left something for the user (every
+            finish but a stop).
+        user_id: The AutoProject's owner, when the caller has it; else
+            looked up.
+
+    Never raises.
+    """
+    if user_id is None:
+        try:
+            autoproject = await autoproject_store.get_autoproject_by_id(run["autoproject_id"])
+        except Exception:
+            logger.warning(
+                "[autoproject-run] loading AutoProject %s failed",
+                run["autoproject_id"], exc_info=True,
+            )
+            autoproject = None
+        user_id = autoproject["user_id"] if autoproject is not None else None
+    if user_id is not None:
+        await close_conversation_cards(
+            user_id, [run["conversation_id"]], reason=RUN_FINISHED_REASON,
+        )
+    await _after_status_change(run, mark_unread=mark_unread)
+
+
+async def end_run(
+    run_id: str, status: str, *, error: Optional[str] = None,
+    user_id: Optional[int] = None,
+) -> Optional[dict]:
+    """Move an active run to ``stopped`` or ``failed`` (with ``error``) and
+    settle it (:func:`settle_finished_run`; a stopped run does not mark the
+    AutoProject unread).
+
+    Returns:
+        The run after the change, or None when it was missing or no longer
+        active (nothing changed and nothing is settled again).
+
+    Raises:
+        Whatever the store write raises; the settling never raises.
+    """
+    if status not in (AUTOPROJECT_RUN_STATUS_STOPPED, AUTOPROJECT_RUN_STATUS_FAILED):
+        raise ValueError(f"end_run cannot set {status!r}")
+    ended = await autoproject_store.set_run_status(run_id, status, error=error)
+    if ended is None:
+        return None
+    await settle_finished_run(
+        ended, mark_unread=status != AUTOPROJECT_RUN_STATUS_STOPPED, user_id=user_id,
+    )
+    return ended
 
 
 async def stop_autoproject_run(user_id: int, conversation_id: str) -> Optional[dict]:
-    """The user's Stop for an AutoProject run: mark it ``stopped`` and cancel its
-    pending wait handles.
+    """The user's Stop for an AutoProject run: mark it ``stopped`` and close its
+    open cards.
 
     Covers what cancelling the live turn cannot: a ``waiting`` run (no turn
     is running) and the Stop button of an approval card, which for an AutoProject
@@ -222,21 +327,19 @@ async def stop_autoproject_run(user_id: int, conversation_id: str) -> Optional[d
         autoproject = await autoproject_store.get_autoproject_by_id(run["autoproject_id"])
         if autoproject is None or autoproject["user_id"] != user_id:
             return None
-        stopped = await autoproject_store.set_run_status(run["id"], AUTOPROJECT_RUN_STATUS_STOPPED)
+        stopped = await end_run(run["id"], AUTOPROJECT_RUN_STATUS_STOPPED, user_id=user_id)
     except Exception:
         logger.exception(
             "[autoproject-run] stopping the AutoProject run failed (conversation=%s)",
             conversation_id,
         )
         return None
-    await _cancel_run_wait_handles(user_id, conversation_id)
-    if stopped is None:
-        return None
-    logger.info(
-        "[autoproject-run] AutoProject run stopped by the user (autoproject=%s, run=%s, seq=%s)",
-        stopped["autoproject_id"], stopped["id"], stopped["seq"],
-    )
-    await _after_status_change(stopped, mark_unread=False)
+    if stopped is not None:
+        logger.info(
+            "[autoproject-run] AutoProject run stopped by the user "
+            "(autoproject=%s, run=%s, seq=%s)",
+            stopped["autoproject_id"], stopped["id"], stopped["seq"],
+        )
     return stopped
 
 
@@ -279,28 +382,46 @@ def _refusal(exc: AutoProjectValidationError) -> CompletionOutcome:
     return _tool_error(message, exc.code, **exc.details)
 
 
-def _parse_brief_expected_version(value: Any) -> Optional[int]:
+def _parse_expected_brief_version(value: Any) -> Optional[int]:
     """None when absent; else a non-negative int (bool excluded).
 
     Raises:
-        AutoProjectValidationError ``invalid_brief_expected_version``.
+        AutoProjectValidationError ``invalid_expected_brief_version``.
     """
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise AutoProjectValidationError(
-            "invalid_brief_expected_version",
-            "brief_expected_version must be a non-negative integer: the "
+            "invalid_expected_brief_version",
+            "expected_brief_version must be a non-negative integer: the "
             "brief_version from the brief_conflict result.",
         )
     return value
+
+
+def brief_write_base_version(
+    run: dict, expected_brief_version: Optional[int],
+) -> Optional[int]:
+    """The brief version a run's brief write is checked against.
+
+    ``expected_brief_version`` counts only when it is the ``brief_version``
+    a ``brief_conflict`` result handed this run (recorded on the run row as
+    ``brief_conflict_version``): the model has then seen that brief and
+    merged into it. Any other value is ignored, so a model cannot pass the
+    current version to overwrite a brief edit it never saw; the write is
+    then checked against the version the run's prompt was built from
+    (``context_brief_version``). None when the run has neither.
+    """
+    conflict_version = run.get("brief_conflict_version")
+    if expected_brief_version is not None and expected_brief_version == conflict_version:
+        return expected_brief_version
+    return run.get("context_brief_version")
 
 
 async def complete_autoproject_run(
     *,
     autoproject_id: str,
     run_id: str,
-    context_brief_version: Optional[int],
     args: dict,
 ) -> CompletionOutcome:
     """Finish the calling AutoProject run with its log entry (``complete_autoproject_run``).
@@ -310,23 +431,23 @@ async def complete_autoproject_run(
 
     Order: validate every argument before writing anything (a refusal
     leaves the run open so the model can retry); apply ``brief`` when given
-    (against ``brief_expected_version``, else the version the run's prompt
-    was built from); write the entry and mark the run ``completed``; apply
-    ``autoproject_title`` while the title is still the default one (invariant 4);
-    cancel the run's still-pending wait handles; mark the AutoProject unread and
-    publish.
+    (against :func:`brief_write_base_version`); write the entry and mark
+    the run ``completed``; apply ``autoproject_title`` while the title is
+    still the default one; settle the finished run
+    (:func:`settle_finished_run`: its open cards closed, the AutoProject
+    marked unread, events published).
 
     A brief the user changed during the run (``StaleBriefError``) saves the
-    entry without finishing the run and returns ``brief_conflict`` with the
-    current brief, so the model can merge and call again.
+    entry without finishing the run, records the current brief version on
+    the run (``brief_conflict_version``) and returns ``brief_conflict``
+    with the current brief, so the model can merge and call again with
+    ``expected_brief_version`` set to that version.
 
     Args:
         autoproject_id: The run's AutoProject (``RunContext.autoproject_id``).
         run_id: The run (``RunContext.autoproject_run_id``).
-        context_brief_version: The brief version the run's ``## AutoProject``
-            section was built from (``RunContext.autoproject_context_brief_version``).
         args: The tool's arguments: ``summary``, ``result``, ``notes``,
-            optional ``brief``, ``brief_expected_version``, ``autoproject_title``.
+            optional ``brief``, ``expected_brief_version``, ``autoproject_title``.
 
     Returns:
         The tool result and whether the loop must end. Refusals are tool
@@ -346,8 +467,8 @@ async def complete_autoproject_run(
             isinstance(raw_brief, str) and not raw_brief.strip()
         ):
             brief = autoproject_store.validate_brief(raw_brief)
-        brief_expected_version = _parse_brief_expected_version(
-            args.get("brief_expected_version"),
+        expected_brief_version = _parse_expected_brief_version(
+            args.get("expected_brief_version"),
         )
     except AutoProjectValidationError as exc:
         return _refusal(exc)
@@ -365,11 +486,7 @@ async def complete_autoproject_run(
 
     # 3. The brief, against the version the run started from.
     if brief is not None:
-        expected = brief_expected_version
-        if expected is None:
-            expected = context_brief_version
-        if expected is None:
-            expected = run.get("context_brief_version")
+        expected = brief_write_base_version(run, expected_brief_version)
         if expected is None:
             logger.warning(
                 "[autoproject-run] run %s has no starting brief version; writing its "
@@ -378,16 +495,17 @@ async def complete_autoproject_run(
             expected = brief_version
         try:
             state = await autoproject_store.set_brief(
-                autoproject_id, brief, expected_version=expected, source=f"run:{run_id}",
+                autoproject_id, brief, expected_brief_version=expected, source=f"run:{run_id}",
             )
         except StaleBriefError as exc:
+            current = exc.current
             try:
                 await autoproject_store.save_run_entry(
                     run_id, summary=summary, result=result, notes=notes,
+                    brief_conflict_version=current.get("brief_version"),
                 )
             except AutoProjectStoreError as save_exc:
                 return _store_error(save_exc)
-            current = exc.current
             logger.info(
                 "[autoproject-run] brief_conflict for run %s (expected version %s, "
                 "current %s); entry saved, run left open",
@@ -408,7 +526,7 @@ async def complete_autoproject_run(
                         "changes into the current brief in brief_conflict, "
                         "keeping the user's edits where they overlap, and "
                         "call complete_autoproject_run again with the merged brief, "
-                        "brief_expected_version="
+                        "expected_brief_version="
                         f"{current.get('brief_version')} and the same "
                         "summary, result and notes. If your changes to the "
                         "brief no longer apply, call it again without brief."
@@ -444,11 +562,9 @@ async def complete_autoproject_run(
                 exc_info=True,
             )
 
-    # 6. A card or question opened in the same batch stays open otherwise.
-    await _cancel_run_wait_handles(autoproject["user_id"], run["conversation_id"])
-
-    # 7. Unread and events.
-    await _after_status_change(completed, mark_unread=True)
+    # 6. Close a card or question opened in the same batch, mark the
+    # AutoProject unread and publish.
+    await settle_finished_run(completed, mark_unread=True, user_id=autoproject["user_id"])
 
     logger.info(
         "[autoproject-run] AutoProject run completed via complete_autoproject_run "
@@ -486,10 +602,8 @@ def _last_assistant_text(messages: list[dict]) -> Optional[str]:
 
 async def _final_text_from_history(conversation_id: str) -> Optional[str]:
     """The last assistant text of the run's saved transcript. Best-effort."""
-    from chat.storage import ChatStorage
-
     try:
-        data = await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+        data = await read_conversation_with_retry(conversation_id)
     except Exception:
         logger.debug(
             "[autoproject-run] reading the transcript failed (conversation=%s)",
@@ -500,19 +614,13 @@ async def _final_text_from_history(conversation_id: str) -> Optional[str]:
     return _last_assistant_text(messages if isinstance(messages, list) else [])
 
 
-def _cut(text: str, cap: int) -> str:
-    if len(text) <= cap:
-        return text
-    return text[: cap - 1].rstrip() + "…"
-
-
 def _summary_from_text(text: str) -> str:
     """The first non-empty line of ``text`` with leading markdown markers
     stripped and whitespace collapsed, cut to the summary cap."""
     for line in text.splitlines():
         clean = " ".join(line.lstrip(_SUMMARY_LEADING_MARKERS).split())
         if clean:
-            return _cut(clean, AUTOPROJECT_RUN_SUMMARY_MAX_CHARS)
+            return autoproject_store.cut_text(clean, AUTOPROJECT_RUN_SUMMARY_MAX_CHARS)
     return ""
 
 
@@ -552,7 +660,7 @@ async def _finish_without_completion(
             completed = await autoproject_store.complete_run(
                 run_id,
                 summary=_summary_from_text(text),
-                result=_cut(text, AUTOPROJECT_RUN_RESULT_MAX_CHARS),
+                result=autoproject_store.cut_text(text, AUTOPROJECT_RUN_RESULT_MAX_CHARS),
                 notes="",
                 handoff_missing=True,
             )
@@ -568,8 +676,22 @@ async def _finish_without_completion(
             log_prefix, run_id,
         )
         return await autoproject_store.get_run(run_id)
-    await _after_status_change(completed, mark_unread=True)
+    await settle_finished_run(completed, mark_unread=True)
     return completed
+
+
+async def _gate_open_for_run(run: dict, user: Optional[dict]) -> bool:
+    """Whether the ``autoprojects`` gate is open for the run's owner (``user``,
+    else the AutoProject's owner looked up). A missing AutoProject or owner
+    reads as closed."""
+    if user is None:
+        autoproject = await autoproject_store.get_autoproject_by_id(run["autoproject_id"])
+        if autoproject is None:
+            return False
+        user = await user_store.get_user_by_id(autoproject["user_id"])
+        if user is None:
+            return False
+    return feature_gates.autoprojects_enabled_for(user.get("email") or "")
 
 
 async def drive_autoproject_run(
@@ -580,13 +702,16 @@ async def drive_autoproject_run(
     messages_out: list[dict],
     on_event: EventSink,
     log_prefix: str,
+    user: Optional[dict] = None,
 ) -> Optional[dict]:
     """Run one stretch of an AutoProject run and set its status from how it ended.
 
     Wraps the first turn (``prompt`` is the user's message) and every
     wait-handle resume turn (``prompt`` None: re-checks the run first; a
     run no longer active, e.g. stopped or completed while a card was open,
-    runs no turn at all; a ``waiting`` run goes back to ``running``). After
+    runs no turn at all; a run whose owner's ``autoprojects`` gate has
+    closed since is ``stopped`` instead of resumed; a ``waiting`` run goes
+    back to ``running``). After
     each turn the run row decides (see the module docstring's table); a
     run that ended without ``complete_autoproject_run`` gets up to
     ``MAX_AUTOPROJECT_COMPLETION_NUDGES`` follow-up turns per call, each announced
@@ -604,6 +729,8 @@ async def drive_autoproject_run(
             flushed before the nudge turn starts).
         log_prefix: Caller tag for log lines (``[realtime]`` /
             ``[wait-resume]``).
+        user: The run owner's user dict, for the gate check of a resume
+            turn; looked up from the AutoProject when None.
 
     Returns:
         The run after this stretch, or None when the row is gone.
@@ -630,6 +757,14 @@ async def drive_autoproject_run(
                     log_prefix, run_id, current["status"], conversation_id,
                 )
                 return current
+            if not await _gate_open_for_run(current, user):
+                logger.info(
+                    "%s AutoProjects are disabled for the owner of run %s; "
+                    "stopping it instead of resuming (conversation=%s)",
+                    log_prefix, run_id, conversation_id,
+                )
+                stopped = await end_run(run_id, AUTOPROJECT_RUN_STATUS_STOPPED)
+                return stopped or await autoproject_store.get_run(run_id)
             if current["status"] == AUTOPROJECT_RUN_STATUS_WAITING:
                 resumed = await autoproject_store.set_run_status(
                     run_id, AUTOPROJECT_RUN_STATUS_RUNNING,
@@ -696,15 +831,12 @@ async def drive_autoproject_run(
         )
     except asyncio.CancelledError:
         try:
-            stopped = await autoproject_store.set_run_status(
-                run_id, AUTOPROJECT_RUN_STATUS_STOPPED,
-            )
+            stopped = await end_run(run_id, AUTOPROJECT_RUN_STATUS_STOPPED)
             if stopped is not None:
                 logger.info(
                     "%s AutoProject run %s stopped (conversation=%s)",
                     log_prefix, run_id, conversation_id,
                 )
-                await _after_status_change(stopped, mark_unread=False)
         except Exception:
             logger.exception(
                 "%s Marking cancelled AutoProject run %s stopped failed",
@@ -714,15 +846,12 @@ async def drive_autoproject_run(
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"[:_RUN_ERROR_MAX_CHARS]
         try:
-            failed = await autoproject_store.set_run_status(
-                run_id, AUTOPROJECT_RUN_STATUS_FAILED, error=error,
-            )
+            failed = await end_run(run_id, AUTOPROJECT_RUN_STATUS_FAILED, error=error)
             if failed is not None:
                 logger.info(
                     "%s AutoProject run %s failed: %s (conversation=%s)",
                     log_prefix, run_id, error, conversation_id,
                 )
-                await _after_status_change(failed, mark_unread=True)
         except Exception:
             logger.exception(
                 "%s Recording the failure of AutoProject run %s failed",

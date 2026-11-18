@@ -185,11 +185,13 @@ async def lifespan(app: FastAPI):
     # AutoProject startup sweeps (chat/autoprojects/service.py), before the
     # scheduler and wait-handle sweeps start: a ``running`` AutoProject run cannot
     # survive a restart (its in-memory turn is gone), so it is failed; a
-    # ``waiting`` run survives because its wait handle does; and run
-    # conversations created but never sent are deleted once older than a day.
+    # ``waiting`` run survives because its wait handle does, and one whose
+    # handle was resolved just before the restart is resumed (or failed when
+    # there is nothing to resume); and run conversations created but never
+    # sent are deleted once older than a day.
     from chat.autoprojects.service import run_startup_sweeps
     try:
-        await run_startup_sweeps()
+        await run_startup_sweeps(app)
     except Exception:
         logger.exception("AutoProject startup sweeps failed; continuing")
 

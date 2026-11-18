@@ -1,6 +1,5 @@
 """What the AutoProject routes return: the list row, the AutoProject detail, the
-brief state and versions, and the thread's pages of runs (spec issue #213,
-section 7).
+brief state and versions, and the AutoProject page's pages of runs.
 
 Every builder takes rows the caller has already scoped to the user (the
 route guard ``require_autoproject_for_route`` or the service did the gate and
@@ -17,8 +16,8 @@ A run's view hides the pending entry of an ACTIVE run (``summary``,
 ``result``, ``notes`` saved by a ``complete_autoproject_run`` that hit a brief
 conflict, chat/autoprojects/runs.py) and carries its questions (one query per
 page, chat/autoprojects/questions.py) and its open approval and connect cards as
-the transcript rows the conversation detail holds, so the thread renders
-them with the same components as a chat.
+the transcript rows the conversation detail holds, so the AutoProject page
+renders them with the same components as a chat.
 
 Does not import ``chat.realtime``; route modules may import it at module
 top.
@@ -32,13 +31,14 @@ from typing import Optional
 
 from chat.autoprojects.constants import AUTOPROJECT_RUN_ACTIVE_STATUSES
 from chat.autoprojects.questions import list_run_questions
+from chat.storage import read_conversation_with_retry
 from db import autoproject_store, tool_wait_handle_store
 from db.models import ToolWaitHandleKind
 from db.autoproject_store import BriefVersionNotFoundError
 
 logger = logging.getLogger(__name__)
 
-# The wait-handle kinds whose cards the thread shows inline (the question
+# The wait-handle kinds whose cards the AutoProject page shows inline (the question
 # kind has its own ``questions`` list).
 _OPEN_REQUEST_HANDLE_KINDS = (
     ToolWaitHandleKind.ACTION_REQUEST.value,
@@ -130,10 +130,7 @@ async def build_autoproject_detail(autoproject: dict) -> dict:
         "model": autoproject["model"],
         "thinking_effort": autoproject["thinking_effort"],
         "run_count": run_count,
-        "active_run": (
-            {"id": active["id"], "seq": active["seq"], "status": active["status"]}
-            if active is not None else None
-        ),
+        "active_run": autoproject_store.active_run_summary(active),
         "event_seq": autoproject["event_seq"],
         "unread_seq": autoproject["unread_seq"],
         "read_seq": autoproject["read_seq"],
@@ -217,7 +214,7 @@ async def build_brief_version(autoproject_id: str, version: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Thread pages
+# Run pages
 # ---------------------------------------------------------------------------
 
 
@@ -245,27 +242,16 @@ def _run_view(run: dict, questions: list[dict], open_requests: list[dict]) -> di
 
 
 async def _read_transcript_messages(conversation_id: str) -> list:
-    """The transcript's messages, read off the event loop; a failed threaded
-    read (a concurrent writer mid-write) is retried once on the loop, as
-    ``_read_transcript`` in chat/routes/conversations.py does. A missing
-    transcript reads as no messages."""
-    from chat.storage import ChatStorage
-
+    """The transcript's messages (``read_conversation_with_retry``); a
+    missing or unreadable transcript reads as no messages."""
     try:
-        conversation = await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+        conversation = await read_conversation_with_retry(conversation_id)
     except Exception:
-        logger.debug(
-            "[autoprojects] threaded transcript read failed for %s; retrying on the loop",
-            conversation_id, exc_info=True,
+        logger.warning(
+            "[autoprojects] reading the transcript of %s failed", conversation_id,
+            exc_info=True,
         )
-        try:
-            conversation = ChatStorage.get_conversation(conversation_id)
-        except Exception:
-            logger.warning(
-                "[autoprojects] reading the transcript of %s failed", conversation_id,
-                exc_info=True,
-            )
-            return []
+        return []
     return (conversation or {}).get("messages") or []
 
 
@@ -313,7 +299,7 @@ async def list_open_requests(runs: list[dict]) -> dict[str, list[dict]]:
 async def build_runs_page(
     autoproject_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
 ) -> dict:
-    """One page of the thread (``GET /autoprojects/{id}/runs``): ``{"runs": [run
+    """One page of runs (``GET /autoprojects/{id}/runs``): ``{"runs": [run
     view, ...], "next_before_seq": int | None}``, newest first.
 
     Run view::

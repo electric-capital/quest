@@ -3,20 +3,25 @@
 Two per-user globals on the persistent WebSocket, built by
 chat/realtime/events.py: ``autoproject_list_changed`` (the sidebar section and the
 archived list re-fetch) and ``autoproject_changed {autoproject_id, event_seq,
-brief_version, active_run}`` (an open thread of that AutoProject re-fetches its
-newest page; its brief panel re-fetches when ``brief_version`` moved).
+brief_version, active_run}`` (an open AutoProject page re-fetches its newest
+updates, and its brief when ``brief_version`` moved).
 
-Audience: the AutoProject's owner only (AutoProjects are private, invariant 7).
+Audience: the AutoProject's owner only (AutoProjects are private: another
+user's AutoProject reads as missing).
 
 Who publishes what:
 
 - chat/autoprojects/runs.py: every run status change (``autoproject_changed`` and
   ``autoproject_list_changed``: the row's ``active_run`` or ``unread`` moved) and a
   run's brief write (``autoproject_changed`` alone).
-- chat/autoprojects/service.py: a run starting (both).
+- chat/autoprojects/service.py: a run starting, an AutoProject created, edited,
+  archived, unarchived or deleted, a run deleted (both, or the list event
+  alone where only the list moved); the user's brief edit or restore and an
+  answered question (``autoproject_changed`` alone); a read acknowledgement
+  (``autoproject_list_changed`` alone).
 
-Live progress of a run is not published here: the thread subscribes to the
-run's conversation and reads its existing streaming events.
+Live progress of a run is not published here: the AutoProject page subscribes
+to the run's conversation and reads its existing streaming events.
 
 Publishing is best-effort: a failure is logged at debug and never undoes
 the write. Event-loop thread only (``bus.publish_to_user`` is not
@@ -33,19 +38,10 @@ from db import autoproject_store
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "active_run_summary",
     "publish_autoproject_changed",
     "publish_autoproject_list_changed",
     "publish_autoproject_state",
 ]
-
-
-def active_run_summary(run: Optional[dict]) -> Optional[dict]:
-    """The ``active_run`` shape of a run dict: ``{id, seq, status}``, or
-    None when ``run`` is None."""
-    if run is None:
-        return None
-    return {"id": run["id"], "seq": run["seq"], "status": run["status"]}
 
 
 def publish_autoproject_list_changed(user_id: int) -> None:
@@ -62,14 +58,14 @@ def publish_autoproject_list_changed(user_id: int) -> None:
 def publish_autoproject_changed(
     user_id: int, autoproject: dict, active_run: Optional[dict],
 ) -> None:
-    """Best-effort: tell the user's tabs an AutoProject's thread or brief changed.
+    """Best-effort: tell the user's tabs an AutoProject's page or brief changed.
 
     Args:
         user_id: The AutoProject's owner.
         autoproject: The AutoProject dict after the change (``id``, ``event_seq`` and
             ``brief_version`` are read).
         active_run: ``{id, seq, status}`` of the AutoProject's active run, or None
-            (see :func:`active_run_summary`).
+            (``autoproject_store.active_run_summary``).
     """
     try:
         bus.publish_to_user(
@@ -106,6 +102,8 @@ async def publish_autoproject_state(autoproject_id: str, *, list_changed: bool =
             autoproject_id, exc_info=True,
         )
         return
-    publish_autoproject_changed(autoproject["user_id"], autoproject, active_run_summary(active))
+    publish_autoproject_changed(
+        autoproject["user_id"], autoproject, autoproject_store.active_run_summary(active),
+    )
     if list_changed:
         publish_autoproject_list_changed(autoproject["user_id"])

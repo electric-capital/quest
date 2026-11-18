@@ -469,10 +469,10 @@ def build_autoproject_subagent_context(autoproject: dict) -> str:
 class AutoProjectContext:
     """A rendered AutoProject context and what it was built from.
 
-    ``brief_version`` is the version of the brief the text shows: the run
-    passes it as ``expected_version`` when ``complete_autoproject_run`` writes a
-    new brief (spec 6.2), so a brief the user edited during the run is
-    detected as a conflict instead of being overwritten.
+    ``brief_version`` is the version of the brief the text shows: a brief
+    that ``complete_autoproject_run`` writes is checked against it, so a
+    brief the user edited during the run is detected as a conflict instead
+    of being overwritten.
     """
 
     text: str
@@ -526,10 +526,9 @@ async def load_run_autoproject_context(run: dict) -> Optional[RunAutoProjectCont
     (a resume after a question or an action-request card, a server restart,
     a rebuilt session) returns the stored pair, so the run sees the
     identical text and ``brief_version`` it started with, however the
-    brief or the log changed since. Phase A5's
-    ``complete_autoproject_run`` passes that ``brief_version`` as
-    ``expected_version``, read from ``RunContext`` (set from this) or from
-    the run dict's ``context_brief_version``.
+    brief or the log changed since. ``complete_autoproject_run`` checks the
+    run's brief write against that ``brief_version``, read from the run
+    dict's ``context_brief_version``.
 
     Args:
         run: A run dict (db/autoproject_store.py ``_run_to_dict`` shape; ``id``,

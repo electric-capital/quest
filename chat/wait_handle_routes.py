@@ -18,7 +18,7 @@ from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.realtime import bus, events as realtime_events
 from chat.wait_handles import resume as wait_resume
 from db import tool_wait_handle_store
-from db.models import ToolWaitHandleStatus
+from db.models import ToolWaitHandleKind, ToolWaitHandleStatus
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,18 @@ async def resolve_wait_handle(
         raise HTTPException(status_code=404, detail={
             "error": "wait_handle_not_found",
             "message": f"Wait handle {handle_id} not found.",
+        })
+    if existing.get("kind") == ToolWaitHandleKind.AUTOPROJECT_QUESTION.value:
+        # An AutoProject question has its own answer route, which validates
+        # the answer, checks the gate and the run, and rewrites the
+        # question's transcript message; resolving it here would skip all
+        # of that.
+        raise HTTPException(status_code=409, detail={
+            "error": "use_autoproject_answer_route",
+            "message": (
+                "Answer an AutoProject question through "
+                "POST /autoprojects/{id}/questions/{handle_id}/answer."
+            ),
         })
     if existing["status"] != ToolWaitHandleStatus.PENDING:
         raise HTTPException(status_code=400, detail={

@@ -1884,7 +1884,7 @@ If `complete_autoproject_run` returns `brief_conflict`, the user changed the bri
 during this run. Your entry is saved but the run stays open: merge your
 changes into the current brief the result returns (the user's edits win
 where they overlap) and call `complete_autoproject_run` again with the merged
-`brief`, `brief_expected_version` from that result, and the same
+`brief`, `expected_brief_version` from that result, and the same
 `summary`, `result` and `notes`.
 """
 

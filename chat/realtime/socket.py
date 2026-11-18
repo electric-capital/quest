@@ -1008,13 +1008,30 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
         })
         return
 
-    # Cancel the run only if this user owns it. Cross-user cancellation
-    # is impossible because the lock is keyed by conversation_id and the
-    # ownership check on subscribe / send already gates user access. A
-    # headless wait-handle resume (the continuation after an
+    # Cancel the run only if this user owns the conversation: the run
+    # registries are keyed by conversation_id alone, so without this check
+    # any user could cancel any conversation's turn. A conversation that is
+    # not theirs (or missing) is ignored silently, as subscribe would
+    # refuse it. A headless wait-handle resume (the continuation after an
     # action-request Approve / Revise / Deny) is a stoppable run too: the
     # FE shows the same stop button while it streams, so stop cancels it
     # the same way it cancels a send run.
+    from db.conversation_store import get_conversation_meta
+    try:
+        meta = await get_conversation_meta(conn.user_id, conv_id)
+    except Exception:
+        logger.exception(
+            "[realtime] conversation_meta lookup for stop failed (conversation=%s)",
+            conv_id,
+        )
+        meta = None
+    if meta is None:
+        logger.warning(
+            "[realtime] stop ignored: conversation %s is not the user's (user_id=%s)",
+            conv_id, conn.user_id,
+        )
+        return
+
     cancel_conversation_runs(conv_id)
 
     try:

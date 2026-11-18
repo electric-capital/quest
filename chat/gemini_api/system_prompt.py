@@ -412,7 +412,7 @@ _PROJECT_SCRIPT_EXAMPLE = (
 # (AUTOPROJECT_RUN_FILE_TOOL_SPECS) and the run log reads (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS),
 # and hide the four *_workspace_file tools and the rest of the project-only
 # tools. Every other prompt hides AUTOPROJECT_ONLY_TOOL_CALL_TOOLS.
-_AUTOPROJECT_RUN_EXCLUDED_TOOLS: frozenset[str] = (
+AUTOPROJECT_RUN_EXCLUDED_TOOLS: frozenset[str] = (
     PROJECT_HIDDEN_WORKSPACE_TOOLS
     | (PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS)
 )
@@ -671,7 +671,7 @@ _AUTOPROJECT_RUN_NAMING_SECTION = """**AutoProject run:** This conversation is o
 # parameters; the ``## AutoProject`` section says when to call them.
 _AUTOPROJECT_RUN_TOOL_LINES = (
     "\n14. **complete_autoproject_run(summary, result, notes, brief?, "
-    "brief_expected_version?, autoproject_title?)** -- Finish this run: saves "
+    "expected_brief_version?, autoproject_title?)** -- Finish this run: saves "
     "its log entry, applies the brief and ends the run. Call it directly, "
     "not through `tool_call`."
     "\n15. **ask_autoproject_question(question, options?)** -- Ask the user one "
@@ -869,7 +869,7 @@ Facts the user has saved about themselves and how they want you to work, newest 
         # An AutoProject run has chat:// and autoproject://: the scheme-qualified file
         # tools (in their AutoProject-run wording) and the run log reads, and none
         # of the other project-only tools.
-        top_level_exclude |= _AUTOPROJECT_RUN_EXCLUDED_TOOLS
+        top_level_exclude |= AUTOPROJECT_RUN_EXCLUDED_TOOLS
     elif has_project:
         # The scheme-qualified file tools replace the four workspace tools.
         top_level_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
@@ -1727,7 +1727,7 @@ def get_sub_agent_system_prompt(
     if is_autoproject_run:
         # The parent AutoProject run's file tools (chat:// and autoproject://) and run
         # log reads; neither loop tool is a tool_call tool.
-        sub_agent_exclude |= _AUTOPROJECT_RUN_EXCLUDED_TOOLS
+        sub_agent_exclude |= AUTOPROJECT_RUN_EXCLUDED_TOOLS
     elif has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
     else:

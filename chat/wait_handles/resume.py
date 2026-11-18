@@ -481,6 +481,7 @@ async def _run_resume(
                 messages_out=messages_out,
                 on_event=_on_event,
                 log_prefix="[wait-resume]",
+                user=user,
             )
         else:
             await run_turn("")

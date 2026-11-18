@@ -23,6 +23,9 @@ MAX_ACTIVE_AUTOPROJECTS_PER_USER = 200
 
 # --- Run log entry (``autoproject_runs`` row) -------------------------------------
 
+# The run's prompt (the run conversation's one user message), stored verbatim.
+AUTOPROJECT_PROMPT_MAX_CHARS = 50_000
+
 AUTOPROJECT_RUN_SUMMARY_MAX_CHARS = 200
 AUTOPROJECT_RUN_RESULT_MAX_CHARS = 50_000
 AUTOPROJECT_RUN_NOTES_MAX_CHARS = 4_000
@@ -54,9 +57,13 @@ AUTOPROJECT_CONVERSATION_ORIGIN = "autoproject"
 
 # A run conversation created by ``POST /autoprojects/{id}/runs`` but never sent
 # (no ``autoproject_runs`` row) is deleted by the startup sweep once it is older
-# than this (spec section 10, default 19; chat/autoprojects/service.py
-# sweep_abandoned_run_conversations).
+# than this (chat/autoprojects/service.py sweep_abandoned_run_conversations).
 AUTOPROJECT_ABANDONED_RUN_CONVERSATION_MAX_AGE = timedelta(days=1)
+# Creating a run conversation first deletes the AutoProject's earlier unsent
+# ones older than this, so repeated starts that never send cannot pile up
+# conversations between restarts. The composer creates the conversation and
+# sends on it at once, so only a failed start leaves one behind.
+AUTOPROJECT_UNSENT_RUN_CONVERSATION_GRACE = timedelta(minutes=10)
 
 # --- AutoProject context (chat/autoprojects/context.py) ----------------------------------
 
@@ -76,17 +83,9 @@ AUTOPROJECT_LOG_INDEX_MAX_CHARS = 8_000
 # How much of a failed run's ``error`` the context shows (``error`` has no
 # write-time cap).
 AUTOPROJECT_RUN_ERROR_EXCERPT_CHARS = 300
-# Asserted upper bound of the whole AutoProject context block.
+# Asserted upper bound of the whole AutoProject context block (the worst-case
+# size budget is in chat/autoprojects/context.py's module docstring).
 AUTOPROJECT_CONTEXT_MAX_CHARS = 50_000
-# Worst case, every field at its cap:
-#   title 120 + brief 12 000 + window 20 000          = 32 120,
-#   + fixed prose, headings and tags (~2 300)         ~ 34 400,
-#   + index 8 000 and its framing and count (~400)    ~ 42 800,
-#   about 7 000 under the 50 000 bound. The index gets
-# min(AUTOPROJECT_LOG_INDEX_MAX_CHARS, what is left), so at these caps it always
-# gets its own cap, and the count line takes the rest of the runs; the
-# builder also hard-cuts at the bound as a last resort
-# (chat/autoprojects/context.py).
 
 # --- Questions (ask_autoproject_question) -----------------------------------------
 

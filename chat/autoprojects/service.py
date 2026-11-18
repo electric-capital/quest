@@ -9,7 +9,7 @@ acknowledgement (:func:`mark_autoproject_read`), and the deletes
 wait handles, close the run conversations' open approval cards and sweep
 their directories. Each checks the gate and ownership itself and publishes
 through chat/autoprojects/events.py; the route-facing shapes are built in
-chat/autoprojects/thread.py.
+chat/autoprojects/views.py.
 
 A run starts in two steps (spec issue #213, section 7): ``POST
 /autoprojects/{id}/runs`` creates the run's conversation
@@ -36,15 +36,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import shutil
 from typing import Any, Optional
 
+from chat.autoprojects import events, runs
 from chat.autoprojects.constants import (
     AUTOPROJECT_ABANDONED_RUN_CONVERSATION_MAX_AGE,
     AUTOPROJECT_RUN_ACTIVE_STATUSES,
     AUTOPROJECT_RUN_STATUS_FAILED,
+    AUTOPROJECT_RUN_STATUS_WAITING,
+    AUTOPROJECT_UNSENT_RUN_CONVERSATION_GRACE,
     autoprojects_disabled_message,
 )
 from chat.autoprojects.questions import (
@@ -58,7 +61,14 @@ from chat.autoprojects.questions import (
     rewrite_question_message,
     validate_answer,
 )
-from db import autoproject_store, tool_wait_handle_store
+from chat.gemini_api.session import remove_chat_session
+from chat.realtime import events as realtime_events
+from chat.realtime.bus import bus
+from chat.realtime.socket import cancel_conversation_runs
+from chat.storage import ChatStorage
+from chat.wait_handles import resume as wait_resume
+from db import autoproject_store, tool_wait_handle_store, user_store
+from db.conversation_store import delete_abandoned_autoproject_conversations
 from db.models import ToolWaitHandleStatus
 from db.autoproject_store import (
     AutoProjectArchivedError,
@@ -69,6 +79,12 @@ from db.autoproject_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The ``error`` of a run a restart interrupted.
+INTERRUPTED_BY_RESTART_ERROR = "interrupted by a restart"
+# The ``result.reason`` of an action request closed because its run (or
+# its AutoProject) was deleted.
+RUN_DELETED_REASON = "autoproject_run_deleted"
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +147,9 @@ async def create_run_conversation(user: dict, autoproject_id: str) -> str:
     An early refusal for the UI: the gate, ownership, the archive flag and
     the one-active-run rule are checked here so the composer learns of them
     before the user sends, but nothing is reserved. :func:`start_run`
-    re-checks all of it when the message arrives.
+    re-checks all of it when the message arrives. The AutoProject's earlier
+    run conversations that were never sent and are older than
+    ``AUTOPROJECT_UNSENT_RUN_CONVERSATION_GRACE`` are deleted first.
 
     Args:
         user: The caller's user dict.
@@ -145,18 +163,24 @@ async def create_run_conversation(user: dict, autoproject_id: str) -> str:
         AutoProjectsDisabledError, AutoProjectNotFoundError (missing or foreign),
         AutoProjectArchivedError, AutoProjectRunActiveError.
     """
-    require_autoprojects_enabled(user)
-    autoproject = await autoproject_store.get_autoproject(user["id"], autoproject_id)
-    if autoproject is None:
-        raise AutoProjectNotFoundError(autoproject_id)
+    autoproject = await require_owned_autoproject(user, autoproject_id)
     if autoproject["archived"]:
         raise AutoProjectArchivedError(autoproject_id)
     active = await autoproject_store.get_active_run(autoproject_id)
     if active is not None:
         raise AutoProjectRunActiveError(active)
 
-    from chat.storage import ChatStorage
-
+    # Earlier starts of this AutoProject that never sent: drop them so
+    # repeated starts cannot pile up conversations between restarts.
+    try:
+        await sweep_abandoned_run_conversations(
+            autoproject_id=autoproject_id,
+            max_age=AUTOPROJECT_UNSENT_RUN_CONVERSATION_GRACE,
+        )
+    except Exception:
+        logger.exception(
+            "Sweeping unsent run conversations of AutoProject %s failed", autoproject_id,
+        )
     return await ChatStorage.create_autoproject_run_conversation(user["id"], autoproject_id)
 
 
@@ -255,9 +279,7 @@ async def start_run(
         autoproject_id, run["id"], run["seq"], conversation["id"], run_model,
     )
     # The AutoProject gained an active run (thread and list row both changed).
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(autoproject_id)
+    await events.publish_autoproject_state(autoproject_id)
     return StartedRun(
         run=run, autoproject=autoproject, model=run_model, thinking_effort=run_effort,
     )
@@ -265,12 +287,11 @@ async def start_run(
 
 async def fail_unstarted_run(run_id: str, error: str) -> None:
     """Mark a run ``failed`` whose turn never started (the send path gave
-    up after :func:`start_run`), then mark its AutoProject unread and publish (a
-    failed run, spec 10). Best-effort: logged, never raises."""
+    up after :func:`start_run`) and settle it like every finished run
+    (``runs.end_run``: the AutoProject marked unread, events published).
+    Best-effort: logged, never raises."""
     try:
-        updated = await autoproject_store.set_run_status(
-            run_id, AUTOPROJECT_RUN_STATUS_FAILED, error=error,
-        )
+        updated = await runs.end_run(run_id, AUTOPROJECT_RUN_STATUS_FAILED, error=error)
     except Exception:
         logger.exception("Failing unstarted AutoProject run %s failed", run_id)
         return
@@ -280,16 +301,6 @@ async def fail_unstarted_run(run_id: str, error: str) -> None:
         )
         return
     logger.info("AutoProject run %s failed before its turn started: %s", run_id, error)
-    try:
-        await autoproject_store.mark_autoproject_unread(updated["autoproject_id"])
-    except Exception:
-        logger.warning(
-            "Marking AutoProject %s unread after a failed start failed",
-            updated["autoproject_id"], exc_info=True,
-        )
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(updated["autoproject_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -326,10 +337,7 @@ async def answer_question(
         cancelled: a Stop, or its run is no longer active),
         AutoProjectValidationError ``invalid_answer``.
     """
-    require_autoprojects_enabled(user)
-    autoproject = await autoproject_store.get_autoproject(user["id"], autoproject_id)
-    if autoproject is None:
-        raise AutoProjectNotFoundError(autoproject_id)
+    await require_owned_autoproject(user, autoproject_id)
 
     # Invariant 7: a missing handle, another kind, another user's, or one
     # of another AutoProject's run all read the same.
@@ -378,9 +386,6 @@ async def answer_question(
         conversation_id, handle_id, status=QUESTION_STATUS_ANSWERED, answer=answer,
     )
 
-    from chat.realtime import events as realtime_events
-    from chat.realtime.bus import bus
-
     try:
         bus.publish_to_user(
             user["id"],
@@ -405,11 +410,7 @@ async def answer_question(
             "Bumping event_seq of AutoProject %s after an answer failed",
             autoproject_id, exc_info=True,
         )
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(autoproject_id, list_changed=False)
-
-    from chat.wait_handles import resume as wait_resume
+    await events.publish_autoproject_state(autoproject_id, list_changed=False)
 
     try:
         wait_resume.maybe_kick_resume(app, user, conversation_id)
@@ -427,8 +428,15 @@ async def answer_question(
 # ---------------------------------------------------------------------------
 
 
-async def _require_owned(user: dict, autoproject_id: str) -> dict:
-    """Gate, then ownership (missing and foreign read the same)."""
+async def require_owned_autoproject(user: dict, autoproject_id: str) -> dict:
+    """The AutoProject ``user`` owns: the gate first, then ownership.
+
+    The one access check of every AutoProject route and service function.
+
+    Raises:
+        AutoProjectsDisabledError; AutoProjectNotFoundError for a missing
+        AutoProject and for one owned by someone else (the same text).
+    """
     require_autoprojects_enabled(user)
     autoproject = await autoproject_store.get_autoproject(user["id"], autoproject_id)
     if autoproject is None:
@@ -487,9 +495,7 @@ async def create_autoproject(
         thinking_effort=thinking_effort,
     )
     logger.info("AutoProject created (autoproject=%s, user=%s)", autoproject["id"], user["id"])
-    from chat.autoprojects.events import publish_autoproject_list_changed
-
-    publish_autoproject_list_changed(user["id"])
+    events.publish_autoproject_list_changed(user["id"])
     return autoproject
 
 
@@ -513,7 +519,7 @@ async def update_autoproject(
         AutoProjectsDisabledError, AutoProjectNotFoundError, AutoProjectModelNotAllowedError,
         AutoProjectValidationError.
     """
-    before = await _require_owned(user, autoproject_id)
+    before = await require_owned_autoproject(user, autoproject_id)
     if model is not autoproject_store.UNSET:
         _check_model_allowed(model)
     autoproject = await autoproject_store.update_autoproject(
@@ -521,14 +527,12 @@ async def update_autoproject(
         title=title, model=model, thinking_effort=thinking_effort,
     )
     if autoproject["event_seq"] != before["event_seq"]:
-        from chat.autoprojects.events import publish_autoproject_state
-
-        await publish_autoproject_state(autoproject_id)
+        await events.publish_autoproject_state(autoproject_id)
     return autoproject
 
 
 async def set_brief(
-    user: dict, autoproject_id: str, brief: Any, *, expected_version: int,
+    user: dict, autoproject_id: str, brief: Any, *, expected_brief_version: int,
 ) -> dict:
     """The user's brief edit (``PUT /autoprojects/{id}/brief``), allowed while a
     run is active (the run's own write then gets ``brief_conflict``).
@@ -541,18 +545,16 @@ async def set_brief(
         AutoProjectsDisabledError, AutoProjectNotFoundError, StaleBriefError,
         AutoProjectValidationError (``invalid_brief``, ``brief_too_long``).
     """
-    await _require_owned(user, autoproject_id)
+    await require_owned_autoproject(user, autoproject_id)
     state = await autoproject_store.set_brief(
-        autoproject_id, brief, expected_version=expected_version, source="ui",
+        autoproject_id, brief, expected_brief_version=expected_brief_version, source="ui",
     )
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(autoproject_id, list_changed=False)
+    await events.publish_autoproject_state(autoproject_id, list_changed=False)
     return state
 
 
 async def restore_brief(
-    user: dict, autoproject_id: str, version: int, *, expected_version: int,
+    user: dict, autoproject_id: str, version: int, *, expected_brief_version: int,
 ) -> dict:
     """Write stored version ``version`` as a new brief version (``POST
     /autoprojects/{id}/brief/versions/{version}/restore``, source
@@ -565,13 +567,11 @@ async def restore_brief(
         AutoProjectsDisabledError, AutoProjectNotFoundError, BriefVersionNotFoundError,
         StaleBriefError, AutoProjectValidationError (``brief_too_long``).
     """
-    await _require_owned(user, autoproject_id)
+    await require_owned_autoproject(user, autoproject_id)
     state = await autoproject_store.restore_brief_version(
-        autoproject_id, version, expected_version=expected_version,
+        autoproject_id, version, expected_brief_version=expected_brief_version,
     )
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(autoproject_id, list_changed=False)
+    await events.publish_autoproject_state(autoproject_id, list_changed=False)
     return state
 
 
@@ -606,9 +606,7 @@ async def set_autoproject_archived(user: dict, autoproject_id: str, archived: bo
         "AutoProject %s (autoproject=%s, user=%s)",
         "archived" if archived else "unarchived", autoproject_id, user["id"],
     )
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(autoproject_id)
+    await events.publish_autoproject_state(autoproject_id)
     return autoproject
 
 
@@ -626,7 +624,7 @@ async def mark_autoproject_read(user: dict, autoproject_id: str, *, seq: int) ->
     Raises:
         AutoProjectsDisabledError, AutoProjectNotFoundError.
     """
-    autoproject = await _require_owned(user, autoproject_id)
+    autoproject = await require_owned_autoproject(user, autoproject_id)
     if "_impersonator_uid" in user:
         return autoproject
     moved = await autoproject_store.mark_autoproject_read(
@@ -634,9 +632,7 @@ async def mark_autoproject_read(user: dict, autoproject_id: str, *, seq: int) ->
     )
     if not moved:
         return autoproject
-    from chat.autoprojects.events import publish_autoproject_list_changed
-
-    publish_autoproject_list_changed(user["id"])
+    events.publish_autoproject_list_changed(user["id"])
     return await autoproject_store.get_autoproject(user["id"], autoproject_id) or autoproject
 
 
@@ -653,8 +649,6 @@ _DELETE_CANCEL_WAIT_SECONDS = 10.0
 async def _cancel_live_runs(conversation_ids) -> None:
     """Cancel the in-flight send run and headless resume of each
     conversation and wait (bounded) for them to finish."""
-    from chat.realtime.socket import cancel_conversation_runs
-
     cancelled: list[asyncio.Task] = []
     for conversation_id in conversation_ids:
         cancelled.extend(cancel_conversation_runs(conversation_id))
@@ -670,49 +664,17 @@ async def _cancel_live_runs(conversation_ids) -> None:
 
 
 async def _close_conversation_cards(user_id: int, conversation_ids) -> list[int]:
-    """Cancel the pending wait handles of the conversations that have any
-    (one query finds them) and close their open action requests as
-    ``stopped`` (``action_requests`` has no foreign key on the
-    conversation, so a card of a deleted run would otherwise stay
-    approvable in the inbox). Best-effort per conversation.
-
-    Returns:
-        The ids of the action requests closed.
-    """
-    from chat.gemini_api.session import cancel_pending_wait_handles_for_conversation
-    from db import action_request_store
-
-    ids = list(dict.fromkeys(conversation_ids))
-    if not ids:
-        return []
-    try:
-        pending = await tool_wait_handle_store.list_pending_for_conversations(ids)
-    except Exception:
-        logger.exception("Listing pending wait handles of AutoProject conversations failed")
-        pending = []
-    for conversation_id in dict.fromkeys(h["conversation_id"] for h in pending):
-        try:
-            await cancel_pending_wait_handles_for_conversation(user_id, conversation_id)
-        except Exception:
-            logger.exception(
-                "Cancelling pending wait handles of %s failed", conversation_id,
-            )
-    try:
-        return await action_request_store.stop_open_action_requests_for_conversations(
-            user_id, ids, reason="autoproject_run_deleted",
-        )
-    except Exception:
-        logger.exception("Closing open action requests of AutoProject conversations failed")
-        return []
+    """Close the open cards of conversations about to be deleted
+    (``runs.close_conversation_cards``, reason ``autoproject_run_deleted``)."""
+    return await runs.close_conversation_cards(
+        user_id, conversation_ids, reason=RUN_DELETED_REASON,
+    )
 
 
 async def _sweep_conversations(user_id: int, conversation_ids) -> None:
     """After the rows are gone: cancel any live turn again (a run started
     in the race window), drop the in-memory sessions and remove each
     conversation's ``CHATS_DIR`` directory. Best-effort per id."""
-    from chat.gemini_api.session import remove_chat_session
-    from chat.storage import ChatStorage
-
     ids = list(dict.fromkeys(conversation_ids))
     await _cancel_live_runs(ids)
     for conversation_id in ids:
@@ -724,22 +686,6 @@ async def _sweep_conversations(user_id: int, conversation_ids) -> None:
             logger.exception(
                 "Removing AutoProject run conversation %s failed", conversation_id,
             )
-
-
-async def _publish_request_count_changed(user_id: int) -> None:
-    """Best-effort: the inbox badge counts moved (cards were closed)."""
-    from chat.realtime import events as realtime_events
-    from chat.realtime.bus import bus
-    from db.action_request_store import count_action_requests_by_status
-
-    try:
-        counts = await count_action_requests_by_status(user_id)
-        bus.publish_to_user(user_id, realtime_events.make_request_count_changed(counts))
-    except Exception:
-        logger.debug(
-            "[autoprojects] publish request_count_changed failed (user_id=%s)",
-            user_id, exc_info=True,
-        )
 
 
 async def delete_autoproject(user: dict, autoproject_id: str) -> None:
@@ -754,25 +700,22 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
     3. Delete the rows (runs, brief versions and conversations cascade).
     4. Sweep the conversations (live turns again, in-memory sessions,
        ``CHATS_DIR`` directories), then ``AUTOPROJECTS_DIR/<id>``.
-    5. Publish ``autoproject_changed`` (no active run; an open thread refetches
-       and gets 404), ``autoproject_list_changed``, and ``request_count_changed``
-       when cards were closed.
+    5. Publish ``autoproject_changed`` (no active run; an open AutoProject
+       page refetches and gets 404) and ``autoproject_list_changed``
+       (``request_count_changed`` went out when cards were closed).
 
     Raises:
         AutoProjectsDisabledError, AutoProjectNotFoundError.
     """
-    from chat.storage import ChatStorage
-    from chat.autoprojects.runs import stop_autoproject_run
-
-    autoproject = await _require_owned(user, autoproject_id)
+    autoproject = await require_owned_autoproject(user, autoproject_id)
     user_id = user["id"]
 
     conversation_ids = await autoproject_store.list_autoproject_conversation_ids(autoproject_id)
     await _cancel_live_runs(conversation_ids)
     active = await autoproject_store.get_active_run(autoproject_id)
     if active is not None:
-        await stop_autoproject_run(user_id, active["conversation_id"])
-    closed = await _close_conversation_cards(user_id, conversation_ids)
+        await runs.stop_autoproject_run(user_id, active["conversation_id"])
+    await _close_conversation_cards(user_id, conversation_ids)
     autoproject = await autoproject_store.get_autoproject(user_id, autoproject_id) or autoproject
 
     deleted_ids = await autoproject_store.delete_autoproject(user_id, autoproject_id)
@@ -780,7 +723,7 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
     late_ids = [cid for cid in deleted_ids if cid not in known_ids]
     if late_ids:
         # A run conversation created between the read and the delete.
-        closed += await _close_conversation_cards(user_id, late_ids)
+        await _close_conversation_cards(user_id, late_ids)
     logger.info(
         "AutoProject deleted (autoproject=%s, user=%s, conversations=%d)",
         autoproject_id, user_id, len(deleted_ids),
@@ -793,17 +736,11 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
     except Exception:
         logger.exception("Removing the directory of AutoProject %s failed", autoproject_id)
 
-    from chat.autoprojects.events import (
-        publish_autoproject_changed, publish_autoproject_list_changed,
-    )
-
     # The delete bumped event_seq once more before removing the row.
-    publish_autoproject_changed(
+    events.publish_autoproject_changed(
         user_id, {**autoproject, "event_seq": autoproject["event_seq"] + 1}, None,
     )
-    publish_autoproject_list_changed(user_id)
-    if closed:
-        await _publish_request_count_changed(user_id)
+    events.publish_autoproject_list_changed(user_id)
 
 
 async def delete_run(user: dict, autoproject_id: str, run_id: str) -> None:
@@ -815,8 +752,8 @@ async def delete_run(user: dict, autoproject_id: str, run_id: str) -> None:
     turn (one still flushing after its completion), pending wait handles
     and open approval cards are closed, its in-memory session dropped and
     its ``CHATS_DIR`` directory removed. Publishes ``autoproject_changed`` and
-    ``autoproject_list_changed``, and ``request_count_changed`` when cards were
-    closed.
+    ``autoproject_list_changed`` (and ``request_count_changed`` when cards
+    were closed).
 
     Raises:
         AutoProjectsDisabledError, AutoProjectNotFoundError, AutoProjectRunNotFoundError (also a
@@ -830,14 +767,9 @@ async def delete_run(user: dict, autoproject_id: str, run_id: str) -> None:
         autoproject_id, run_id, conversation_id, user_id,
     )
     await _cancel_live_runs([conversation_id])
-    closed = await _close_conversation_cards(user_id, [conversation_id])
+    await _close_conversation_cards(user_id, [conversation_id])
     await _sweep_conversations(user_id, [conversation_id])
-
-    from chat.autoprojects.events import publish_autoproject_state
-
-    await publish_autoproject_state(autoproject_id)
-    if closed:
-        await _publish_request_count_changed(user_id)
+    await events.publish_autoproject_state(autoproject_id)
 
 
 # ---------------------------------------------------------------------------
@@ -847,43 +779,105 @@ async def delete_run(user: dict, autoproject_id: str, run_id: str) -> None:
 
 async def fail_interrupted_runs_at_startup() -> list[dict]:
     """Fail every ``running`` run: its in-memory turn did not survive the
-    restart. ``waiting`` runs are untouched; their wait handles survive and
-    resume them.
-
-    Each affected AutoProject is marked unread (spec 10: a failed run marks the
-    AutoProject unread when no client is focused on it, and none is at startup).
+    restart. Each is settled like every finished run
+    (``runs.settle_finished_run``: its open cards closed, its AutoProject
+    marked unread, since no client is focused on it at startup).
 
     Returns:
         The failed runs.
     """
-    runs = await autoproject_store.fail_interrupted_runs()
-    for autoproject_id in {run["autoproject_id"] for run in runs}:
+    failed = await autoproject_store.fail_interrupted_runs(error=INTERRUPTED_BY_RESTART_ERROR)
+    for run in failed:
+        await runs.settle_finished_run(run, mark_unread=True)
+    if failed:
+        logger.info("Failed %d AutoProject run(s) interrupted by a restart", len(failed))
+    return failed
+
+
+async def resume_waiting_runs_at_startup(app=None) -> list[dict]:
+    """Settle the ``waiting`` runs a restart left with nothing to wait on.
+
+    A waiting run normally has a pending wait handle (a question or a card)
+    whose resolution resumes it. One with none was answered (or its card
+    resolved) just before the restart and lost its in-memory resume: its
+    resume is kicked again (``maybe_kick_resume`` with the owner's user
+    dict). When there is nothing to resume (no ``app``, the owner is gone,
+    or the transcript has no dangling wait), the run is failed "interrupted
+    by a restart" and settled. A waiting run with a pending handle is left
+    alone.
+
+    Returns:
+        The runs failed here (resumed ones are not returned).
+    """
+
+    waiting = await autoproject_store.list_runs_with_status(AUTOPROJECT_RUN_STATUS_WAITING)
+    if not waiting:
+        return []
+    pending = await tool_wait_handle_store.list_pending_for_conversations(
+        [run["conversation_id"] for run in waiting],
+    )
+    held = {handle["conversation_id"] for handle in pending}
+    failed: list[dict] = []
+    for run in waiting:
+        if run["conversation_id"] in held:
+            continue
+        kicked = False
         try:
-            await autoproject_store.mark_autoproject_unread(autoproject_id)
+            autoproject = await autoproject_store.get_autoproject_by_id(run["autoproject_id"])
+            user = (
+                await user_store.get_user_by_id(autoproject["user_id"])
+                if autoproject is not None else None
+            )
+            if app is not None and user is not None:
+                kicked = wait_resume.maybe_kick_resume(
+                    app, user, run["conversation_id"],
+                ) is not None
         except Exception:
             logger.exception(
-                "Marking AutoProject %s unread after a restart failed", autoproject_id,
+                "Resuming waiting AutoProject run %s at startup failed", run["id"],
             )
-    if runs:
-        logger.info("Failed %d AutoProject run(s) interrupted by a restart", len(runs))
-    return runs
+        if kicked:
+            logger.info(
+                "Resumed waiting AutoProject run %s after a restart (conversation=%s)",
+                run["id"], run["conversation_id"],
+            )
+            continue
+        try:
+            ended = await runs.end_run(
+                run["id"], AUTOPROJECT_RUN_STATUS_FAILED, error=INTERRUPTED_BY_RESTART_ERROR,
+            )
+        except Exception:
+            logger.exception("Failing waiting AutoProject run %s at startup failed", run["id"])
+            continue
+        if ended is not None:
+            failed.append(ended)
+    if failed:
+        logger.info(
+            "Failed %d waiting AutoProject run(s) left with nothing to resume by a restart",
+            len(failed),
+        )
+    return failed
 
 
 async def sweep_abandoned_run_conversations(
-    *, now: Optional[datetime] = None,
+    *,
+    now: Optional[datetime] = None,
+    autoproject_id: Optional[str] = None,
+    max_age: timedelta = AUTOPROJECT_ABANDONED_RUN_CONVERSATION_MAX_AGE,
 ) -> list[str]:
     """Delete run conversations created but never sent (no run row) once
-    they are older than ``AUTOPROJECT_ABANDONED_RUN_CONVERSATION_MAX_AGE``, rows
-    first, then their ``CHATS_DIR`` directories (best-effort per id).
+    they are older than ``max_age``, rows first, then their ``CHATS_DIR``
+    directories (best-effort per id). With ``autoproject_id``, only that
+    AutoProject's, and only those with no message (creating a run
+    conversation calls it so).
 
     Returns:
         The deleted conversation ids.
     """
-    from chat.storage import ChatStorage
-    from db.conversation_store import delete_abandoned_autoproject_conversations
-
-    cutoff = (now or datetime.now(timezone.utc)) - AUTOPROJECT_ABANDONED_RUN_CONVERSATION_MAX_AGE
-    conversation_ids = await delete_abandoned_autoproject_conversations(cutoff)
+    cutoff = (now or datetime.now(timezone.utc)) - max_age
+    conversation_ids = await delete_abandoned_autoproject_conversations(
+        cutoff, autoproject_id=autoproject_id,
+    )
     for conversation_id in conversation_ids:
         try:
             conversation_dir = ChatStorage.get_conversation_dir(conversation_id)
@@ -899,12 +893,18 @@ async def sweep_abandoned_run_conversations(
     return conversation_ids
 
 
-async def run_startup_sweeps() -> None:
-    """Run both startup sweeps; one failing does not skip the other."""
+async def run_startup_sweeps(app=None) -> None:
+    """Run the startup sweeps; one failing does not skip the others.
+    ``app`` (the FastAPI app) lets a waiting run resume
+    (:func:`resume_waiting_runs_at_startup`)."""
     try:
         await fail_interrupted_runs_at_startup()
     except Exception:
         logger.exception("Failing interrupted AutoProject runs at startup failed")
+    try:
+        await resume_waiting_runs_at_startup(app)
+    except Exception:
+        logger.exception("Settling waiting AutoProject runs at startup failed")
     try:
         await sweep_abandoned_run_conversations()
     except Exception:

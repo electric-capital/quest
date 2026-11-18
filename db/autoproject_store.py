@@ -46,6 +46,7 @@ from chat.autoprojects.constants import (
     AUTOPROJECT_BRIEF_MAX_CHARS,
     AUTOPROJECT_BRIEF_MAX_VERSIONS,
     AUTOPROJECT_CONTEXT_MAX_CHARS,
+    AUTOPROJECT_PROMPT_MAX_CHARS,
     AUTOPROJECT_RUN_ACTIVE_STATUSES,
     AUTOPROJECT_RUN_FINISHED_STATUSES,
     AUTOPROJECT_RUN_NOTES_MAX_CHARS,
@@ -69,10 +70,11 @@ DEFAULT_AUTOPROJECT_TITLE = "Untitled AutoProject"
 _MODEL_MAX_CHARS = 100
 _THINKING_EFFORT_MAX_CHARS = 20
 
-# Page size bounds: the thread page (list_runs_page) and the plain listings
-# (list_runs, and list_context_runs, from which the context builder reads
-# the window and the index, about AUTOPROJECT_LOG_WINDOW_MAX_ENTRIES +
-# AUTOPROJECT_LOG_INDEX_MAX_ENTRIES rows, in one call).
+# Page size bounds: the AutoProject page's run list (list_runs_page) and the
+# plain listings (list_run_index, and list_context_runs, from which the
+# context builder reads the window and the index, about
+# AUTOPROJECT_LOG_WINDOW_MAX_ENTRIES + AUTOPROJECT_LOG_INDEX_MAX_ENTRIES rows,
+# in one call).
 _RUNS_PAGE_MAX_LIMIT = 100
 _LIST_RUNS_MAX_LIMIT = 500
 
@@ -195,11 +197,7 @@ class AutoProjectRunActiveError(AutoProjectStoreError):
     code = "autoproject_run_active"
 
     def __init__(self, active_run: dict, message: Optional[str] = None):
-        summary = {
-            "id": active_run["id"],
-            "seq": active_run["seq"],
-            "status": active_run["status"],
-        }
+        summary = active_run_summary(active_run)
         super().__init__(
             message or (
                 f"Run {summary['seq']} of this AutoProject is still {summary['status']}. "
@@ -249,7 +247,7 @@ class AutoProjectRunExistsError(AutoProjectStoreError):
 
 
 class StaleBriefError(AutoProjectStoreError):
-    """``expected_version`` is not the brief's current version (someone
+    """``expected_brief_version`` is not the brief's current version (someone
     wrote it in between). ``current`` is ``{brief, brief_version,
     brief_updated_at}`` so the caller can show or merge it without a second
     read."""
@@ -327,9 +325,7 @@ def title_from_prompt(prompt: str) -> str:
             break
     else:
         return DEFAULT_AUTOPROJECT_TITLE
-    if len(clean) <= AUTOPROJECT_TITLE_MAX_CHARS:
-        return clean
-    return clean[: AUTOPROJECT_TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return cut_text(clean, AUTOPROJECT_TITLE_MAX_CHARS)
 
 
 def validate_brief(content) -> str:
@@ -378,9 +374,19 @@ def validate_run_entry(summary, result, notes) -> tuple[str, str, str]:
 
 
 def _validate_prompt(prompt) -> str:
-    """Return the prompt verbatim; refuse a non-string or blank one."""
+    """Return the prompt verbatim; refuse a non-string, blank or over-long
+    (``AUTOPROJECT_PROMPT_MAX_CHARS``) one as ``invalid_prompt``."""
     if not isinstance(prompt, str) or not prompt.strip():
         raise AutoProjectValidationError("invalid_prompt", "The prompt cannot be empty.")
+    if len(prompt) > AUTOPROJECT_PROMPT_MAX_CHARS:
+        raise AutoProjectValidationError(
+            "invalid_prompt",
+            f"The prompt is {len(prompt)} characters; the limit is "
+            f"{AUTOPROJECT_PROMPT_MAX_CHARS}. Put long material in a file and "
+            "point at it from the prompt.",
+            cap=AUTOPROJECT_PROMPT_MAX_CHARS,
+            actual=len(prompt),
+        )
     return prompt
 
 
@@ -416,13 +422,13 @@ def _validate_source(source) -> str:
     return source
 
 
-def _validate_expected_version(expected_version) -> int:
+def _validate_expected_version(expected_brief_version) -> int:
     if (
-        isinstance(expected_version, bool) or not isinstance(expected_version, int)
-        or expected_version < 0
+        isinstance(expected_brief_version, bool) or not isinstance(expected_brief_version, int)
+        or expected_brief_version < 0
     ):
-        raise ValueError("expected_version must be a non-negative integer.")
-    return expected_version
+        raise ValueError("expected_brief_version must be a non-negative integer.")
+    return expected_brief_version
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +487,7 @@ def _run_to_dict(run: AutoProjectRun, *, include_result: bool = True) -> dict:
          "summary", "result", "notes",          # None until completed
          "handoff_missing", "error", "model",
          "context_brief_version",               # None until frozen
+         "brief_conflict_version",              # None until a brief_conflict
          "started_at", "finished_at"}           # ISO strings
 
     The frozen ``context`` text itself is never included (the column is
@@ -505,13 +512,20 @@ def _run_to_dict(run: AutoProjectRun, *, include_result: bool = True) -> dict:
         "error": run.error,
         "model": run.model,
         "context_brief_version": run.context_brief_version,
+        "brief_conflict_version": run.brief_conflict_version,
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
     })
     return row
 
 
-def _active_run_summary(run: AutoProjectRun) -> dict:
+def active_run_summary(run) -> Optional[dict]:
+    """The ``active_run`` shape of a run: ``{id, seq, status}`` from a run
+    dict or an ``AutoProjectRun`` row; None for None."""
+    if run is None:
+        return None
+    if isinstance(run, dict):
+        return {"id": run["id"], "seq": run["seq"], "status": run["status"]}
     return {"id": run.id, "seq": run.seq, "status": run.status}
 
 
@@ -524,11 +538,12 @@ def _brief_state(autoproject: AutoProject) -> dict:
     }
 
 
-def _excerpt(content: str, chars: int) -> str:
-    clean = _collapse(content)
-    if len(clean) <= chars:
-        return clean
-    return clean[: max(chars - 1, 0)].rstrip() + "…"
+def cut_text(text: str, cap: int) -> str:
+    """``text`` when it fits in ``cap`` characters, else cut to fit with a
+    trailing "…"."""
+    if len(text) <= cap:
+        return text
+    return text[: max(cap - 1, 0)].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +705,7 @@ async def list_autoprojects(user_id: int, *, archived: bool = False) -> list[dic
         )).scalars().all()
         # Lowest seq wins if an AutoProject ever has more than one (not in v1).
         active_by_autoproject = {
-            run.autoproject_id: _active_run_summary(run) for run in active_runs
+            run.autoproject_id: active_run_summary(run) for run in active_runs
         }
         rows = []
         for autoproject in autoprojects:
@@ -698,12 +713,6 @@ async def list_autoprojects(user_id: int, *, archived: bool = False) -> list[dic
             row["active_run"] = active_by_autoproject.get(autoproject.id)
             rows.append(row)
         return rows
-
-
-async def count_active_autoprojects(user_id: int) -> int:
-    """How many unarchived AutoProjects the user has (what the cap counts)."""
-    async with AsyncSessionLocal() as db:
-        return await _count_unarchived(db, user_id)
 
 
 async def update_autoproject(
@@ -830,7 +839,7 @@ async def set_autoproject_archived(user_id: int, autoproject_id: str, archived: 
             active = await _first_active_run(db, autoproject_id)
             if active is not None:
                 # Read before the rollback expires the instance.
-                summary = _active_run_summary(active)
+                summary = active_run_summary(active)
                 await db.rollback()
                 raise AutoProjectRunActiveError(
                     summary,
@@ -986,7 +995,7 @@ async def allocate_run(
             raise AutoProjectArchivedError(autoproject_id)
         active = await _first_active_run(db, autoproject_id)
         if active is not None:
-            summary = _active_run_summary(active)
+            summary = active_run_summary(active)
             await db.rollback()
             raise AutoProjectRunActiveError(summary)
         conv_autoproject_id = (await db.execute(
@@ -1162,6 +1171,7 @@ async def complete_run(
 
 async def save_run_entry(
     run_id: str, *, summary: str, result: str, notes: str,
+    brief_conflict_version: Optional[int] = None,
 ) -> dict:
     """Save an active run's log entry WITHOUT finishing the run.
 
@@ -1170,10 +1180,14 @@ async def save_run_entry(
     it during the run, so the entry is kept while the model merges and
     retries. An active run whose ``summary`` is not None has a pending
     entry; :func:`complete_run` later overwrites or finalizes it.
+    ``brief_conflict_version``, when given, records the brief version the
+    conflict handed the run: the only ``expected_brief_version`` its next
+    ``complete_autoproject_run`` may use.
 
     The entry goes through :func:`validate_run_entry` first, so a refused
     entry writes nothing. ``status``, ``finished_at`` and the AutoProject's
-    ``event_seq`` are left alone: a pending entry is not a thread change.
+    ``event_seq`` are left alone: a pending entry changes nothing the
+    AutoProject page shows.
 
     Returns:
         The run dict.
@@ -1182,6 +1196,13 @@ async def save_run_entry(
         AutoProjectValidationError, AutoProjectRunNotFoundError, AutoProjectRunFinishedError.
     """
     clean_summary, clean_result, clean_notes = validate_run_entry(summary, result, notes)
+    values: dict = {
+        AutoProjectRun.summary: clean_summary,
+        AutoProjectRun.result: clean_result,
+        AutoProjectRun.notes: clean_notes,
+    }
+    if brief_conflict_version is not None:
+        values[AutoProjectRun.brief_conflict_version] = int(brief_conflict_version)
     async with AsyncSessionLocal() as db:
         result_proxy = await db.execute(
             update(AutoProjectRun)
@@ -1189,11 +1210,7 @@ async def save_run_entry(
                 AutoProjectRun.id == run_id,
                 AutoProjectRun.status.in_(AUTOPROJECT_RUN_ACTIVE_STATUSES),
             )
-            .values({
-                AutoProjectRun.summary: clean_summary,
-                AutoProjectRun.result: clean_result,
-                AutoProjectRun.notes: clean_notes,
-            })
+            .values(values)
             .execution_options(synchronize_session=False)
         )
         if result_proxy.rowcount != 1:
@@ -1305,7 +1322,7 @@ async def delete_run(user_id: int, autoproject_id: str, run_id: str) -> str:
             await db.rollback()
             raise AutoProjectRunNotFoundError(run_id)
         if run.status in AUTOPROJECT_RUN_ACTIVE_STATUSES:
-            summary = _active_run_summary(run)
+            summary = active_run_summary(run)
             await db.rollback()
             raise AutoProjectRunActiveError(
                 summary,
@@ -1369,23 +1386,6 @@ async def get_run_seqs(autoproject_id: str, run_ids: Iterable[str]) -> dict[str,
             .where(AutoProjectRun.autoproject_id == autoproject_id, AutoProjectRun.id.in_(ids))
         )).all()
     return {run_id: seq for run_id, seq in rows}
-
-
-async def list_runs(autoproject_id: str, *, offset: int = 0, limit: int = 50) -> list[dict]:
-    """The AutoProject's runs newest first, offset-paged (``limit`` clamped to
-    1..500), results included. For the ``list_autoproject_runs`` tool; the
-    context builder uses :func:`list_context_runs`."""
-    offset = max(0, int(offset))
-    limit = max(1, min(int(limit), _LIST_RUNS_MAX_LIMIT))
-    async with AsyncSessionLocal() as db:
-        runs = (await db.execute(
-            select(AutoProjectRun)
-            .where(AutoProjectRun.autoproject_id == autoproject_id)
-            .order_by(AutoProjectRun.seq.desc())
-            .offset(offset)
-            .limit(limit)
-        )).scalars().all()
-        return [_run_to_dict(r) for r in runs]
 
 
 async def list_context_runs(autoproject_id: str, *, before_seq: int, limit: int) -> list[dict]:
@@ -1476,6 +1476,18 @@ async def count_runs(autoproject_id: str, *, before_seq: Optional[int] = None) -
         return (await db.execute(stmt)).scalar_one()
 
 
+async def list_runs_with_status(status: str) -> list[dict]:
+    """Every run in ``status``, across AutoProjects, oldest first (the
+    startup sweep of ``waiting`` runs). Not owner-scoped."""
+    async with AsyncSessionLocal() as db:
+        runs = (await db.execute(
+            select(AutoProjectRun)
+            .where(AutoProjectRun.status == status)
+            .order_by(AutoProjectRun.started_at, AutoProjectRun.id)
+        )).scalars().all()
+        return [_run_to_dict(r) for r in runs]
+
+
 async def fail_interrupted_runs(error: str = "interrupted by a restart") -> list[dict]:
     """Startup sweep: mark every ``running`` run ``failed`` with ``error``.
 
@@ -1520,7 +1532,7 @@ async def fail_interrupted_runs(error: str = "interrupted by a restart") -> list
 
 
 async def _write_brief(
-    db, autoproject_id: str, content: str, *, expected_version: int, source: str,
+    db, autoproject_id: str, content: str, *, expected_brief_version: int, source: str,
 ) -> dict:
     """The one brief write, inside the caller's session: conditional UPDATE
     on the version token, the new version's row, then pruning to
@@ -1529,7 +1541,7 @@ async def _write_brief(
     now = _now()
     result = await db.execute(
         update(AutoProject)
-        .where(AutoProject.id == autoproject_id, AutoProject.brief_version == expected_version)
+        .where(AutoProject.id == autoproject_id, AutoProject.brief_version == expected_brief_version)
         .values({
             AutoProject.brief: content,
             AutoProject.brief_version: AutoProject.brief_version + 1,
@@ -1545,7 +1557,7 @@ async def _write_brief(
         if autoproject is None:
             raise AutoProjectNotFoundError(autoproject_id)
         raise StaleBriefError(_brief_state(autoproject))
-    new_version = expected_version + 1
+    new_version = expected_brief_version + 1
     db.add(AutoProjectBriefVersion(
         autoproject_id=autoproject_id,
         version=new_version,
@@ -1573,12 +1585,12 @@ async def _write_brief(
 
 
 async def set_brief(
-    autoproject_id: str, content: str, *, expected_version: int, source: str,
+    autoproject_id: str, content: str, *, expected_brief_version: int, source: str,
 ) -> dict:
     """Write a new brief.
 
     In one transaction: the conditional UPDATE (``brief_version`` must still
-    be ``expected_version``; it becomes ``expected_version + 1``), an
+    be ``expected_brief_version``; it becomes ``expected_brief_version + 1``), an
     ``autoproject_brief_versions`` row holding the new text under the new version
     with ``source`` as its author, and pruning of that AutoProject's versions
     beyond ``AUTOPROJECT_BRIEF_MAX_VERSIONS`` (oldest first). Not owner-scoped:
@@ -1586,7 +1598,7 @@ async def set_brief(
 
     Args:
         content: Through :func:`validate_brief` (stripped; empty allowed).
-        expected_version: The ``brief_version`` the writer started from.
+        expected_brief_version: The ``brief_version`` the writer started from.
         source: ``run:<run_id>``, ``ui`` or ``restore:<version>``.
 
     Returns:
@@ -1595,14 +1607,14 @@ async def set_brief(
     Raises:
         AutoProjectValidationError, StaleBriefError (``.current`` is the brief as
         it now is), AutoProjectNotFoundError.
-        ValueError: malformed ``source`` or ``expected_version``.
+        ValueError: malformed ``source`` or ``expected_brief_version``.
     """
     clean = validate_brief(content)
     _validate_source(source)
-    _validate_expected_version(expected_version)
+    _validate_expected_version(expected_brief_version)
     async with AsyncSessionLocal() as db:
         return await _write_brief(
-            db, autoproject_id, clean, expected_version=expected_version, source=source,
+            db, autoproject_id, clean, expected_brief_version=expected_brief_version, source=source,
         )
 
 
@@ -1626,7 +1638,7 @@ async def list_brief_versions(autoproject_id: str, *, excerpt_chars: int = 200) 
             "version": version,
             "source": source,
             "created_at": _iso(created_at),
-            "excerpt": _excerpt(content, excerpt_chars),
+            "excerpt": cut_text(_collapse(content), excerpt_chars),
         }
         for version, source, created_at, content in rows
     ]
@@ -1666,7 +1678,7 @@ async def get_brief_version_source(autoproject_id: str, version: int) -> Optiona
 
 
 async def restore_brief_version(
-    autoproject_id: str, version: int, *, expected_version: int,
+    autoproject_id: str, version: int, *, expected_brief_version: int,
 ) -> dict:
     """Write stored version ``version``'s text as a new brief version with
     ``source = "restore:<version>"``, through the same transaction as
@@ -1680,7 +1692,7 @@ async def restore_brief_version(
         AutoProjectNotFoundError, BriefVersionNotFoundError, StaleBriefError,
         AutoProjectValidationError (the stored text is over today's cap).
     """
-    _validate_expected_version(expected_version)
+    _validate_expected_version(expected_brief_version)
     async with AsyncSessionLocal() as db:
         content = (await db.execute(
             select(AutoProjectBriefVersion.content).where(
@@ -1694,7 +1706,7 @@ async def restore_brief_version(
             raise BriefVersionNotFoundError(version)
         return await _write_brief(
             db, autoproject_id, validate_brief(content),
-            expected_version=expected_version, source=f"restore:{int(version)}",
+            expected_brief_version=expected_brief_version, source=f"restore:{int(version)}",
         )
 
 

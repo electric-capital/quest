@@ -710,14 +710,19 @@ def _conversation_to_dict(conv: Conversation) -> dict:
     }
 
 
-async def delete_abandoned_autoproject_conversations(created_before: datetime) -> list[str]:
+async def delete_abandoned_autoproject_conversations(
+    created_before: datetime, *, autoproject_id: Optional[str] = None,
+) -> list[str]:
     """Delete AutoProject conversations that never got a run row.
 
     ``POST /autoprojects/{id}/runs`` creates the run's conversation before the
     first message allocates its ``autoproject_runs`` row; a start the user never
     followed with a message leaves an empty conversation behind. The startup
     sweep calls this to drop those rows once they are older than
-    ``created_before``.
+    ``created_before``; creating a run conversation calls it with
+    ``autoproject_id`` to drop that AutoProject's earlier unsent ones, so they
+    cannot pile up between restarts (then a conversation with any message
+    is kept too).
 
     One ``DELETE ... RETURNING`` statement both picks and removes the rows,
     with the no-run-row check inside it, so a run allocated concurrently
@@ -728,6 +733,8 @@ async def delete_abandoned_autoproject_conversations(created_before: datetime) -
     Args:
         created_before: Only conversations created strictly before this
             (UTC) are deleted.
+        autoproject_id: Only this AutoProject's conversations, and only
+            those with no message.
 
     Returns:
         The deleted conversation ids. The caller removes their
@@ -736,14 +743,20 @@ async def delete_abandoned_autoproject_conversations(created_before: datetime) -
     no_run = ~select(AutoProjectRun.id).where(
         AutoProjectRun.conversation_id == Conversation.id
     ).exists()
+    conditions = [
+        Conversation.autoproject_id.isnot(None),
+        Conversation.created_at < created_before,
+        no_run,
+    ]
+    if autoproject_id is not None:
+        conditions += [
+            Conversation.autoproject_id == autoproject_id,
+            func.coalesce(Conversation.last_message_seq, 0) == 0,
+        ]
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             delete(Conversation)
-            .where(
-                Conversation.autoproject_id.isnot(None),
-                Conversation.created_at < created_before,
-                no_run,
-            )
+            .where(*conditions)
             .returning(Conversation.id)
             .execution_options(synchronize_session=False)
         )

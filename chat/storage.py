@@ -2311,3 +2311,21 @@ class ChatStorage:
             })
 
         return conversations
+
+
+async def read_conversation_with_retry(conversation_id: str) -> Optional[dict]:
+    """Read and parse a conversation's chat_history.json in a worker thread.
+
+    A failed threaded read (e.g. a parse error from catching a concurrent
+    writer mid-write) is retried once synchronously on the event loop; a
+    genuinely unreadable file raises from there. None when the
+    conversation has no transcript.
+    """
+    try:
+        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+    except Exception:
+        logger.debug(
+            "Threaded chat_history.json read failed for %s; retrying on the loop",
+            conversation_id, exc_info=True,
+        )
+        return ChatStorage.get_conversation(conversation_id)

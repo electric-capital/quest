@@ -81,6 +81,7 @@ from chat.gemini_api.tool_handlers import (
     _doc_notes_closed_result,
     _suggest_doc_note_not_available_result,
 )
+from chat.gemini_api.tool_handlers import autoproject_runs as autoproject_runs_handlers
 from chat.gemini_api.tool_handlers import browser as _browser
 from chat.gemini_api.tool_handlers.tables import (
     _handle_delete_rows,
@@ -359,18 +360,15 @@ async def _tool_copy_file(ctx: ToolContext, args: dict) -> str:
 
 # Read tools over the calling run's own AutoProject (issue #213, spec 6.2):
 # listed only in AutoProject runs (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the handlers refuse
-# a conversation without ctx.autoproject_id. Imported lazily: the AutoProjects modules
-# import chat.realtime, whose package init imports the socket module.
+# a conversation without ctx.autoproject_id.
 
 
 async def _tool_list_autoproject_runs(ctx: ToolContext, args: dict) -> str:
-    from chat.gemini_api.tool_handlers.autoproject_runs import handle_list_autoproject_runs
-    return await handle_list_autoproject_runs(ctx, args)
+    return await autoproject_runs_handlers.handle_list_autoproject_runs(ctx, args)
 
 
 async def _tool_read_autoproject_run(ctx: ToolContext, args: dict) -> str:
-    from chat.gemini_api.tool_handlers.autoproject_runs import handle_read_autoproject_run
-    return await handle_read_autoproject_run(ctx, args)
+    return await autoproject_runs_handlers.handle_read_autoproject_run(ctx, args)
 
 
 async def _tool_memory_search(ctx: ToolContext, args: dict) -> str:
@@ -1262,16 +1260,14 @@ async def _dispatch_tool_call_inner(
             # run has the scheme file tools (not the other project-only
             # ones) and the AutoProject-only tools, which every other
             # conversation lacks.
+            from chat.gemini_api.system_prompt import AUTOPROJECT_RUN_EXCLUDED_TOOLS
             from chat.llm.tool_schemas import (
                 PROJECT_HIDDEN_WORKSPACE_TOOLS,
                 PROJECT_ONLY_TOOL_CALL_TOOLS,
-                SCHEME_FILE_TOOLS,
                 AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
             )
             if autoproject_id:
-                hidden = PROJECT_HIDDEN_WORKSPACE_TOOLS | (
-                    PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS
-                )
+                hidden = AUTOPROJECT_RUN_EXCLUDED_TOOLS
             elif project_id:
                 hidden = (
                     PROJECT_HIDDEN_WORKSPACE_TOOLS | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS

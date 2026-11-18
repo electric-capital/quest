@@ -602,26 +602,6 @@ async def _build_wait_for_handles_result(
     return payload
 
 
-async def _publish_request_count(user_id: int) -> None:
-    """Best-effort: publish the per-user action-request counts to the
-    persistent WS so the sidebar badge updates without waiting for a poll.
-    """
-    try:
-        from chat.realtime import bus as _rt_bus
-        from chat.realtime import events as _rt_events
-        from db.action_request_store import count_action_requests_by_status
-        counts = await count_action_requests_by_status(user_id)
-        _rt_bus.publish_to_user(
-            user_id,
-            _rt_events.make_request_count_changed(counts),
-        )
-    except Exception:
-        logger.debug(
-            "[conversation] publish request_count_changed failed",
-            exc_info=True,
-        )
-
-
 async def _open_action_request_card(
     ctx: RunContext,
     *,
@@ -1072,7 +1052,9 @@ async def _handle_return_to_caller(
         _RunStatus.AWAITING_RETURN,
     )
 
-    await _publish_request_count(ctx.user["id"])
+    # Imported here: chat.realtime imports this package.
+    from chat.realtime.bus import publish_request_count_changed
+    await publish_request_count_changed(ctx.user["id"])
 
     raise SuspendForActionRequest(
         handle_id=wait_handle_id,
@@ -1193,7 +1175,6 @@ async def _handle_complete_autoproject_run(
         outcome = await complete_autoproject_run(
             autoproject_id=ctx.autoproject_id,
             run_id=ctx.autoproject_run_id,
-            context_brief_version=ctx.autoproject_context_brief_version,
             args=args,
         )
     except Exception:
@@ -1561,7 +1542,9 @@ async def _handle_create_action_request(
         tool_id=call.raw_tool_id,
     )
 
-    await _publish_request_count(ctx.user["id"])
+    # Imported here: chat.realtime imports this package.
+    from chat.realtime.bus import publish_request_count_changed
+    await publish_request_count_changed(ctx.user["id"])
 
     # Suspend the agent loop on the linked wait-handle row. The resume
     # bucket on the next run closes the dangling create_action_request

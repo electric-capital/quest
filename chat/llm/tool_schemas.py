@@ -4136,7 +4136,7 @@ _COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
         "`brief_conflict` result means the user edited the brief during "
         "this run: your entry is saved and the run stays open; merge your "
         "changes into the current brief that result returns and call again "
-        "with the merged `brief` and `brief_expected_version`."
+        "with the merged `brief` and `expected_brief_version`."
     ),
     "parameters": {
         "type": "object",
@@ -4183,7 +4183,7 @@ _COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
                     f"{AUTOPROJECT_BRIEF_MAX_CHARS:,} characters."
                 ),
             },
-            "brief_expected_version": {
+            "expected_brief_version": {
                 "type": "integer",
                 "description": (
                     "Only when retrying after a `brief_conflict` result: "

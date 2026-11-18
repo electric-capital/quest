@@ -8,9 +8,9 @@ a status and the error body ``{"error": code, "message": ..., **details}``
 
 :func:`require_autoproject_for_route` is the guard every ``/autoprojects/{id}...`` route
 (chat/autoprojects/routes.py and the AutoProject file routes in chat/file_routes.py)
-calls first: 403 ``autoprojects_disabled`` while the gate is closed for the user
-(spec 9), then 404 ``autoproject_not_found`` for a missing AutoProject and for one owned
-by someone else, with the same body (invariant 7).
+calls first: 403 ``autoprojects_disabled`` while the gate is closed for the user,
+then 404 ``autoproject_not_found`` for a missing AutoProject and for one owned
+by someone else, with the same body.
 
 Imports nothing from ``chat.realtime``, so route modules may import it at
 module top.
@@ -18,9 +18,12 @@ module top.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi import HTTPException
+
+from chat.storage import ChatStorage
 
 from db.autoproject_store import AutoProjectStoreError, AutoProjectValidationError
 
@@ -64,20 +67,18 @@ def autoproject_http_exception(exc: AutoProjectStoreError) -> HTTPException:
     )
 
 
-async def require_autoproject_for_route(
-    user: dict, autoproject_id: str, *, allow_archived: bool = True,
-) -> dict:
-    """Gate, then ownership: the AutoProject dict, or 403 ``autoprojects_disabled`` / 404
-    ``autoproject_not_found`` (same body for missing and foreign) / 409
-    ``autoproject_archived`` when ``allow_archived`` is False."""
-    from chat.conversation_access import require_owned_autoproject
-    from chat.autoprojects.service import AutoProjectsDisabledError, require_autoprojects_enabled
+async def require_autoproject_for_route(user: dict, autoproject_id: str) -> dict:
+    """The AutoProject dict through ``service.require_owned_autoproject`` (gate,
+    then ownership), its refusal as the HTTP error: 403
+    ``autoprojects_disabled`` / 404 ``autoproject_not_found`` (same body for
+    missing and foreign)."""
+    # Imported here: the service imports chat.realtime.
+    from chat.autoprojects.service import require_owned_autoproject
 
     try:
-        require_autoprojects_enabled(user)
-    except AutoProjectsDisabledError as exc:
+        return await require_owned_autoproject(user, autoproject_id)
+    except AutoProjectStoreError as exc:
         raise autoproject_http_exception(exc) from exc
-    return await require_owned_autoproject(user, autoproject_id, allow_archived=allow_archived)
 
 
 async def resolve_autoproject_workspace_for_route(
@@ -85,11 +86,8 @@ async def resolve_autoproject_workspace_for_route(
 ) -> tuple[dict, Path]:
     """:func:`require_autoproject_for_route` plus the AutoProject workspace root, created
     if missing (an AutoProject that never wrote a file lists as empty). Archived
-    AutoProjects are allowed: the thread and its files stay readable."""
-    import asyncio
-
-    from chat.storage import ChatStorage
-
+    AutoProjects are allowed: the AutoProject page and its files stay
+    readable."""
     autoproject = await require_autoproject_for_route(user, autoproject_id)
     root = ChatStorage.get_autoproject_workspace_root(autoproject_id)
     await asyncio.to_thread(root.mkdir, parents=True, exist_ok=True)

@@ -84,9 +84,3 @@ class RunContext:
     # other conversation.
     autoproject_id: str | None = None
     autoproject_run_id: str | None = None
-    # The autoprojects.brief_version the run's ``## AutoProject`` system-prompt section
-    # was built from (frozen on the autoproject_runs row with the text, so it
-    # survives a resume and a restart). Phase A5's complete_autoproject_run passes
-    # it as set_brief(expected_version=...), so a brief the user edited
-    # during the run is detected as a conflict. None outside an AutoProject run.
-    autoproject_context_brief_version: int | None = None

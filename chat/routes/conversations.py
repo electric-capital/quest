@@ -1,6 +1,5 @@
 """Conversation CRUD endpoints."""
 
-import asyncio
 import logging
 from datetime import datetime
 
@@ -11,7 +10,7 @@ from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.conversation_access import require_owned_conversation
 from chat.realtime import bus, events as realtime_events
 from chat.realtime.replay_buffer import replay_buffer
-from chat.storage import ChatStorage
+from chat.storage import ChatStorage, read_conversation_with_retry
 
 from chat.routes import router
 
@@ -503,23 +502,6 @@ def _tail_from_replay_buffer(
     return window
 
 
-async def _read_transcript(conversation_id: str) -> dict | None:
-    """Read and parse chat_history.json in a worker thread.
-
-    A failed threaded read -- e.g. a parse error from catching a concurrent
-    writer mid-write -- is retried once synchronously on the event loop, the
-    same recovery as ``_read_chat_history`` in ``chat/gemini_api/conversation.py``.
-    """
-    try:
-        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
-    except Exception:
-        logger.debug(
-            "[conversations] Threaded chat_history.json read failed for %s; "
-            "retrying on the loop", conversation_id, exc_info=True,
-        )
-        return ChatStorage.get_conversation(conversation_id)
-
-
 @router.get("/conversations/{conversation_id}/tail")
 async def get_conversation_tail(
     conversation_id: str,
@@ -546,7 +528,7 @@ async def get_conversation_tail(
 
     tail = _tail_from_replay_buffer(conversation_id, after_seq, last_message_seq)
     if tail is None:
-        conversation = await _read_transcript(conversation_id)
+        conversation = await read_conversation_with_retry(conversation_id)
         if not conversation:
             raise HTTPException(
                 status_code=404,
