@@ -28,6 +28,7 @@ from chat.action_request_types.create_table import CreateTableHandler
 from chat.autoprojects import service as autoproject_service
 from chat.autoprojects.constants import autoproject_not_found_message
 from chat.docs import access as doc_access
+from chat.docs.constants import doc_not_found_message
 from chat.docs import service as doc_service
 from chat.tables import access as table_access
 from chat.tables import service as table_service
@@ -73,11 +74,30 @@ def _item(shares=(), *, require_approval=False, autoproject_id=AP):
 
 
 def _core(item, *, user_id=OWNER, run_kind="top_level", autoproject_id=None,
-          project_id=None, is_public=False):
+          project_id=None, is_public=False, autoprojects_enabled=True):
     return artifact_access.resolve_core(
         item, user_id=user_id, is_public=is_public, project_id=project_id,
         run_kind=run_kind, autoproject_id=autoproject_id,
+        autoprojects_enabled=autoprojects_enabled,
     )
+
+
+@pytest.mark.parametrize("run_kind", sorted(artifact_access.RUN_KINDS))
+def test_gate_closed_hides_it_from_everyone(run_kind):
+    shared = _item(shares=[(RECIPIENT, "write")])
+    for user_id in (OWNER, RECIPIENT):
+        for caller_autoproject in (None, AP):
+            assert not _core(
+                shared, user_id=user_id, run_kind=run_kind,
+                autoproject_id=caller_autoproject, autoprojects_enabled=False,
+            ).visible
+    # The argument defaults to closed, and never touches other artifacts.
+    assert not artifact_access.resolve_core(
+        _item(), user_id=OWNER, is_public=False, project_id=None, run_kind=run_kind,
+    ).visible
+    assert _core(
+        _item(autoproject_id=None), run_kind=run_kind, autoprojects_enabled=False,
+    ).visible
 
 
 def test_own_run_follows_the_matrix():
@@ -136,11 +156,13 @@ def test_ui_owner_writes_freely_and_user_artifacts_are_unchanged():
 def test_resolvers_word_the_outside_cause():
     doc = doc_access.resolve_doc_access(
         _item(), user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
+        autoprojects_enabled=True,
     )
     assert doc.deny_reason == doc_access.DENY_OUTSIDE_AUTOPROJECT
     assert doc.deny_cause == "outside_autoproject"
     table = table_access.resolve_table_access(
         _item(), user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
+        autoprojects_enabled=True,
     )
     assert table.deny_reason == table_access.DENY_OUTSIDE_AUTOPROJECT
     # Read-only on the table as a whole: the schema is denied the same way.
@@ -149,7 +171,7 @@ def test_resolvers_word_the_outside_cause():
     )
     in_run = table_access.resolve_table_access(
         _item(), user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
-        autoproject_id=AP,
+        autoproject_id=AP, autoprojects_enabled=True,
     )
     assert (in_run.rows, in_run.schema) == ("free", "approval")
 
@@ -460,3 +482,65 @@ def test_deleting_the_autoproject_removes_its_docs_and_tables(env):
     assert (storage_mod.DOCS_DIR / kept_doc["id"]).is_dir()
     kinds = {ev.get("type") for _uid, ev in env.published}
     assert {"doc_list_changed", "table_list_changed", "autoproject_list_changed"} <= kinds
+
+
+def test_outside_the_gate_nobody_sees_autoproject_docs_or_tables(env):
+    """The autoprojects gate is the one switch: with it closed for a user
+    (owner or share recipient) the AutoProject's docs and tables are
+    hidden in the UI and in every conversation, and cannot be created;
+    their ordinary docs and tables are untouched."""
+    run = _doc_caller(env.owner, autoproject=env.first)
+    doc = _run(doc_service.create_doc(run, "Findings", "# Findings\n", target="autoproject"))
+    plain = _run(doc_service.create_doc(_doc_caller(env.owner), "Plain", "x"))
+    ui = table_service.caller_for_ui(env.owner)
+    table = _run(table_service.create_table(
+        ui, title="Tracker", autoproject_id=env.first["id"], columns=COLUMNS,
+        write_source=f"ui:{env.owner['id']}", actor_user_id=env.owner["id"],
+    ))
+    _run(doc_store.add_share(doc["id"], env.other["id"], "write"))
+    _run(table_store.add_share(table["id"], env.other["id"], "write"))
+
+    def doc_seen(user, **kwargs):
+        stored = _run(doc_store.get_doc(doc["id"]))
+        return doc_service._access(_doc_caller(user, **kwargs), stored).visible
+
+    def table_seen(user, **kwargs):
+        stored = _run(table_store.get_table(table["id"]))
+        return table_service.resolve(_table_caller(user, **kwargs), stored).visible
+
+    def doc_titles(caller, scope):
+        return _titles(_run(doc_service.list_docs(caller, scope=scope)))
+
+    # Gate open for both: owner everywhere it is allowed, recipient in the UI.
+    assert doc_seen(env.owner) and doc_seen(env.owner, run_kind="ui")
+    assert doc_seen(env.other, run_kind="ui") and table_seen(env.other, run_kind="ui")
+    assert "Findings" in doc_titles(_doc_caller(env.owner), "all")
+
+    # Open for the owner only: the recipient sees nothing.
+    env.fg.set_feature_allowed_users(env.fg.FEATURE_AUTOPROJECTS, [env.owner["email"]])
+    assert doc_seen(env.owner, run_kind="ui") and table_seen(env.owner, run_kind="ui")
+    assert not doc_seen(env.other, run_kind="ui")
+    assert not table_seen(env.other, run_kind="ui")
+
+    # Open for the recipient only: the owner sees nothing, anywhere.
+    env.fg.set_feature_allowed_users(env.fg.FEATURE_AUTOPROJECTS, [env.other["email"]])
+    for kwargs in ({}, {"run_kind": "ui"}, {"autoproject": env.first}):
+        assert not doc_seen(env.owner, **kwargs)
+        assert not table_seen(env.owner, **kwargs)
+    assert doc_seen(env.other, run_kind="ui")
+    assert doc_titles(_doc_caller(env.owner), "all") == ["Plain"]
+    assert doc_titles(run, "autoproject") == []
+    listed = _run(table_service.list_visible_tables(_table_caller(env.owner), scope="all"))
+    assert listed == []
+    # The same refusal as for a doc that does not exist.
+    with pytest.raises(doc_service.DocError) as doc_exc:
+        _run(doc_service.read_doc(_doc_caller(env.owner), doc["id"]))
+    assert str(doc_exc.value) == doc_not_found_message(doc["id"])
+    assert _run(doc_service.read_doc(_doc_caller(env.owner), plain["id"]))
+    with pytest.raises(doc_service.DocError, match="not found"):
+        _run(doc_service.create_doc(run, "More", "", target="autoproject"))
+    with pytest.raises(table_service.TableError) as exc:
+        _run(table_service.create_table(
+            ui, title="More", autoproject_id=env.first["id"], columns=COLUMNS,
+        ))
+    assert exc.value.code == "autoproject_not_found"

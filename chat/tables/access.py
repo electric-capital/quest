@@ -40,7 +40,8 @@ public table). An AutoProject table (``autoproject_id`` set, always
 private) follows the matrix only from that AutoProject's runs and the UI;
 the owner's other private standalone conversations read it
 (:data:`DENY_OUTSIDE_AUTOPROJECT`) and every other conversation sees
-Hidden.
+Hidden. A user for whom the ``autoprojects`` gate is closed sees Hidden
+everywhere, the UI included (``autoprojects_enabled``).
 
 "Read" = rows AND schema denied, both with the same read-only reason.
 
@@ -317,6 +318,7 @@ def resolve_table_access(
     run_kind: str,
     doc_source_project_ids: Collection[str] = (),
     autoproject_id: str | None = None,
+    autoprojects_enabled: bool = False,
 ) -> TableAccess:
     """Decide visibility, readability and the rows and schema verdicts.
 
@@ -327,7 +329,9 @@ def resolve_table_access(
     are the public projects whose public tables the calling (private)
     project may read, empty unless the caller is a private project
     conversation; ``autoproject_id`` is the calling run's AutoProject, None
-    outside a run.
+    outside a run; ``autoprojects_enabled`` is whether the ``autoprojects``
+    gate is open for the user (``artifact_access.autoprojects_open``), and
+    an AutoProject table is hidden without it.
 
     Raises ValueError for an unknown ``run_kind`` or table mode, or a table
     dict without its ``shares`` list.
@@ -340,6 +344,7 @@ def resolve_table_access(
         run_kind=run_kind,
         source_project_ids=doc_source_project_ids,
         autoproject_id=autoproject_id,
+        autoprojects_enabled=autoprojects_enabled,
         kind="table",
     )
     if not core.visible:

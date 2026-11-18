@@ -85,6 +85,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, StrictBool
 from starlette.background import BackgroundTask
 
+from chat import artifact_access
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.docs import events as doc_events
 from chat.docs import files as doc_files
@@ -172,6 +173,7 @@ def _ui_caller(user: dict) -> doc_service.Caller:
 def _ui_access(user: dict, doc: dict) -> DocAccess:
     return resolve_doc_access(
         doc, user_id=user["id"], is_public=False, project_id=None, run_kind="ui",
+        autoprojects_enabled=artifact_access.autoprojects_open(user, doc),
     )
 
 

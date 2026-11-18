@@ -103,6 +103,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
+from chat import artifact_access
 from chat.storage import ChatStorage
 from chat.tables import filters, revert, schema_ops, storage
 from chat.tables.access import (
@@ -411,6 +412,7 @@ def resolve(
         run_kind=caller.run_kind,
         doc_source_project_ids=doc_source_project_ids,
         autoproject_id=caller.autoproject_id,
+        autoprojects_enabled=artifact_access.autoprojects_open(caller.user, table),
     )
 
 
@@ -1452,9 +1454,13 @@ async def create_table(
         )
     if autoproject_id is not None:
         from chat.autoprojects.constants import autoproject_not_found_message
+        from config import feature_gates
         from db import autoproject_store
 
-        if await autoproject_store.get_autoproject(owner, autoproject_id) is None:
+        gate_open = feature_gates.autoprojects_enabled_for(
+            (caller.user or {}).get("email") or "",
+        )
+        if not gate_open or await autoproject_store.get_autoproject(owner, autoproject_id) is None:
             raise TableError(
                 "autoproject_not_found", autoproject_not_found_message(autoproject_id),
             )

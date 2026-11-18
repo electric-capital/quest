@@ -88,6 +88,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
+from chat import artifact_access
 from chat import storage as _storage
 from chat.docs import constants
 from chat.docs import files as doc_files
@@ -310,6 +311,7 @@ def _access(
         run_kind=caller.run_kind,
         doc_source_project_ids=doc_source_project_ids,
         autoproject_id=caller.autoproject_id,
+        autoprojects_enabled=artifact_access.autoprojects_open(caller.user, doc),
     )
 
 
@@ -1261,8 +1263,8 @@ async def create_doc(
 async def _owned_run_autoproject(caller: Caller) -> str:
     """The calling run's AutoProject id for ``create_doc(target=
     "autoproject")``: the conversation must be an AutoProject run and the
-    AutoProject the caller's own (one text for a missing and a foreign
-    one)."""
+    AutoProject the caller's own, with the ``autoprojects`` gate open for
+    them (one text for a closed gate, a missing and a foreign one)."""
     if not caller.autoproject_id:
         raise DocError(
             'create_doc(target="autoproject") is only available inside an '
@@ -1271,7 +1273,9 @@ async def _owned_run_autoproject(caller: Caller) -> str:
     from chat.autoprojects.constants import autoproject_not_found_message
     from db import autoproject_store
 
-    owned = await autoproject_store.get_autoproject(caller.user["id"], caller.autoproject_id)
+    owned = None
+    if feature_gates.autoprojects_enabled_for((caller.user or {}).get("email") or ""):
+        owned = await autoproject_store.get_autoproject(caller.user["id"], caller.autoproject_id)
     if owned is None:
         raise DocError(autoproject_not_found_message(caller.autoproject_id))
     return caller.autoproject_id

@@ -78,7 +78,10 @@ Rules layered on the matrix, applied in this order:
    (the caller's ``autoproject_id``) and from the UI. The OWNER's other
    private standalone conversations, another AutoProject's runs included,
    read them (``DENY_OUTSIDE_AUTOPROJECT``); project conversations, public
-   conversations and share recipients' conversations see Hidden.
+   conversations and share recipients' conversations see Hidden. All of
+   this holds only while the ``autoprojects`` gate is open for the calling
+   user (``autoprojects_enabled``): without it an AutoProject doc is Hidden
+   from everyone, the owner and the UI included.
 3. A public conversation never learns of a private doc (Hidden, even for
    the owner and even with a write share).
 4. Read-only run kinds (sub-agents, inference-API runs, cross-user subagent
@@ -305,6 +308,7 @@ def resolve_doc_access(
     run_kind: str,
     doc_source_project_ids: Collection[str] = (),
     autoproject_id: str | None = None,
+    autoprojects_enabled: bool = False,
 ) -> DocAccess:
     """Decide visibility, readability and the write verdict for one doc.
 
@@ -314,7 +318,10 @@ def resolve_doc_access(
     of :data:`RUN_KINDS`; ``doc_source_project_ids`` are the public
     projects whose docs the calling (private) project may read (rule 2),
     empty unless the caller is a private project conversation;
-    ``autoproject_id`` is the calling run's AutoProject, None outside a run.
+    ``autoproject_id`` is the calling run's AutoProject, None outside a run;
+    ``autoprojects_enabled`` is whether the ``autoprojects`` gate is open
+    for the user (``artifact_access.autoprojects_open``), and an AutoProject
+    doc is hidden without it.
 
     A denied verdict carries both its text (``deny_reason``) and its cause
     (``deny_cause``); :data:`HIDDEN` carries neither.
@@ -330,6 +337,7 @@ def resolve_doc_access(
         run_kind=run_kind,
         source_project_ids=doc_source_project_ids,
         autoproject_id=autoproject_id,
+        autoprojects_enabled=autoprojects_enabled,
         kind="doc",
     )
     if not core.visible:

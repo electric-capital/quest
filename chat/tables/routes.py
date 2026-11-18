@@ -122,6 +122,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool
 
+from chat import artifact_access
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.tables import filters, service, storage
 from chat.tables.access import TableAccess, effective_share, resolve_table_access
@@ -226,6 +227,7 @@ def _require_tables_enabled(user: dict) -> None:
 def _ui_access(user: dict, table: dict) -> TableAccess:
     return resolve_table_access(
         table, user_id=user["id"], is_public=False, project_id=None, run_kind="ui",
+        autoprojects_enabled=artifact_access.autoprojects_open(user, table),
     )
 
 

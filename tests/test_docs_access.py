@@ -281,9 +281,11 @@ def test_read_only_run_kinds_in_public_context(run_kind, row):
 # ---------------------------------------------------------------------------
 
 
-def _access(doc, *, user_id=OWNER, is_public=False, project_id=None, run_kind="top_level"):
+def _access(doc, *, user_id=OWNER, is_public=False, project_id=None, run_kind="top_level",
+            autoprojects_enabled=False):
     return resolve_doc_access(
-        doc, user_id=user_id, is_public=is_public, project_id=project_id, run_kind=run_kind
+        doc, user_id=user_id, is_public=is_public, project_id=project_id, run_kind=run_kind,
+        autoprojects_enabled=autoprojects_enabled,
     )
 
 
@@ -1009,7 +1011,7 @@ CAUSE_CASES = {
     # The owner's ordinary conversation on a doc of one of their AutoProjects.
     "outside_autoproject": (
         {**_doc("private"), "autoproject_id": "44444444-4444-4444-8444-444444444444"},
-        {"project_id": None},
+        {"project_id": None, "autoprojects_enabled": True},
     ),
     # A Slack run on a shared private doc: Approval elsewhere, but Slack
     # cannot open the card.

@@ -136,6 +136,18 @@ def _read_only(cause: DenyCause, is_owner: bool) -> CoreVerdict:
     return CoreVerdict(visible=True, write="denied", cause=cause, is_owner=is_owner)
 
 
+def autoprojects_open(user: Mapping[str, Any] | None, item: Mapping[str, Any]) -> bool:
+    """The ``autoprojects_enabled`` argument of :func:`resolve_core` for
+    ``user`` looking at ``item``: whether the ``autoprojects`` gate is open
+    for them. The gates file is read only for an AutoProject artifact;
+    for any other item the answer is unused and False."""
+    if item.get("autoproject_id") is None:
+        return False
+    from config import feature_gates
+
+    return feature_gates.autoprojects_enabled_for((user or {}).get("email") or "")
+
+
 def resolve_core(
     item: Mapping[str, Any],
     *,
@@ -145,6 +157,7 @@ def resolve_core(
     run_kind: str,
     source_project_ids: Collection[str] = (),
     autoproject_id: str | None = None,
+    autoprojects_enabled: bool = False,
     kind: str = "doc",
 ) -> CoreVerdict:
     """Run the shared matrix for one doc or table dict.
@@ -152,7 +165,10 @@ def resolve_core(
     ``item`` carries ``owner_id``, ``project_id``, ``mode``, ``shares`` and
     optionally ``autoproject_id`` and ``require_approval``.
     ``autoproject_id`` is the calling run's AutoProject (None outside a
-    run). ``kind`` only names the artifact in error messages. Raises
+    run). ``autoprojects_enabled`` is whether the ``autoprojects`` gate is
+    open for the calling user (:func:`autoprojects_open`); without it an
+    AutoProject artifact is hidden from every caller, its owner and the UI
+    included, so the default fails closed. ``kind`` only names the artifact in error messages. Raises
     ValueError for an unknown ``run_kind`` or mode, or a dict without its
     ``shares`` list.
     """
@@ -168,6 +184,10 @@ def resolve_core(
     item_project_id = item["project_id"]
     item_autoproject_id = item.get("autoproject_id")
     mode = "private" if item_project_id is None else stored_mode
+
+    # AutoProject artifacts exist only behind the autoprojects gate.
+    if item_autoproject_id is not None and not autoprojects_enabled:
+        return _HIDDEN
 
     is_owner = item["owner_id"] == user_id
     share = None if is_owner else effective_share(item, user_id, kind=kind)

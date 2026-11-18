@@ -719,6 +719,7 @@ def _outside_autoproject(env):
     from db.models import AutoProject
 
     autoproject_id = str(uuid.uuid4())
+    env.fg.set_feature_enabled(env.fg.FEATURE_AUTOPROJECTS, True)
 
     async def _add():
         async with env.doc_store.AsyncSessionLocal() as db:
