@@ -162,6 +162,7 @@ export function AutoProjectMainColumn({
   notice: pageNotice,
   lead,
   openRunConversationId,
+  openRunSeq,
   onViewRun,
   onOpenFile,
   onNewestVisibleChange,
@@ -177,6 +178,8 @@ export function AutoProjectMainColumn({
   lead: ReactNode
   /** The run whose transcript the detail panel shows, or null. */
   openRunConversationId: string | null
+  /** That run's seq once the panel resolved it as a run of this AutoProject, else null. */
+  openRunSeq: number | null
   /** "View details" / "Close details" on an update. */
   onViewRun: (conversationId: string) => void
   onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
@@ -472,9 +475,12 @@ export function AutoProjectMainColumn({
   }, [loadOlder])
 
   // The detail panel's run: scroll its update into view when it is off
-  // screen (a deep link, the inbox), loading older pages until found.
-  // Armed once per newly opened run, checked in the same commit (a run
-  // opened from its own update is on screen, so nothing moves).
+  // screen (a deep link, the inbox). Armed once per newly opened run,
+  // checked in the same commit (a run opened from its own update is on
+  // screen, so nothing moves). While its update is not loaded, older pages
+  // load only once the panel resolved the run (its seq) and only while the
+  // oldest loaded update is newer than it; a run the panel does not resolve
+  // (another AutoProject's, deleted, a typo) never pages.
   const revealForRef = useRef<string | null>(openRunConversationId)
   const hasOlder = runs.hasOlder
   const loadingOlder = runs.loadingOlder
@@ -499,12 +505,14 @@ export function AutoProjectMainColumn({
       }
       return
     }
-    if (hasOlder) {
+    if (openRunSeq === null || target !== openRunConversationId) return
+    const oldestSeq = runList.length > 0 ? runList[0].seq : null
+    if (hasOlder && (oldestSeq === null || oldestSeq > openRunSeq)) {
       if (!loadingOlder) loadOlder()
       return
     }
     revealRef.current = null
-  }, [runList, runsLoading, hasOlder, loadingOlder, loadOlder, openRunConversationId])
+  }, [runList, runsLoading, hasOlder, loadingOlder, loadOlder, openRunConversationId, openRunSeq])
 
   const handleJump = useCallback((target: AutoProjectHeaderJumpTarget) => {
     const scroller = scrollerRef.current

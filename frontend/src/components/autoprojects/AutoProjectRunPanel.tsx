@@ -77,7 +77,8 @@ export function AutoProjectRunPanel({
   changeSeq: number
   conversationId: string
   copy: WorkspaceCopy
-  onResolved: (conversationId: string, resolved: boolean) => void
+  /** The run's seq once it resolved as a run of this AutoProject, else null. */
+  onResolved: (conversationId: string, seq: number | null) => void
   onClose: () => void
   onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
 }) {
@@ -87,10 +88,10 @@ export function AutoProjectRunPanel({
   // AutoProjectPage keys the panel by conversation: another run starts on its transcript.
   const [tab, setTab] = useState<RunPanelTab>('transcript')
 
-  const resolved = run !== null
+  const resolvedSeq = run?.seq ?? null
   useEffect(() => {
-    onResolved(conversationId, resolved)
-  }, [onResolved, conversationId, resolved])
+    onResolved(conversationId, resolvedSeq)
+  }, [onResolved, conversationId, resolvedSeq])
 
   const ctx = useMemo<AutoProjectRunPanelContextValue | null>(
     () => (run ? { autoprojectId, questions: run.questions } : null),

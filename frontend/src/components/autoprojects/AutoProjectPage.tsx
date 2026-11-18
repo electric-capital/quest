@@ -147,12 +147,22 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
 
   // --- Run panel resolution and the files copy -----------------------------------
 
-  // The run panel's conversation once it resolved as a run of this AutoProject.
-  const [resolvedRun, setResolvedRun] = useState<string | null>(null)
-  const handleRunResolved = useCallback((conversationId: string, resolved: boolean) => {
-    setResolvedRun((prev) => (resolved ? conversationId : prev === conversationId ? null : prev))
+  // The run panel's conversation and its seq once it resolved as a run of this AutoProject.
+  const [resolvedRun, setResolvedRun] = useState<{ conversationId: string; seq: number } | null>(null)
+  const handleRunResolved = useCallback((conversationId: string, seq: number | null) => {
+    setResolvedRun((prev) =>
+      seq !== null
+        ? prev?.conversationId === conversationId && prev.seq === seq
+          ? prev
+          : { conversationId, seq }
+        : prev?.conversationId === conversationId
+          ? null
+          : prev,
+    )
   }, [])
-  const panelRun = runConversationId !== null && resolvedRun === runConversationId ? runConversationId : null
+  const panelRunSeq =
+    runConversationId !== null && resolvedRun?.conversationId === runConversationId ? resolvedRun.seq : null
+  const panelRun = panelRunSeq !== null ? runConversationId : null
 
   const filesSource = useMemo(() => autoprojectSource(autoprojectId), [autoprojectId])
   const copy = useWorkspaceCopy(panelRun, filesSource)
@@ -289,6 +299,7 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
         }
         lead={lead}
         openRunConversationId={runConversationId}
+        openRunSeq={panelRunSeq}
         onViewRun={viewRun}
         onOpenFile={handleOpenFile}
         onNewestVisibleChange={setNewestVisible}
