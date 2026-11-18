@@ -1,5 +1,7 @@
 /**
- * Reconnect / catchup behaviour of the persistent WebSocket singleton.
+ * Reconnect / catchup behaviour of the persistent WebSocket singleton, the
+ * holder-counted conversation subscriptions, the reconnect hook for views fed
+ * by per-user globals, and the global routing of the AutoProject events.
  *
  * The server decides between ``up_to_date`` / ``catchup`` / ``resync`` from
  * the ``last_seq`` the client sends on every ``subscribe``, so the client's
@@ -266,5 +268,162 @@ describe('persistentWebSocket', () => {
     expect(seen).toEqual([]);
     expect(client.send({ op: 'ping' })).toBe(true);
     expect(second.sentOfType('ping')).toHaveLength(1);
+  });
+
+  // Several views can hold one conversation's channel at once (the AutoProject
+  // activity line and the run panel's ChatPanel): the wire unsubscribe goes
+  // out only when the last holder leaves.
+  describe('holder-counted subscriptions', () => {
+    /** Advance time with the server pinging, so the watchdog keeps the socket. */
+    function advanceAlive(ws: FakeWebSocket, ms: number) {
+      for (let t = 0; t < ms; t += 20_000) {
+        vi.advanceTimersByTime(Math.min(20_000, ms - t));
+        ws.receive({ type: 'ping' });
+      }
+    }
+
+    it('keeps the subscription while another holder remains', async () => {
+      client = await loadClient();
+      client.connect();
+      const ws = latest();
+      ws.open();
+
+      client.subscribe('c1');
+      client.subscribe('c1');
+      expect(ws.sentOfType('subscribe')).toHaveLength(2);
+
+      client.unsubscribe('c1');
+      expect(ws.sentOfType('unsubscribe')).toEqual([]);
+
+      // Still held: the refresh tick re-subscribes...
+      advanceAlive(ws, 180_000);
+      expect(ws.sentOfType('subscribe')).toHaveLength(3);
+
+      // ...and the last holder leaving sends the one wire unsubscribe.
+      client.unsubscribe('c1');
+      expect(ws.sentOfType('unsubscribe')).toEqual([{ op: 'unsubscribe', conversation_id: 'c1' }]);
+      advanceAlive(ws, 180_000);
+      expect(ws.sentOfType('subscribe')).toHaveLength(3);
+
+      // An extra release is a no-op.
+      client.unsubscribe('c1');
+      expect(ws.sentOfType('unsubscribe')).toHaveLength(1);
+    });
+
+    it('re-subscribes a held conversation once on reconnect, however many holders', async () => {
+      client = await loadClient();
+      client.connect();
+      client.subscribe('c1');
+      client.subscribe('c1');
+      client.subscribe('c2');
+      client.unsubscribe('c2');
+      latest().open();
+      latest().drop();
+      vi.advanceTimersByTime(1_000);
+      latest().open();
+      expect(latest().sentOfType('subscribe')).toEqual([
+        { op: 'subscribe', conversation_id: 'c1', last_seq: 0 },
+      ]);
+    });
+
+    it('resubscribe re-sends subscribe without taking a hold, and only for a held conversation', async () => {
+      client = await loadClient();
+      client.connect();
+      const ws = latest();
+      ws.open();
+
+      client.resubscribe('c1');
+      expect(ws.sentOfType('subscribe')).toEqual([]);
+
+      client.subscribe('c1');
+      client.resubscribe('c1');
+      expect(ws.sentOfType('subscribe')).toHaveLength(2);
+
+      // One unsubscribe releases the single hold.
+      client.unsubscribe('c1');
+      expect(ws.sentOfType('unsubscribe')).toHaveLength(1);
+    });
+  });
+
+  describe('onReconnect', () => {
+    it('fires on every reopen after the first, after the re-subscribes are sent', async () => {
+      client = await loadClient();
+      const order: string[] = [];
+      const handler = vi.fn(() => {
+        order.push(`reconnect after ${latest().sentOfType('subscribe').length} subscribe(s)`);
+      });
+      const off = client.onReconnect(handler);
+      client.connect();
+      client.subscribe('c1');
+      latest().open();
+      expect(handler).not.toHaveBeenCalled();
+
+      latest().drop();
+      vi.advanceTimersByTime(1_000);
+      latest().open();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(['reconnect after 1 subscribe(s)']);
+
+      off();
+      latest().drop();
+      vi.advanceTimersByTime(1_000);
+      latest().open();
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('a throwing handler does not stop the others', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      client = await loadClient();
+      const ok = vi.fn();
+      client.onReconnect(() => {
+        throw new Error('boom');
+      });
+      client.onReconnect(ok);
+      client.connect();
+      latest().open();
+      latest().drop();
+      vi.advanceTimersByTime(1_000);
+      latest().open();
+      expect(ok).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('delivers the AutoProject globals to the global handlers', async () => {
+    client = await loadClient();
+    client.connect();
+    latest().open();
+    const conversationEvents: Envelope[] = [];
+    const globalEvents: Envelope[] = [];
+    client.onConversationEvent('c1', (e) => conversationEvents.push(e));
+    client.onGlobalEvent((e) => globalEvents.push(e));
+
+    const changed = {
+      type: 'autoproject_changed',
+      autoproject_id: 'ap1',
+      event_seq: 4,
+      brief_version: 2,
+      active_run: { id: 'r1', seq: 1, status: 'running' },
+    };
+    latest().receive(changed);
+    latest().receive({ type: 'autoproject_list_changed' });
+    latest().receive({ type: 'file_list_changed', scope: 'autoproject', autoproject_id: 'ap1', conversation_id: 'c1' });
+
+    expect(globalEvents).toEqual([
+      changed,
+      { type: 'autoproject_list_changed' },
+      { type: 'file_list_changed', scope: 'autoproject', autoproject_id: 'ap1', conversation_id: 'c1' },
+    ]);
+    expect(conversationEvents).toEqual([]);
+  });
+
+  it('reports connected only while a socket is open', async () => {
+    client = await loadClient();
+    expect(client.connected).toBe(false);
+    client.connect();
+    expect(client.connected).toBe(false);
+    latest().open();
+    expect(client.connected).toBe(true);
+    latest().drop();
+    expect(client.connected).toBe(false);
   });
 });
