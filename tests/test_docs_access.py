@@ -904,7 +904,7 @@ _CAUSE_BY_TEXT = {text: cause for cause, text in _DENY_TEXT.items()}
 
 def test_deny_texts_map_one_to_one_to_causes():
     assert set(_DENY_TEXT) == set(DENY_CAUSES)
-    assert len(_CAUSE_BY_TEXT) == len(DENY_CAUSES) == 10
+    assert len(_CAUSE_BY_TEXT) == len(DENY_CAUSES) == 11
 
 
 def _check_cause(access):
@@ -986,7 +986,9 @@ def test_deny_cause_holds_everywhere(run_kind):
 
 def test_the_sweep_reaches_every_cause():
     reached = {access.deny_cause for run_kind in RUN_KINDS for access in _sweep(run_kind)}
-    assert reached - {None} == set(DENY_CAUSES)
+    # outside_autoproject needs an AutoProject doc, which this sweep has
+    # none of: tests/test_autoproject_artifacts.py pins that scope.
+    assert reached - {None} == set(DENY_CAUSES) - {"outside_autoproject"}
 
 
 _SWITCHED_SHARED = {**_doc("private", [(RECIPIENT, "write")]), "require_approval": True}
@@ -1004,6 +1006,11 @@ CAUSE_CASES = {
         _doc("public", project_id=PROJECT), {"project_id": PROJECT},
     ),
     "outside_project": (_doc("private", project_id=PROJECT), {"project_id": None}),
+    # The owner's ordinary conversation on a doc of one of their AutoProjects.
+    "outside_autoproject": (
+        {**_doc("private"), "autoproject_id": "44444444-4444-4444-8444-444444444444"},
+        {"project_id": None},
+    ),
     # A Slack run on a shared private doc: Approval elsewhere, but Slack
     # cannot open the card.
     "slack_needs_approval": (

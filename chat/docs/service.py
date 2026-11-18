@@ -155,8 +155,11 @@ __all__ = [
 # all of the user's own projects, read-only), ``public`` = the public docs
 # this project may read from its doc sources (the public projects listed
 # in Project Settings > Project Access; for a public conversation the same
-# set as ``project``), ``all`` = every doc the conversation can see.
-DOC_SCOPES = ("user", "project", "public", "all")
+# set as ``project``), ``autoproject`` = this run's AutoProject docs (from
+# a private standalone conversation outside a run: the docs of all of the
+# user's own AutoProjects, read-only), ``all`` = every doc the conversation
+# can see.
+DOC_SCOPES = ("user", "project", "public", "autoproject", "all")
 WRITE_OPERATIONS = ("edit", "multi_edit", "append", "add_image")
 IMAGE_PLACEMENTS = ("append", "none")
 
@@ -267,7 +270,9 @@ class Caller:
     ``run_kind`` is one of ``chat.docs.access.RUN_KINDS``. Sandbox scripts
     (``"script"``) have no conversation of their own
     (``conversation_id=None``: no read-before-edit record) but carry the
-    ``project_id`` and ``is_public`` of the conversation that ran them.
+    ``project_id``, ``is_public`` and ``autoproject_id`` of the conversation
+    that ran them. ``autoproject_id`` is set for an AutoProject run (and its
+    sub-agents and scripts) and None everywhere else, the UI included.
     """
 
     user: dict
@@ -275,6 +280,7 @@ class Caller:
     project_id: Optional[str]
     is_public: bool
     run_kind: str
+    autoproject_id: Optional[str] = None
 
 
 def require_enabled(caller: Caller) -> None:
@@ -290,7 +296,7 @@ def require_enabled(caller: Caller) -> None:
 
 
 def _scope(doc: dict) -> str:
-    return "project" if doc.get("project_id") else "user"
+    return doc_store.doc_scope(doc)
 
 
 def _access(
@@ -303,6 +309,7 @@ def _access(
         project_id=caller.project_id,
         run_kind=caller.run_kind,
         doc_source_project_ids=doc_source_project_ids,
+        autoproject_id=caller.autoproject_id,
     )
 
 
@@ -329,9 +336,10 @@ async def _doc_sources(caller: Caller) -> frozenset[str]:
 
 def _reaches_own_projects(caller: Caller) -> bool:
     """Whether this caller is a standalone conversation, which reads the
-    docs of all of the user's own projects (access rule 2): no project,
-    not public and not the UI (a script launched from a standalone
-    conversation carries no project and counts)."""
+    docs of all of the user's own projects and AutoProjects (access rule
+    2): no project, not public and not the UI (a script launched from a
+    standalone conversation carries no project and counts; an AutoProject
+    run is a standalone conversation)."""
     return bool(
         caller.project_id is None
         and not caller.is_public
@@ -805,15 +813,27 @@ async def _visible_docs(
     project conversation additionally lists the public docs of its doc
     sources (scope ``public``, included in ``all``). A standalone
     conversation lists the docs of all of the user's own projects under
-    scope ``project`` (included in ``all``), read-only.
+    scope ``project`` (included in ``all``), read-only. Scope
+    ``autoproject`` is the run's own AutoProject's docs in a run, and the
+    docs of all of the user's AutoProjects from any other standalone
+    conversation; ``all`` includes both everywhere a standalone
+    conversation asks.
     """
+    in_run = bool(caller.autoproject_id) and caller.run_kind != "ui"
+    include_autoproject = in_run and scope in ("autoproject", "all")
+    include_own_autoprojects = _reaches_own_projects(caller) and (
+        scope == "all" or (scope == "autoproject" and not in_run)
+    )
     include_user = scope in ("user", "all") and not caller.is_public
     include_project = bool(caller.project_id) and (
         scope in ("project", "all") or (scope == "public" and caller.is_public)
     )
     include_own_projects = scope in ("project", "all") and _reaches_own_projects(caller)
     sources = await _doc_sources(caller) if scope in ("public", "all") else frozenset()
-    if not include_user and not include_project and not include_own_projects and not sources:
+    if not (
+        include_user or include_project or include_own_projects or sources
+        or include_autoproject or include_own_autoprojects
+    ):
         return []
 
     out: list[tuple[dict, DocAccess]] = []
@@ -826,6 +846,9 @@ async def _visible_docs(
             include_project_docs=include_project,
             include_owned_project_docs=include_own_projects,
             source_project_ids=sources,
+            autoproject_id=caller.autoproject_id,
+            include_autoproject_docs=include_autoproject,
+            include_owned_autoproject_docs=include_own_autoprojects,
             # A public conversation can only ever see public docs; filtering
             # in SQL keeps hidden private rows from eating the LIMIT.
             mode="public" if caller.is_public else None,
@@ -860,6 +883,8 @@ def _list_row(doc: dict, access: DocAccess, *, with_notes: bool = False) -> dict
         "writable": access.write,
         "write_note": write_note(access),
     }
+    if doc.get("autoproject_id"):
+        row["autoproject_id"] = doc["autoproject_id"]
     if with_notes:
         row["notes"] = notes_counts(doc)
     return row
@@ -875,13 +900,15 @@ async def list_docs(
     of the user's own projects), ``"public"`` (the public docs readable
     from here: from a private project conversation the docs of its doc
     sources, from a public conversation its own project's docs, nothing
-    elsewhere) or ``"all"`` (everything). ``limit`` is clamped to 1..200.
-    Hidden docs never appear.
+    elsewhere), ``"autoproject"`` (in an AutoProject run its AutoProject's
+    docs; from another standalone conversation the read-only docs of all of
+    the user's AutoProjects) or ``"all"`` (everything). ``limit`` is
+    clamped to 1..200. Hidden docs never appear.
 
     Returns:
         Rows ``{id, title, description, mode, scope, project_id,
         content_size, asset_count, updated_at, shared, writable,
-        write_note}``, plus ``notes`` (:func:`notes_counts`, never content)
+        write_note}``, ``autoproject_id`` on an AutoProject doc, plus ``notes`` (:func:`notes_counts`, never content)
         last while the ``doc_notes`` gate is open for the caller.
     """
     require_enabled(caller)
@@ -1115,7 +1142,10 @@ async def create_doc(
     ``target="project"``: a doc of the conversation's project (which the
     user must own), in the project's mode -- which equals the
     conversation's (``creation_mode``), since a public conversation is one
-    in a public project. Only top-level and Slack conversations create docs.
+    in a public project.
+    ``target="autoproject"``: a private doc of the calling run's AutoProject
+    (which the user must own); refused outside an AutoProject run. Only
+    top-level and Slack conversations create docs.
 
     Order: lay out the directory under a fresh id, then insert the row (a
     crash in between leaves an invisible orphan directory, never a row
@@ -1126,7 +1156,8 @@ async def create_doc(
     can predate this conversation, and later ones re-arm the gate).
 
     Returns:
-        ``{id, title, mode, scope, project_id, content_size, updated_at}``.
+        ``{id, title, mode, scope, project_id, content_size, updated_at}``,
+        plus ``autoproject_id`` for an AutoProject doc.
     """
     require_enabled(caller)
     if caller.run_kind not in _CREATE_RUN_KINDS:
@@ -1144,8 +1175,8 @@ async def create_doc(
     if not isinstance(description, str):
         raise DocError("description must be a string.")
     target = target or "user"
-    if target not in ("user", "project"):
-        raise DocError('target must be "user" or "project".')
+    if target not in ("user", "project", "autoproject"):
+        raise DocError('target must be "user", "project" or "autoproject".')
     if target == "user" and caller.is_public:
         # User docs are always private, and a public conversation must
         # never create a private doc (taint): only its project's docs.
@@ -1176,6 +1207,9 @@ async def create_doc(
                 "the doc cannot be created here."
             )
         project_id = caller.project_id
+    autoproject_id = None
+    if target == "autoproject":
+        autoproject_id = await _owned_run_autoproject(caller)
 
     content = _normalize_text(content)
     _check_body_size(content, creating=True)
@@ -1190,6 +1224,7 @@ async def create_doc(
             description,
             mode=mode,
             project_id=project_id,
+            autoproject_id=autoproject_id,
             content_size=size,
             last_write_source=write_source,
             doc_id=doc_id,
@@ -1209,7 +1244,7 @@ async def create_doc(
     events = _events()
     events.publish_doc_list_changed(doc["owner_id"])
     events.publish_doc_changed(doc["owner_id"], doc["id"], doc["updated_at"])
-    return {
+    created = {
         "id": doc["id"],
         "title": doc["title"],
         "mode": doc["mode"],
@@ -1218,6 +1253,28 @@ async def create_doc(
         "content_size": doc["content_size"],
         "updated_at": doc["updated_at"],
     }
+    if doc.get("autoproject_id"):
+        created["autoproject_id"] = doc["autoproject_id"]
+    return created
+
+
+async def _owned_run_autoproject(caller: Caller) -> str:
+    """The calling run's AutoProject id for ``create_doc(target=
+    "autoproject")``: the conversation must be an AutoProject run and the
+    AutoProject the caller's own (one text for a missing and a foreign
+    one)."""
+    if not caller.autoproject_id:
+        raise DocError(
+            'create_doc(target="autoproject") is only available inside an '
+            "AutoProject run"
+        )
+    from chat.autoprojects.constants import autoproject_not_found_message
+    from db import autoproject_store
+
+    owned = await autoproject_store.get_autoproject(caller.user["id"], caller.autoproject_id)
+    if owned is None:
+        raise DocError(autoproject_not_found_message(caller.autoproject_id))
+    return caller.autoproject_id
 
 
 # ---------------------------------------------------------------------------
@@ -1260,6 +1317,7 @@ async def create_doc_from_ui(
     description: Optional[str] = "",
     mode: Optional[str] = None,
     project_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
 ) -> dict:
     """Create an EMPTY doc from the UI (``POST /app/api/docs``), owned by ``user``.
 
@@ -1272,7 +1330,9 @@ async def create_doc_from_ui(
     disagrees is refused. The project must be owned by ``user`` (project
     docs are owned by the project owner). Content is empty, so creating a
     public project doc here cannot move internal data across the taint
-    boundary.
+    boundary. An AutoProject doc (``autoproject_id``, never together with
+    ``project_id``) is always private like a user doc; the AutoProject must
+    be ``user``'s and the ``autoprojects`` gate open for them.
 
     Same order and cleanup as :func:`create_doc`: lay out the directory
     under a fresh id, insert the row with ``last_write_source`` =
@@ -1290,7 +1350,8 @@ async def create_doc_from_ui(
         DocRequestError: ``invalid_title`` / ``invalid_description`` /
             ``invalid_mode`` / ``user_doc_mode_private`` /
             ``project_not_found`` / ``project_doc_mode_inherited`` /
-            ``duplicate_title`` / ``invalid_request``.
+            ``autoproject_not_found`` / ``duplicate_title`` /
+            ``invalid_request``.
         DocError: a storage failure laying out the directory.
     """
     require_enabled(
@@ -1307,6 +1368,13 @@ async def create_doc_from_ui(
         )
 
     user_id = user["id"]
+    if project_id is not None and autoproject_id is not None:
+        raise DocRequestError(
+            "invalid_request",
+            "A doc belongs to a project or to an AutoProject, not both.",
+        )
+    if autoproject_id is not None:
+        await require_ui_autoproject(user, autoproject_id)
     if project_id is not None:
         from db import project_store
 
@@ -1338,6 +1406,7 @@ async def create_doc_from_ui(
             clean_description,
             mode=mode,
             project_id=project_id,
+            autoproject_id=autoproject_id,
             content_size=size,
             last_write_source=write_source,
             doc_id=doc_id,
@@ -1357,6 +1426,25 @@ async def create_doc_from_ui(
     events.publish_doc_list_changed_for(doc)
     events.publish_doc_changed_for(doc)
     return doc
+
+
+async def require_ui_autoproject(user: dict, autoproject_id: str) -> dict:
+    """The AutoProject a UI request names, for the docs list and create
+    routes: the ``autoprojects`` gate must be open for ``user`` and the
+    AutoProject theirs. A closed gate, a missing and a foreign AutoProject
+    all raise the same ``autoproject_not_found``.
+    """
+    from chat.autoprojects.constants import autoproject_not_found_message
+    from db import autoproject_store
+
+    found = None
+    if feature_gates.autoprojects_enabled_for((user or {}).get("email") or ""):
+        found = await autoproject_store.get_autoproject(user["id"], autoproject_id)
+    if found is None:
+        raise DocRequestError(
+            "autoproject_not_found", autoproject_not_found_message(autoproject_id),
+        )
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -2195,8 +2283,9 @@ async def add_doc_image(
 def mode_switch_refusal(doc: dict) -> DocRequestError:
     """Why ``doc``'s mode cannot be switched -- no doc's can in v1.
 
-    A user doc is always private (``user_doc_mode_private``); a project doc
-    keeps its project's immutable mode (``project_doc_mode_inherited``).
+    A user or AutoProject doc is always private
+    (``user_doc_mode_private``); a project doc keeps its project's
+    immutable mode (``project_doc_mode_inherited``).
     ``PUT /docs/{id}/mode`` stays registered and raises this after its
     404 / 403 checks.
     """

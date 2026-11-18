@@ -1983,7 +1983,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "properties": {
                 "scope": {
                     "type": "string",
-                    "enum": ["user", "project", "public", "all"],
+                    "enum": ["user", "project", "public", "autoproject", "all"],
                     "default": "all",
                     "description": (
                         "'user' = the user's own docs, 'project' = this "
@@ -2037,7 +2037,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["user", "project", "public", "all"],
+                    "enum": ["user", "project", "public", "autoproject", "all"],
                     "default": "all",
                     "description": (
                         "'user', 'project' (this project's docs), 'public' "
@@ -2149,7 +2149,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
                 },
                 "target": {
                     "type": "string",
-                    "enum": ["user", "project"],
+                    "enum": ["user", "project", "autoproject"],
                     "default": "user",
                     "description": (
                         "'user' (default) for one of the user's docs "
@@ -2529,7 +2529,7 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
             "properties": {
                 "scope": {
                     "type": "string",
-                    "enum": ["user", "project", "public", "all"],
+                    "enum": ["user", "project", "public", "autoproject", "all"],
                     "default": "all",
                     "description": (
                         "'user' = user tables (own and shared; empty in a "

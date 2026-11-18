@@ -780,7 +780,7 @@ async def _taken_user_doc_titles(user_id: int) -> set[str]:
     return {
         (d.get("title") or "").strip().casefold()
         for d in docs
-        if d.get("owner_id") == user_id and d.get("project_id") is None
+        if d.get("owner_id") == user_id and doc_store.doc_scope(d) == "user"
     }
 
 

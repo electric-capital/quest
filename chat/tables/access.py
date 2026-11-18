@@ -36,7 +36,11 @@ containers have no tool bridge, so no script reads a public table today).
 As for docs (rule 2), the owner's standalone conversations see the tables
 of all of the owner's projects read-only ("Read" in both verdicts, with
 :data:`DENY_OUTSIDE_PROJECT`, or the public-from-private wording for a
-public table).
+public table). An AutoProject table (``autoproject_id`` set, always
+private) follows the matrix only from that AutoProject's runs and the UI;
+the owner's other private standalone conversations read it
+(:data:`DENY_OUTSIDE_AUTOPROJECT`) and every other conversation sees
+Hidden.
 
 "Read" = rows AND schema denied, both with the same read-only reason.
 
@@ -47,7 +51,8 @@ the UI routes). It is decided after the rows verdict, in this order:
 1. Hidden -> denied, no reason (the whole verdict is :data:`HIDDEN`).
 2. A read-only rows verdict (read-only run kind, read share, public table
    from a private conversation, the owner's project table from a
-   standalone conversation, UI without a write relationship) -> denied
+   standalone conversation, the owner's AutoProject table from outside its
+   runs, UI without a write relationship) -> denied
    with the rows reason.
 3. ``ui`` -> ``"approval"`` for the owner (the owner's own Save in the
    schema editor is the approval; the UI routes write the schema
@@ -111,6 +116,7 @@ __all__ = [
     "APPROVAL_REQUIRED_WRITE_NOTE",
     "APPROVAL_WRITE_NOTE",
     "DENY_INFERENCE_API",
+    "DENY_OUTSIDE_AUTOPROJECT",
     "DENY_OUTSIDE_PROJECT",
     "DENY_PUBLIC_TABLE_FROM_PRIVATE",
     "DENY_READ_ONLY_SHARE",
@@ -161,6 +167,10 @@ DENY_PUBLIC_TABLE_FROM_PRIVATE = (
 DENY_OUTSIDE_PROJECT = (
     "This table belongs to a project; its rows and columns are changed only "
     "from that project's conversations or in the Quest UI. Here it is read-only."
+)
+DENY_OUTSIDE_AUTOPROJECT = (
+    "This table belongs to an AutoProject; its rows and columns are changed "
+    "only from that AutoProject's runs or in the Quest UI. Here it is read-only."
 )
 DENY_SLACK_NEEDS_APPROVAL = (
     "This table is shared, so changes need an approval card, which Slack-driven "
@@ -216,6 +226,7 @@ _DENY_TEXT = {
     "read_only_share": DENY_READ_ONLY_SHARE,
     "public_from_private": DENY_PUBLIC_TABLE_FROM_PRIVATE,
     "outside_project": DENY_OUTSIDE_PROJECT,
+    "outside_autoproject": DENY_OUTSIDE_AUTOPROJECT,
     "slack_needs_approval": DENY_SLACK_NEEDS_APPROVAL,
     "slack_approval_required": DENY_SLACK_APPROVAL_REQUIRED,
     "ui_read_only": DENY_UI_READ_ONLY,
@@ -230,6 +241,7 @@ _READ_ONLY_CAUSES = frozenset({
     "read_only_share",
     "public_from_private",
     "outside_project",
+    "outside_autoproject",
     "ui_read_only",
 })
 
@@ -304,6 +316,7 @@ def resolve_table_access(
     project_id: str | None,
     run_kind: str,
     doc_source_project_ids: Collection[str] = (),
+    autoproject_id: str | None = None,
 ) -> TableAccess:
     """Decide visibility, readability and the rows and schema verdicts.
 
@@ -313,7 +326,8 @@ def resolve_table_access(
     ``run_kind`` is one of :data:`RUN_KINDS`; ``doc_source_project_ids``
     are the public projects whose public tables the calling (private)
     project may read, empty unless the caller is a private project
-    conversation.
+    conversation; ``autoproject_id`` is the calling run's AutoProject, None
+    outside a run.
 
     Raises ValueError for an unknown ``run_kind`` or table mode, or a table
     dict without its ``shares`` list.
@@ -325,6 +339,7 @@ def resolve_table_access(
         project_id=project_id,
         run_kind=run_kind,
         source_project_ids=doc_source_project_ids,
+        autoproject_id=autoproject_id,
         kind="table",
     )
     if not core.visible:

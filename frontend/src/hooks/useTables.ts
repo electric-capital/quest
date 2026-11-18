@@ -32,9 +32,12 @@ export const TABLES_REFRESH_DEBOUNCE_MS = 300;
 export interface UseTablesOptions {
   /** A project's tables; omitted / null = the user's own user tables. */
   projectId?: string | null;
+  /** An AutoProject's tables; takes precedence over `projectId`. */
+  autoprojectId?: string | null;
   /**
    * The tables other people shared with the user (user and project tables).
-   * Takes precedence: `projectId` is ignored while this is set.
+   * Takes precedence: `projectId` and `autoprojectId` are ignored while
+   * this is set.
    */
   shared?: boolean;
   /** Page size (clamped to 1..200). */
@@ -69,19 +72,22 @@ const EMPTY: ListState = { key: null, tables: [], nextCursor: null, error: null 
 
 export function useTables({
   projectId = null,
+  autoprojectId = null,
   shared = false,
   limit = TABLES_DEFAULT_PAGE_SIZE,
   enabled = true,
 }: UseTablesOptions = {}): TablesList {
   const pageSize = Math.min(TABLES_MAX_PAGE_SIZE, Math.max(1, Math.floor(limit)));
-  const project = shared ? null : projectId || null;
+  const autoproject = shared ? null : autoprojectId || null;
+  const project = shared || autoproject ? null : projectId || null;
   // Identity of the list being shown; null while disabled. The stream tag
-  // keeps the shared list apart from every project id.
-  const key = enabled ? `${shared ? 'shared' : `project:${project ?? ''}`}|${pageSize}` : null;
+  // keeps the shared and AutoProject lists apart from every project id.
+  const stream = shared ? 'shared' : autoproject ? `autoproject:${autoproject}` : `project:${project ?? ''}`;
+  const key = enabled ? `${stream}|${pageSize}` : null;
   // The list selector sent with every page request of this stream.
   const streamOpts = useMemo<ListTablesOptions>(
-    () => (shared ? { shared: true } : { projectId: project }),
-    [shared, project],
+    () => (shared ? { shared: true } : autoproject ? { autoprojectId: autoproject } : { projectId: project }),
+    [shared, autoproject, project],
   );
 
   const [state, setState] = useState<ListState>(EMPTY);

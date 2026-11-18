@@ -17,7 +17,8 @@ Every row returned to the UI is built by :func:`_ui_row` (one batched user
 lookup per response via ``db.user_store.get_users_by_ids``): the store's
 doc dict without its doc-notes keys (``doc_store.NOTES_STATE_KEYS``) plus
 
-- ``scope`` (``user`` / ``project``), ``shared`` (has any share row);
+- ``scope`` (``user`` / ``project`` / ``autoproject``), ``shared`` (has
+  any share row);
 - ``access``: ``write`` (the UI verdict), ``can_edit`` (``write ==
   "free"``: owner or write share -- content edits, image upload, restore),
   ``can_rename`` / ``can_delete`` / ``can_share`` / ``can_delete_assets``
@@ -36,9 +37,10 @@ doc dict without its doc-notes keys (``doc_store.NOTES_STATE_KEYS``) plus
   Image-only writes (upload / asset delete) keep ``last_write_source``: it
   names the writer of the current body.
 
-``GET /docs`` serves three keyset-paged streams: the caller's own user
-docs (default), one project's docs (``project_id``), and docs shared WITH
-the caller (``shared=true``, user and project docs). A share recipient
+``GET /docs`` serves four keyset-paged streams: the caller's own user
+docs (default), one project's docs (``project_id``), one AutoProject's docs
+(``autoproject_id``), and docs shared WITH the caller (``shared=true``,
+user, project and AutoProject docs). A share recipient
 sees shared docs here (read; a write share may also edit and restore), but
 from the recipient's conversations only shared USER docs are reachable --
 a project doc is reached from outside its project only by its owner's
@@ -107,6 +109,7 @@ DOWNLOAD_FORMATS = ("md", "zip")
 # DocRequestError codes that are not a plain 400.
 _REQUEST_ERROR_STATUS = {
     "project_not_found": 404,
+    "autoproject_not_found": 404,
     "duplicate_title": 409,
 }
 
@@ -126,6 +129,7 @@ class CreateDocRequest(BaseModel):
     description: Optional[str] = None
     mode: Optional[str] = None
     project_id: Optional[str] = None
+    autoproject_id: Optional[str] = None
 
 
 class UpdateDocRequest(BaseModel):
@@ -266,7 +270,7 @@ def _doc_row(
         key: value for key, value in doc.items()
         if key != "shares" and key not in doc_store.NOTES_STATE_KEYS
     }
-    row["scope"] = "project" if doc.get("project_id") else "user"
+    row["scope"] = doc_store.doc_scope(doc)
     row["shared"] = bool(shares)
     row["shared_with_me"] = not is_owner
     row["permission"] = None if is_owner else effective_share(doc, user["id"])
@@ -506,6 +510,15 @@ async def _require_visible_project(user: dict, project_id: str) -> dict:
     return project
 
 
+async def _require_ui_autoproject(user: dict, autoproject_id: str) -> dict:
+    """The AutoProject, owned by the user with the ``autoprojects`` gate
+    open, else 404 ``autoproject_not_found`` (one body for all three)."""
+    try:
+        return await doc_service.require_ui_autoproject(user, autoproject_id)
+    except doc_service.DocRequestError as exc:
+        raise _http_error(404, exc.code, str(exc))
+
+
 async def _doc_files_call(fn, *args):
     """Run a sync chat/docs/files.py call in a thread, mapping its errors.
 
@@ -544,14 +557,17 @@ async def _visible_docs_page(
     before: Optional[tuple[datetime, str]],
     *,
     shared: bool = False,
+    autoproject_id: Optional[str] = None,
 ) -> tuple[list[tuple[dict, DocAccess]], bool, dict]:
     """Visible docs of one stream, newest-updated first, plus ``has_more``
     and the owners looked up on the way (``{user_id: {id, email, name}}``,
     for :func:`_ui_rows`' ``known_users``).
 
     Streams: ``shared`` -> ``doc_store.list_docs_shared_with`` (docs shared
-    with the user that they do not own, user and project docs); else
-    ``project_id`` -> that project's docs; else the user's OWN user docs.
+    with the user that they do not own, user, project and AutoProject
+    docs); else ``project_id`` -> that project's docs; else
+    ``autoproject_id`` -> that AutoProject's docs; else the user's OWN user
+    docs.
     Every row still passes the access rule. Other users' owners are looked
     up in one batch per store page and reused for the rows. With ``limit``
     it gathers ``limit + 1`` visible rows (paging the store past any hidden
@@ -569,8 +585,10 @@ async def _visible_docs_page(
             rows = await doc_store.list_accessible_docs(
                 user["id"],
                 project_id=project_id,
-                include_user_docs=project_id is None,
+                include_user_docs=project_id is None and autoproject_id is None,
                 include_project_docs=project_id is not None,
+                autoproject_id=autoproject_id,
+                include_autoproject_docs=autoproject_id is not None,
                 owned_only=project_id is None,
                 limit=want,
                 before=before,
@@ -628,20 +646,26 @@ def _attachment_disposition(filename: str) -> str:
 @router.get("/docs")
 async def list_user_docs(
     project_id: Optional[str] = Query(None),
+    autoproject_id: Optional[str] = Query(None, max_length=64),
     shared: bool = Query(False),
     limit: Optional[int] = Query(None, ge=1, le=200),
     cursor: Optional[str] = Query(None),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """List docs, newest-updated first. Three independent streams:
+    """List docs, newest-updated first. Four independent streams:
 
     - default (no ``project_id``, ``shared`` false): the user's OWN user
       docs (no project). User docs shared with the user are not here.
     - ``project_id``: that project's docs (the project must be the user's
       and visible, else 404 ``project_not_found``).
+    - ``autoproject_id``: that AutoProject's docs (the AutoProject must be
+      the user's and the ``autoprojects`` gate open for them, else 404
+      ``autoproject_not_found``). Together with ``project_id`` -> 400
+      ``invalid_request``.
     - ``shared=true``: docs shared WITH the user (a direct or an everyone
-      share) that they do not own, user and project docs alike. Together
-      with ``project_id`` -> 400 ``invalid_request``.
+      share) that they do not own, user, project and AutoProject docs
+      alike. Together with ``project_id`` or ``autoproject_id`` -> 400
+      ``invalid_request``.
 
     With no ``limit`` the whole stream is returned; ``limit`` (1..200) pages
     with an opaque keyset ``next_cursor`` (``<updated_at>|<id>``) the client
@@ -654,18 +678,26 @@ async def list_user_docs(
     """
     _require_docs_enabled(user)
     project_id = project_id or None
-    if shared and project_id is not None:
+    autoproject_id = autoproject_id or None
+    if shared and (project_id is not None or autoproject_id is not None):
         raise _http_error(
             400, "invalid_request",
             "shared=true lists docs shared with you across all projects; "
-            "it cannot be combined with project_id.",
+            "it cannot be combined with project_id or autoproject_id.",
+        )
+    if project_id is not None and autoproject_id is not None:
+        raise _http_error(
+            400, "invalid_request",
+            "project_id and autoproject_id cannot be combined.",
         )
     if project_id is not None:
         await _require_visible_project(user, project_id)
+    if autoproject_id is not None:
+        await _require_ui_autoproject(user, autoproject_id)
     before = _parse_cursor(cursor) if cursor else None
 
     page, has_more, owners = await _visible_docs_page(
-        user, project_id, limit, before, shared=shared,
+        user, project_id, limit, before, shared=shared, autoproject_id=autoproject_id,
     )
     rows = await _ui_rows(user, page, known_users=owners)
     next_cursor = None
@@ -686,7 +718,10 @@ async def create_ui_doc(
     a private doc, ``"public"`` is 400 ``user_doc_mode_private`` (a public
     doc is created inside a public project). A project doc takes its
     project's mode, and a supplied ``mode`` that disagrees is 400
-    ``project_doc_mode_inherited``. Errors also:
+    ``project_doc_mode_inherited``. An AutoProject doc (``autoproject_id``;
+    404 ``autoproject_not_found`` unless the AutoProject is the user's and
+    the ``autoprojects`` gate is open, 400 ``invalid_request`` together with
+    ``project_id``) is always private. Errors also:
     409 ``duplicate_title``, 400 ``invalid_title`` / ``invalid_description``
     / ``invalid_mode``. Returns the row (201).
     """
@@ -697,6 +732,7 @@ async def create_ui_doc(
     try:
         doc = await doc_service.create_doc_from_ui(
             user, body.title, body.description or "", body.mode, project_id,
+            autoproject_id=body.autoproject_id or None,
         )
     except doc_service.DocRequestError as exc:
         raise _http_error(

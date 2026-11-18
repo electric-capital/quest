@@ -68,8 +68,9 @@ class DocValidationError(ValueError):
 class DuplicateDocTitleError(ValueError):
     """Another doc of the same owner and scope already uses this title.
 
-    Titles are unique case-insensitively per ``(owner_id, project_id, mode)``,
-    where a NULL ``project_id`` (user doc) is its own scope.
+    Titles are unique case-insensitively per ``(owner_id, project_id,
+    autoproject_id, mode)``: user docs (both ids NULL), each project's docs
+    and each AutoProject's docs are separate scopes.
     """
 
 
@@ -244,10 +245,10 @@ def _share_to_dict(share: DocShare) -> dict:
 def _doc_to_dict(doc: Doc, shares: Optional[Iterable[DocShare]] = None) -> dict:
     """Convert a Doc ORM instance to the doc dict.
 
-    Shape (``scope`` is derived by callers: ``"project" if project_id else
-    "user"``)::
+    Shape (``scope`` is derived by callers, :func:`doc_scope`)::
 
-        {"id", "owner_id", "project_id", "title", "description", "mode",
+        {"id", "owner_id", "project_id", "autoproject_id",
+         "title", "description", "mode",
          "content_size", "asset_count", "last_write_source",
          "require_approval",                    # bool, owner's switch
          "has_instructions",                    # bool, non-empty instructions
@@ -267,6 +268,7 @@ def _doc_to_dict(doc: Doc, shares: Optional[Iterable[DocShare]] = None) -> dict:
         "id": doc.id,
         "owner_id": doc.owner_id,
         "project_id": doc.project_id,
+        "autoproject_id": doc.autoproject_id,
         "title": doc.title,
         "description": doc.description,
         "mode": doc.mode,
@@ -286,6 +288,27 @@ def _doc_to_dict(doc: Doc, shares: Optional[Iterable[DocShare]] = None) -> dict:
     return data
 
 
+def doc_scope(doc) -> str:
+    """The derived scope of a doc dict: ``"project"``, ``"autoproject"`` or
+    ``"user"`` (neither id set)."""
+    if doc.get("project_id"):
+        return "project"
+    if doc.get("autoproject_id"):
+        return "autoproject"
+    return "user"
+
+
+def _duplicate_title_error(
+    title: str, project_id: Optional[str], autoproject_id: Optional[str],
+) -> DuplicateDocTitleError:
+    where = "."
+    if project_id:
+        where = " in this project."
+    elif autoproject_id:
+        where = " in this AutoProject."
+    return DuplicateDocTitleError(f"A doc titled '{title}' already exists{where}")
+
+
 async def _title_taken(
     db,
     owner_id: int,
@@ -293,8 +316,11 @@ async def _title_taken(
     mode: str,
     title: str,
     exclude_doc_id: Optional[str] = None,
+    *,
+    autoproject_id: Optional[str] = None,
 ) -> bool:
-    """True when another doc in ``(owner_id, project_id, mode)`` uses ``title``.
+    """True when another doc in ``(owner_id, project_id, autoproject_id,
+    mode)`` uses ``title``.
 
     Uniqueness is scoped per MODE on purpose (invariant 2 of the spec): a
     public conversation's ``create_doc(title=...)`` must never learn from
@@ -321,6 +347,10 @@ async def _title_taken(
         stmt = stmt.where(Doc.project_id.is_(None))
     else:
         stmt = stmt.where(Doc.project_id == project_id)
+    if autoproject_id is None:
+        stmt = stmt.where(Doc.autoproject_id.is_(None))
+    else:
+        stmt = stmt.where(Doc.autoproject_id == autoproject_id)
     if exclude_doc_id is not None:
         stmt = stmt.where(Doc.id != exclude_doc_id)
     wanted = title.casefold()
@@ -385,6 +415,7 @@ async def create_doc(
     *,
     mode: str,
     project_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
     content_size: int = 0,
     last_write_source: Optional[str] = None,
     doc_id: Optional[str] = None,
@@ -394,11 +425,14 @@ async def create_doc(
     Args:
         owner_id: Owning user (the project owner for project docs).
         title: 1..200 chars after stripping; unique case-insensitively per
-            ``(owner_id, project_id, mode)``.
+            ``(owner_id, project_id, autoproject_id, mode)``.
         description: 0..500 chars after stripping.
         mode: ``"private"`` or ``"public"`` (project docs: the caller passes
-            the project's mode). A user doc must be ``"private"``.
-        project_id: None for a user doc.
+            the project's mode). A user or AutoProject doc must be
+            ``"private"``.
+        project_id: The owning project, None otherwise.
+        autoproject_id: The owning AutoProject, None otherwise; never
+            together with ``project_id``.
         content_size: Bytes of the initial ``doc.md``.
         last_write_source: ``conversation:<id>`` / ``ui`` / ``action_request:<id>``.
         doc_id: Optional pre-generated id (lets the service lay out the
@@ -409,9 +443,14 @@ async def create_doc(
 
     Raises:
         DocValidationError: invalid title / description / mode / size, or
-            a public user doc (user docs are always private).
+            a public user doc (user docs are always private), or both a
+            ``project_id`` and an ``autoproject_id``.
         DuplicateDocTitleError: title collision in the same scope.
     """
+    if project_id is not None and autoproject_id is not None:
+        raise DocValidationError(
+            "A doc belongs to a project or to an AutoProject, not both."
+        )
     clean_title = _validate_title(title)
     clean_description = _validate_description(description)
     _validate_mode(mode)
@@ -422,16 +461,16 @@ async def create_doc(
     _validate_count(content_size, "content_size")
 
     async with AsyncSessionLocal() as db:
-        if await _title_taken(db, owner_id, project_id, mode, clean_title):
-            raise DuplicateDocTitleError(
-                f"A doc titled '{clean_title}' already exists"
-                + (" in this project." if project_id else ".")
-            )
+        if await _title_taken(
+            db, owner_id, project_id, mode, clean_title, autoproject_id=autoproject_id,
+        ):
+            raise _duplicate_title_error(clean_title, project_id, autoproject_id)
         now = datetime.now(timezone.utc)
         doc = Doc(
             id=doc_id or str(uuid.uuid4()),
             owner_id=owner_id,
             project_id=project_id,
+            autoproject_id=autoproject_id,
             title=clean_title,
             description=clean_description,
             mode=mode,
@@ -470,6 +509,9 @@ async def list_accessible_docs(
     include_project_docs: bool = False,
     include_owned_project_docs: bool = False,
     source_project_ids: Collection[str] = (),
+    autoproject_id: Optional[str] = None,
+    include_autoproject_docs: bool = False,
+    include_owned_autoproject_docs: bool = False,
     mode: Optional[str] = None,
     owned_only: bool = False,
     limit: Optional[int] = None,
@@ -486,13 +528,18 @@ async def list_accessible_docs(
     docs from public conversations).
 
     Scope filter (OR-ed):
-        - ``include_user_docs``: user docs (``project_id IS NULL``);
+        - ``include_user_docs``: user docs (``project_id`` and
+          ``autoproject_id`` both NULL);
         - ``include_project_docs`` with ``project_id``: that project's docs;
         - ``include_owned_project_docs``: the docs of every project the
           user owns (any mode) -- what a standalone conversation may read;
         - ``source_project_ids``: the public docs (``mode="public"``) of
           those projects -- a private project's doc sources, readable from
-          its conversations.
+          its conversations;
+        - ``include_autoproject_docs`` with ``autoproject_id``: that
+          AutoProject's docs;
+        - ``include_owned_autoproject_docs``: the docs of every AutoProject
+          the user owns -- what a private standalone conversation may read.
       With none, the result is empty.
 
     Args:
@@ -502,6 +549,11 @@ async def list_accessible_docs(
         include_project_docs: Include ``project_id``'s docs.
         include_owned_project_docs: Include the project docs the user owns.
         source_project_ids: Projects whose public docs to include.
+        autoproject_id: AutoProject whose docs to include (with
+            include_autoproject_docs).
+        include_autoproject_docs: Include ``autoproject_id``'s docs.
+        include_owned_autoproject_docs: Include the AutoProject docs the
+            user owns.
         mode: Optional ``"private"`` / ``"public"`` filter. Public-project
             callers pass ``"public"`` so the SQL ``LIMIT`` applies to the
             set they can actually see instead of being eaten by hidden rows.
@@ -516,7 +568,15 @@ async def list_accessible_docs(
     """
     scope_conds = []
     if include_user_docs:
-        scope_conds.append(Doc.project_id.is_(None))
+        scope_conds.append(
+            and_(Doc.project_id.is_(None), Doc.autoproject_id.is_(None))
+        )
+    if include_autoproject_docs and autoproject_id:
+        scope_conds.append(Doc.autoproject_id == autoproject_id)
+    if include_owned_autoproject_docs:
+        scope_conds.append(
+            and_(Doc.autoproject_id.is_not(None), Doc.owner_id == user_id)
+        )
     if include_project_docs and project_id:
         scope_conds.append(Doc.project_id == project_id)
     if include_owned_project_docs:
@@ -631,11 +691,10 @@ async def update_doc_metadata(
             effective_mode = "private" if doc.project_id is None else doc.mode
             if await _title_taken(
                 db, doc.owner_id, doc.project_id, effective_mode, clean_title,
-                exclude_doc_id=doc.id,
+                exclude_doc_id=doc.id, autoproject_id=doc.autoproject_id,
             ):
-                raise DuplicateDocTitleError(
-                    f"A doc titled '{clean_title}' already exists"
-                    + (" in this project." if doc.project_id else ".")
+                raise _duplicate_title_error(
+                    clean_title, doc.project_id, doc.autoproject_id,
                 )
             doc.title = clean_title
             changed = True
@@ -730,8 +789,17 @@ async def list_docs_for_project(project_id: str) -> list[dict]:
         return await _docs_with_shares(db, stmt)
 
 
+async def list_docs_for_autoproject(autoproject_id: str) -> list[dict]:
+    """Every doc of an AutoProject as doc dicts WITH shares (collect BEFORE
+    deleting the AutoProject, as :func:`list_docs_for_project`)."""
+    async with AsyncSessionLocal() as db:
+        stmt = select(Doc).where(Doc.autoproject_id == autoproject_id).order_by(Doc.id)
+        return await _docs_with_shares(db, stmt)
+
+
 async def list_doc_ids_for_user(user_id: int) -> list[str]:
-    """Ids of every doc the user owns, user and project docs alike (collect
+    """Ids of every doc the user owns, user, project and AutoProject docs
+    alike (collect
     BEFORE deleting the account, then sweep the directories)."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(

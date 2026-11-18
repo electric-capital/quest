@@ -40,7 +40,7 @@ import logging
 import shutil
 from typing import Any, Optional
 
-from chat.autoprojects import events, runs
+from chat.autoprojects import artifacts, events, runs
 from chat.autoprojects.constants import (
     AUTOPROJECT_ABANDONED_RUN_CONVERSATION_MAX_AGE,
     AUTOPROJECT_RUN_ACTIVE_STATUSES,
@@ -696,9 +696,12 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
        cancelled).
     2. Cancel the pending wait handles and close the open approval cards of
        every run conversation.
-    3. Delete the rows (runs, brief versions and conversations cascade).
-    4. Sweep the conversations (live turns again, in-memory sessions,
-       ``CHATS_DIR`` directories), then ``AUTOPROJECTS_DIR/<id>``.
+    3. Delete the rows (runs, brief versions, conversations and the
+       AutoProject's Quest Docs and Quest Tables cascade; the docs and
+       tables are captured first, ``chat/autoprojects/artifacts.py``).
+    4. Sweep the directories of those docs and tables and tell their
+       audiences, then the conversations (live turns again, in-memory
+       sessions, ``CHATS_DIR`` directories), then ``AUTOPROJECTS_DIR/<id>``.
     5. Publish ``autoproject_changed`` (no active run; an open AutoProject
        page refetches and gets 404) and ``autoproject_list_changed``
        (``request_count_changed`` went out when cards were closed).
@@ -717,6 +720,7 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
     await _close_conversation_cards(user_id, conversation_ids)
     autoproject = await autoproject_store.get_autoproject(user_id, autoproject_id) or autoproject
 
+    owned_artifacts = await artifacts.capture(autoproject_id)
     deleted_ids = await autoproject_store.delete_autoproject(user_id, autoproject_id)
     known_ids = set(conversation_ids)
     late_ids = [cid for cid in deleted_ids if cid not in known_ids]
@@ -728,6 +732,7 @@ async def delete_autoproject(user: dict, autoproject_id: str) -> None:
         autoproject_id, user_id, len(deleted_ids),
     )
 
+    await artifacts.sweep(owned_artifacts, user_id)
     await _sweep_conversations(user_id, list(conversation_ids) + late_ids)
     try:
         autoproject_dir = ChatStorage.get_autoproject_dir(autoproject_id)

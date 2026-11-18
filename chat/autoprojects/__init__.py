@@ -17,6 +17,8 @@ Modules:
 - ``runs`` -- ``complete_autoproject_run`` and the run driver (run statuses).
 - ``questions`` -- ``ask_autoproject_question``: the ``autoproject_question`` wait
   handle, its validation, transcript message and AutoProject page view.
+- ``artifacts`` -- the delete-time sweep of the Quest Docs and Quest Tables
+  an AutoProject owns.
 - ``events`` -- the ``autoproject_changed`` / ``autoproject_list_changed`` publishes.
 
 The rows (``autoprojects``, ``autoproject_runs``, ``autoproject_brief_versions``) are written

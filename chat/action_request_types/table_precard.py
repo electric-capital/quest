@@ -55,7 +55,10 @@ from contextlib import contextmanager
 from typing import Any
 
 from chat.action_request_types.doc_precard import share_summary
-from chat.action_request_types.write_doc import project_is_public
+from chat.action_request_types.write_doc import (
+    conversation_autoproject_id,
+    project_is_public,
+)
 from chat.tables import service
 from chat.tables.access import create_table_deny_reason
 from chat.tables.constants import TABLE_MAX_PER_OWNER
@@ -203,7 +206,8 @@ async def precard_caller(
     Checks the ``tables`` gate before any DB work (``tables_disabled``),
     then derives ``is_public`` from the conversation's project (a missing
     or foreign project refuses with ``project_not_found``). ``run_kind`` is
-    ``"slack"`` for a Slack-driven run, else ``"top_level"``.
+    ``"slack"`` for a Slack-driven run, else ``"top_level"``. A proposal
+    from an AutoProject run carries the run's ``autoproject_id``.
     """
     run_kind = "slack" if is_slack_origin else "top_level"
     with precard_errors():
@@ -215,6 +219,7 @@ async def precard_caller(
     return service.Caller(
         user=user, conversation_id=conversation_id, project_id=project_id,
         is_public=is_public, run_kind=run_kind,
+        autoproject_id=await conversation_autoproject_id(conversation_id),
     )
 
 
@@ -238,6 +243,7 @@ async def execute_caller(
     return service.Caller(
         user=user, conversation_id=conversation_id, project_id=project_id,
         is_public=is_public, run_kind="top_level",
+        autoproject_id=await conversation_autoproject_id(conversation_id),
     )
 
 
@@ -252,12 +258,15 @@ def write_source(request_id: int | None) -> str:
 
 def table_card_fields(table: Mapping) -> dict:
     """The server-injected values every card about an existing table shows:
-    ``table_title``, ``table_mode``, ``table_scope`` ("user" / "project"),
+    ``table_title``, ``table_mode``, ``table_scope`` ("user" / "project" /
+    "autoproject"),
     ``share_summary`` (counts only) and ``require_approval``."""
+    from db.table_store import table_scope
+
     return {
         "table_title": table["title"],
         "table_mode": table["mode"],
-        "table_scope": "project" if table.get("project_id") else "user",
+        "table_scope": table_scope(table),
         "share_summary": share_summary(table.get("shares") or []),
         "require_approval": bool(table.get("require_approval", False)),
     }
@@ -325,19 +334,22 @@ async def precard_create_table(
     Order: gate (``tables_disabled``, no DB work) -> the conversation may
     propose a table (``denied``: Slack runs) -> ``target: "project"``
     needs a project conversation (``invalid_args``) and the user's project
-    (``project_not_found``); ``target: "user"`` is refused from a public
+    (``project_not_found``); ``target: "autoproject"`` needs an AutoProject
+    run (``invalid_args``) and the user's AutoProject
+    (``autoproject_not_found``); ``target: "user"`` is refused from a public
     conversation (``invalid_args``: user tables are always private) ->
     the mode, which must be the conversation's own (the project's flag
     for a project table, private for a user table; a disagreement with
     ``caller.is_public`` refuses ``mode_mismatch``, fail-closed, as the
     service does) -> title / description (``invalid_request``) -> column
     specs (the ``ColumnSpecError`` code, naming the column) -> the title
-    collision in the same ``(owner, project, mode)`` scope
+    collision in the same ``(owner, project, AutoProject, mode)`` scope
     (``duplicate_title``) -> the per-owner cap (``table_limit``), the
     store's order.
 
     On success normalizes ``title`` / ``description`` (stripped) and injects
-    ``table_mode``, ``project_title`` (None for a user table) and
+    ``table_mode``, ``project_title`` (None for a user table),
+    ``autoproject_title`` (only for an AutoProject table) and
     ``column_specs`` (the parsed columns as key-less dicts).
     """
     from db import project_store, table_store
@@ -351,7 +363,9 @@ async def precard_create_table(
 
     target = validated_params.get("target") or "user"
     table_project_id: str | None = None
+    table_autoproject_id: str | None = None
     project_title: str | None = None
+    autoproject_title: str | None = None
     mode = "private"
     if target == "project":
         if not project_id:
@@ -366,6 +380,26 @@ async def precard_create_table(
         table_project_id = project_id
         project_title = project.get("name")
         mode = "public" if project.get("public") else "private"
+    elif target == "autoproject":
+        if not caller.autoproject_id:
+            raise refuse(
+                "invalid_args",
+                "target 'autoproject' needs an AutoProject run; use target "
+                "'user' for a table of your own.",
+            )
+        from chat.autoprojects.constants import autoproject_not_found_message
+        from db import autoproject_store
+
+        autoproject = await autoproject_store.get_autoproject(
+            user["id"], caller.autoproject_id,
+        )
+        if autoproject is None:
+            raise refuse(
+                "autoproject_not_found",
+                autoproject_not_found_message(caller.autoproject_id),
+            )
+        table_autoproject_id = caller.autoproject_id
+        autoproject_title = autoproject.get("title")
     elif caller.is_public:
         raise refuse(
             "invalid_args",
@@ -389,10 +423,14 @@ async def precard_create_table(
 
     # Same order as table_store.create_table: the collision, then the cap.
     owner_id = user["id"]
-    if await table_store.title_taken(owner_id, table_project_id, mode, title):
+    if await table_store.title_taken(
+        owner_id, table_project_id, mode, title, autoproject_id=table_autoproject_id,
+    ):
         raise refuse(
             "duplicate_title",
-            str(table_store._duplicate_title_error(title, table_project_id)),
+            str(table_store._duplicate_title_error(
+                title, table_project_id, table_autoproject_id,
+            )),
         )
     if len(await table_store.list_table_ids_for_user(owner_id)) >= TABLE_MAX_PER_OWNER:
         raise refuse(
@@ -405,6 +443,8 @@ async def precard_create_table(
     validated_params["description"] = description
     validated_params["table_mode"] = mode
     validated_params["project_title"] = project_title
+    if autoproject_title is not None:
+        validated_params["autoproject_title"] = autoproject_title
     validated_params["column_specs"] = strip_column_keys(columns)
 
 

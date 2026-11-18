@@ -6,6 +6,10 @@
  * `project_doc_mode_inherited`). A public project's doc says so in a
  * read-only line; a private one gets none, like every private doc has no
  * mode badge (utils/docMode).
+ *
+ * Opened from an AutoProject page it takes `autoproject`: the location is
+ * that AutoProject (shown as a read-only line, no select) and the doc is
+ * created with its `autoproject_id`.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,6 +33,8 @@ interface NewDocModalProps {
   projects: Project[];
   // Preselected location (the filtered project), or null for "Your docs".
   initialProjectId: string | null;
+  // The AutoProject the doc is created in; the location is then fixed.
+  autoproject?: { id: string; title: string } | null;
   onCreated: (doc: Doc) => void;
 }
 
@@ -37,6 +43,7 @@ export function NewDocModal({
   onClose,
   projects,
   initialProjectId,
+  autoproject = null,
   onCreated,
 }: NewDocModalProps) {
   const [title, setTitle] = useState('');
@@ -74,8 +81,11 @@ export function NewDocModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
+  const autoprojectId = autoproject?.id ?? null;
   const selectedProject =
-    location === USER_DOCS_LOCATION ? null : (projects.find((p) => p.id === location) ?? null);
+    autoprojectId || location === USER_DOCS_LOCATION
+      ? null
+      : (projects.find((p) => p.id === location) ?? null);
   // The mode a project doc inherits; only a public one is shown.
   const inheritedMode: DocMode = selectedProject?.public ? 'public' : 'private';
 
@@ -88,7 +98,8 @@ export function NewDocModal({
       const body: CreateDocRequest = { title: trimmedTitle };
       const trimmedDescription = description.trim();
       if (trimmedDescription) body.description = trimmedDescription;
-      if (location !== USER_DOCS_LOCATION) body.project_id = location;
+      if (autoprojectId) body.autoproject_id = autoprojectId;
+      else if (location !== USER_DOCS_LOCATION) body.project_id = location;
 
       setIsCreating(true);
       setError(null);
@@ -102,7 +113,7 @@ export function NewDocModal({
         setIsCreating(false);
       }
     },
-    [title, description, location, isCreating, onCreated, onClose],
+    [title, description, location, autoprojectId, isCreating, onCreated, onClose],
   );
 
   return (
@@ -152,23 +163,31 @@ export function NewDocModal({
           disabled={isCreating}
         />
 
-        <label htmlFor="new-doc-location-select" className="new-doc-label new-doc-label-spaced">
-          Location
-        </label>
-        <select
-          id="new-doc-location-select"
-          className="new-doc-input new-doc-select"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          disabled={isCreating}
-        >
-          <option value={USER_DOCS_LOCATION}>Your docs</option>
-          {locationProjects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.archived ? `${p.name} (archived)` : p.name}
-            </option>
-          ))}
-        </select>
+        {autoproject ? (
+          <p className="new-doc-mode-inherited">
+            Location: <strong>{autoproject.title}</strong> — this AutoProject's docs
+          </p>
+        ) : (
+          <>
+            <label htmlFor="new-doc-location-select" className="new-doc-label new-doc-label-spaced">
+              Location
+            </label>
+            <select
+              id="new-doc-location-select"
+              className="new-doc-input new-doc-select"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              disabled={isCreating}
+            >
+              <option value={USER_DOCS_LOCATION}>Your docs</option>
+              {locationProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.archived ? `${p.name} (archived)` : p.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         {selectedProject && shouldShowDocModeBadge(inheritedMode) && (
           <p className="new-doc-mode-inherited">

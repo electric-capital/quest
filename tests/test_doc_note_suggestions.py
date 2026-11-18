@@ -86,6 +86,7 @@ from chat.docs import notes as notes_mod
 from chat.docs import service
 from chat.docs.access import (
     DENY_INFERENCE_API,
+    DENY_OUTSIDE_AUTOPROJECT,
     DENY_OUTSIDE_PROJECT,
     DENY_PUBLIC_DOC_FROM_PRIVATE,
     DENY_READ_ONLY_SHARE,
@@ -713,6 +714,29 @@ def _outside_project(env):
     return conv(env), doc["id"], DENY_OUTSIDE_PROJECT
 
 
+def _outside_autoproject(env):
+    # The owner's ordinary conversation on a doc of one of their AutoProjects.
+    from db.models import AutoProject
+
+    autoproject_id = str(uuid.uuid4())
+
+    async def _add():
+        async with env.doc_store.AsyncSessionLocal() as db:
+            db.add(AutoProject(id=autoproject_id, user_id=uid(env, "alice"), title="Research"))
+            await db.commit()
+
+    _run(_add())
+    from chat.docs import files
+
+    doc_id = str(uuid.uuid4())
+    size = files.init_doc(doc_id, "line one\n")
+    doc = _run(env.doc_store.create_doc(
+        uid(env, "alice"), f"Doc {uuid.uuid4().hex[:8]}", mode="private",
+        autoproject_id=autoproject_id, content_size=size, doc_id=doc_id,
+    ))
+    return conv(env), doc["id"], DENY_OUTSIDE_AUTOPROJECT
+
+
 def _read_only_share(env):
     doc = new_doc(env, shares=[("bob", "read")])
     return conv(env, "bob"), doc["id"], DENY_READ_ONLY_SHARE
@@ -727,6 +751,7 @@ def _run_kind(run_kind, text):
 REFUSALS = {
     "public_from_private": _public_from_private,
     "outside_project": _outside_project,
+    "outside_autoproject": _outside_autoproject,
     "read_only_share": _read_only_share,
     "sub_agent": _run_kind("sub_agent", DENY_SUB_AGENT),
     "inference_api": _run_kind("inference_api", DENY_INFERENCE_API),

@@ -317,7 +317,7 @@ export function draftColumnSpec(column: DraftColumn): TableColumnSpec {
  */
 export function draftToCreateRequest(
   draft: SchemaDraft,
-  opts: { projectId?: string | null; description?: string } = {},
+  opts: { projectId?: string | null; autoprojectId?: string | null; description?: string } = {},
 ): CreateTableRequest {
   const body: CreateTableRequest = {
     title: strip(draft.title),
@@ -325,7 +325,8 @@ export function draftToCreateRequest(
   };
   const description = strip(opts.description ?? '');
   if (description) body.description = description;
-  if (opts.projectId) body.project_id = opts.projectId;
+  if (opts.autoprojectId) body.autoproject_id = opts.autoprojectId;
+  else if (opts.projectId) body.project_id = opts.projectId;
   return body;
 }
 

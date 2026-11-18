@@ -220,7 +220,7 @@ See [Quest Docs -- Tables](quest-docs.md#tables).
 
 ## AutoProject Models
 
-`AutoProject` (`autoprojects`), `AutoProjectRun` (`autoproject_runs`) and `AutoProjectBriefVersion` (`autoproject_brief_versions`) in `db/models.py` (Alembic migration `4b57cca1158c`, which also adds `conversations.autoproject_id` as an [inline foreign key](#inline-foreign-key-exclusion)) hold [AutoProjects](autoprojects.md): the brief and its versions, the counters, and one row per run tied one-to-one to its conversation. Everything cascades from the user, the AutoProject and the run's conversation; the workspace lives on disk under `AUTOPROJECTS_DIR`. See [AutoProjects -- Tables](autoprojects.md#tables).
+`AutoProject` (`autoprojects`), `AutoProjectRun` (`autoproject_runs`) and `AutoProjectBriefVersion` (`autoproject_brief_versions`) in `db/models.py` (Alembic migration `4b57cca1158c`, which also adds `conversations.autoproject_id` as an [inline foreign key](#inline-foreign-key-exclusion); `c5e8a1d3f7b2` adds `docs.autoproject_id` and `data_tables.autoproject_id` the same way, [AutoProjects -- Docs and Tables](autoprojects.md#docs-and-tables)) hold [AutoProjects](autoprojects.md): the brief and its versions, the counters, and one row per run tied one-to-one to its conversation. Everything cascades from the user, the AutoProject and the run's conversation; the workspace lives on disk under `AUTOPROJECTS_DIR`. See [AutoProjects -- Tables](autoprojects.md#tables).
 
 ## UserSkillAutoload Model
 

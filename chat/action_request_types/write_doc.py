@@ -160,6 +160,15 @@ async def project_is_public(user: dict, project_id: str | None) -> bool:
     return bool(project.get("public"))
 
 
+async def conversation_autoproject_id(conversation_id: str | None) -> str | None:
+    """The AutoProject of the proposing conversation when it is an
+    AutoProject run, else None: an approval card proposed by a run acts on
+    the run's AutoProject docs and tables as the run does."""
+    from db import conversation_store
+
+    return await conversation_store.get_conversation_autoproject_id(conversation_id)
+
+
 def _require_str(params: dict, key: str) -> str:
     value = params.get(key)
     if value is None:
@@ -488,6 +497,7 @@ class WriteDocHandler(ActionRequestHandler):
             project_id=project_id,
             is_public=await project_is_public(user, project_id),
             run_kind="top_level",
+            autoproject_id=await conversation_autoproject_id(conversation_id),
         )
         write_source = (
             f"action_request:{request_id}" if request_id is not None else "action_request"

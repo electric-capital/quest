@@ -1259,8 +1259,12 @@ export interface RoutinesListResponse {
 /** A user doc is always private; a project doc mirrors its project's `public` flag. */
 export type DocMode = 'private' | 'public';
 
-/** `project` when the doc belongs to a project (`project_id` set), else `user`. */
-export type DocScope = 'user' | 'project';
+/**
+ * `project` when the doc belongs to a project (`project_id` set),
+ * `autoproject` when it belongs to an AutoProject (`autoproject_id` set),
+ * else `user`.
+ */
+export type DocScope = 'user' | 'project' | 'autoproject';
 
 /** What the UI may offer for this doc, computed server-side per viewer. */
 export interface DocAccess {
@@ -1306,6 +1310,8 @@ export interface Doc {
   id: string;
   owner_id: number;
   project_id: string | null;
+  // The owning AutoProject; null (or absent) for a user or project doc.
+  autoproject_id?: string | null;
   title: string;
   description: string;
   mode: DocMode;
@@ -1470,6 +1476,8 @@ export interface CreateDocRequest {
   // No `mode`: a user doc is always private and a project doc takes its
   // project's mode, so the UI never sends one.
   project_id?: string | null;
+  // An AutoProject doc (always private); never together with `project_id`.
+  autoproject_id?: string | null;
 }
 
 export interface UpdateDocRequest {
@@ -1650,8 +1658,12 @@ export interface DocNoteInboxSuggestion extends DocNoteSuggestion {
 /** A user table is always private; a project table mirrors its project's `public` flag. */
 export type TableMode = 'private' | 'public';
 
-/** `project` when the table belongs to a project (`project_id` set), else `user`. */
-export type TableScope = 'user' | 'project';
+/**
+ * `project` when the table belongs to a project (`project_id` set),
+ * `autoproject` when it belongs to an AutoProject (`autoproject_id` set),
+ * else `user`.
+ */
+export type TableScope = 'user' | 'project' | 'autoproject';
 
 export type TableColumnType = 'text' | 'number' | 'url' | 'boolean' | 'enum' | 'date';
 
@@ -1746,6 +1758,8 @@ export interface TableListRow {
   id: string;
   owner_id: number;
   project_id: string | null;
+  // The owning AutoProject; null (or absent) for a user or project table.
+  autoproject_id?: string | null;
   title: string;
   description: string;
   mode: TableMode;
@@ -1810,6 +1824,8 @@ export interface CreateTableRequest {
   description?: string;
   // No `mode`: a user table is private, a project table takes its project's.
   project_id?: string | null;
+  // An AutoProject table (always private); never together with `project_id`.
+  autoproject_id?: string | null;
   columns: TableColumnSpec[];
 }
 

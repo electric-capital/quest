@@ -50,8 +50,9 @@ class TableValidationError(ValueError):
 class DuplicateTableTitleError(ValueError):
     """Another table of the same owner and scope already uses this title.
 
-    Titles are unique case-insensitively per ``(owner_id, project_id, mode)``,
-    where a NULL ``project_id`` (user table) is its own scope.
+    Titles are unique case-insensitively per ``(owner_id, project_id,
+    autoproject_id, mode)``: user tables (both ids NULL), each project's
+    tables and each AutoProject's tables are separate scopes.
     """
 
 
@@ -172,10 +173,10 @@ def _table_to_dict(
 ) -> dict:
     """Convert a DataTable ORM instance to the table dict.
 
-    Shape (``scope`` is derived by callers: ``"project" if project_id else
-    "user"``)::
+    Shape (``scope`` is derived by callers, :func:`table_scope`)::
 
-        {"id", "owner_id", "project_id", "title", "description", "mode",
+        {"id", "owner_id", "project_id", "autoproject_id",
+         "title", "description", "mode",
          "schema",                              # ordered column list
          "schema_version", "row_count", "last_write_source",
          "require_approval",                    # bool, owner's switch
@@ -189,6 +190,7 @@ def _table_to_dict(
         "id": table.id,
         "owner_id": table.owner_id,
         "project_id": table.project_id,
+        "autoproject_id": table.autoproject_id,
         "title": table.title,
         "description": table.description,
         "mode": table.mode,
@@ -205,11 +207,25 @@ def _table_to_dict(
     return data
 
 
-def _duplicate_title_error(title: str, project_id: Optional[str]) -> DuplicateTableTitleError:
-    return DuplicateTableTitleError(
-        f"A table titled '{title}' already exists"
-        + (" in this project." if project_id else ".")
-    )
+def table_scope(table) -> str:
+    """The derived scope of a table dict: ``"project"``, ``"autoproject"``
+    or ``"user"`` (neither id set)."""
+    if table.get("project_id"):
+        return "project"
+    if table.get("autoproject_id"):
+        return "autoproject"
+    return "user"
+
+
+def _duplicate_title_error(
+    title: str, project_id: Optional[str], autoproject_id: Optional[str] = None,
+) -> DuplicateTableTitleError:
+    where = "."
+    if project_id:
+        where = " in this project."
+    elif autoproject_id:
+        where = " in this AutoProject."
+    return DuplicateTableTitleError(f"A table titled '{title}' already exists{where}")
 
 
 async def _title_taken(
@@ -219,8 +235,11 @@ async def _title_taken(
     mode: str,
     title: str,
     exclude_table_id: Optional[str] = None,
+    *,
+    autoproject_id: Optional[str] = None,
 ) -> bool:
-    """True when another table in ``(owner_id, project_id, mode)`` uses ``title``.
+    """True when another table in ``(owner_id, project_id, autoproject_id,
+    mode)`` uses ``title``.
 
     Scoped per mode so a public conversation's ``create_table`` never
     learns from the collision error whether a private table of that title
@@ -235,6 +254,10 @@ async def _title_taken(
         stmt = stmt.where(DataTable.project_id.is_(None))
     else:
         stmt = stmt.where(DataTable.project_id == project_id)
+    if autoproject_id is None:
+        stmt = stmt.where(DataTable.autoproject_id.is_(None))
+    else:
+        stmt = stmt.where(DataTable.autoproject_id == autoproject_id)
     if exclude_table_id is not None:
         stmt = stmt.where(DataTable.id != exclude_table_id)
     wanted = title.casefold()
@@ -249,16 +272,18 @@ async def title_taken(
     title: str,
     *,
     exclude_table_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
 ) -> bool:
     """Public form of :func:`_title_taken` in its own session (same
-    casefold rule, same ``(owner_id, project_id, mode)`` scope). For
+    casefold rule, same ``(owner_id, project_id, autoproject_id, mode)``
+    scope). For
     pre-checks such as the ``create_table`` pre-card; :func:`create_table`
     re-checks under the service's per-owner lock, so a result can go stale
     but never lets a duplicate through."""
     async with AsyncSessionLocal() as db:
         return await _title_taken(
             db, owner_id, project_id, mode, title.strip(),
-            exclude_table_id=exclude_table_id,
+            exclude_table_id=exclude_table_id, autoproject_id=autoproject_id,
         )
 
 
@@ -328,6 +353,7 @@ async def create_table(
     schema: list,
     description: str = "",
     project_id: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
     last_write_source: Optional[str] = None,
     table_id: Optional[str] = None,
 ) -> dict:
@@ -336,12 +362,15 @@ async def create_table(
     Args:
         owner_id: Owning user (the project owner for project tables).
         title: 1..200 chars after stripping; unique case-insensitively per
-            ``(owner_id, project_id, mode)``.
+            ``(owner_id, project_id, autoproject_id, mode)``.
         mode: ``"private"`` or ``"public"`` (project tables: the caller
-            passes the project's mode). A user table must be ``"private"``.
+            passes the project's mode). A user or AutoProject table must
+            be ``"private"``.
         schema: Ordered column list, already validated by the caller.
         description: 0..500 chars after stripping.
-        project_id: None for a user table.
+        project_id: The owning project, None otherwise.
+        autoproject_id: The owning AutoProject, None otherwise; never
+            together with ``project_id``.
         last_write_source: ``conversation:<id>`` / ``ui:<user_id>`` /
             ``action_request:<id>``.
         table_id: Optional pre-generated id (lets the service lay out the
@@ -352,7 +381,8 @@ async def create_table(
 
     Raises:
         TableValidationError: invalid title / description / mode / schema,
-            or a public user table (user tables are always private).
+            a public user table (user tables are always private), or both
+            a ``project_id`` and an ``autoproject_id``.
         DuplicateTableTitleError: title collision in the same scope.
         TableLimitError: the owner already has ``TABLE_MAX_PER_OWNER`` tables.
 
@@ -361,6 +391,10 @@ async def create_table(
     over the cap). The tables service serializes creates per owner, so the
     store documents the race instead of guarding it.
     """
+    if project_id is not None and autoproject_id is not None:
+        raise TableValidationError(
+            "A table belongs to a project or to an AutoProject, not both."
+        )
     clean_title = _validate_title(title)
     clean_description = _validate_description(description)
     _validate_mode(mode)
@@ -371,8 +405,10 @@ async def create_table(
     _validate_schema(schema)
 
     async with AsyncSessionLocal() as db:
-        if await _title_taken(db, owner_id, project_id, mode, clean_title):
-            raise _duplicate_title_error(clean_title, project_id)
+        if await _title_taken(
+            db, owner_id, project_id, mode, clean_title, autoproject_id=autoproject_id,
+        ):
+            raise _duplicate_title_error(clean_title, project_id, autoproject_id)
         owned = (await db.execute(
             select(func.count()).select_from(DataTable)
             .where(DataTable.owner_id == owner_id)
@@ -387,6 +423,7 @@ async def create_table(
             id=table_id or str(uuid.uuid4()),
             owner_id=owner_id,
             project_id=project_id,
+            autoproject_id=autoproject_id,
             title=clean_title,
             description=clean_description,
             mode=mode,
@@ -425,6 +462,9 @@ async def list_accessible_tables(
     include_project_tables: bool = False,
     include_owned_project_tables: bool = False,
     source_project_ids: Collection[str] = (),
+    autoproject_id: Optional[str] = None,
+    include_autoproject_tables: bool = False,
+    include_owned_autoproject_tables: bool = False,
     mode: Optional[str] = None,
     owned_only: bool = False,
     limit: Optional[int] = None,
@@ -438,13 +478,19 @@ async def list_accessible_tables(
     every row through the access rule.
 
     Scope filter (OR-ed):
-        - ``include_user_tables``: user tables (``project_id IS NULL``);
+        - ``include_user_tables``: user tables (``project_id`` and
+          ``autoproject_id`` both NULL);
         - ``include_project_tables`` with ``project_id``: that project's tables;
         - ``include_owned_project_tables``: the tables of every project the
           user owns (any mode) -- what a standalone conversation may read;
         - ``source_project_ids``: the public tables (``mode="public"``) of
           those projects -- a private project's linked sources, readable
-          from its conversations.
+          from its conversations;
+        - ``include_autoproject_tables`` with ``autoproject_id``: that
+          AutoProject's tables;
+        - ``include_owned_autoproject_tables``: the tables of every
+          AutoProject the user owns -- what a private standalone
+          conversation may read.
       With none, the result is empty.
 
     Args:
@@ -454,6 +500,11 @@ async def list_accessible_tables(
         include_project_tables: Include ``project_id``'s tables.
         include_owned_project_tables: Include the project tables the user owns.
         source_project_ids: Projects whose public tables to include.
+        autoproject_id: AutoProject whose tables to include (with
+            include_autoproject_tables).
+        include_autoproject_tables: Include ``autoproject_id``'s tables.
+        include_owned_autoproject_tables: Include the AutoProject tables
+            the user owns.
         mode: Optional ``"private"`` / ``"public"`` filter, so the SQL
             ``LIMIT`` applies to the set a public caller can see.
         owned_only: Only tables ``user_id`` owns.
@@ -466,7 +517,15 @@ async def list_accessible_tables(
     """
     scope_conds = []
     if include_user_tables:
-        scope_conds.append(DataTable.project_id.is_(None))
+        scope_conds.append(
+            and_(DataTable.project_id.is_(None), DataTable.autoproject_id.is_(None))
+        )
+    if include_autoproject_tables and autoproject_id:
+        scope_conds.append(DataTable.autoproject_id == autoproject_id)
+    if include_owned_autoproject_tables:
+        scope_conds.append(
+            and_(DataTable.autoproject_id.is_not(None), DataTable.owner_id == user_id)
+        )
     if include_project_tables and project_id:
         scope_conds.append(DataTable.project_id == project_id)
     if include_owned_project_tables:
@@ -564,9 +623,11 @@ async def update_table_metadata(
         if clean_title is not None and clean_title != table.title:
             if await _title_taken(
                 db, table.owner_id, table.project_id, table.mode, clean_title,
-                exclude_table_id=table.id,
+                exclude_table_id=table.id, autoproject_id=table.autoproject_id,
             ):
-                raise _duplicate_title_error(clean_title, table.project_id)
+                raise _duplicate_title_error(
+                    clean_title, table.project_id, table.autoproject_id,
+                )
             values["title"] = clean_title
         if clean_description is not None and clean_description != table.description:
             values["description"] = clean_description
@@ -706,8 +767,21 @@ async def list_table_ids_for_project(project_id: str) -> list[str]:
         return list(result.scalars().all())
 
 
+async def list_tables_for_autoproject(autoproject_id: str) -> list[dict]:
+    """Every table of an AutoProject as table dicts WITH shares (collect
+    BEFORE deleting the AutoProject: the ids drive the directory sweep, the
+    shares the realtime audience)."""
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(DataTable)
+            .where(DataTable.autoproject_id == autoproject_id)
+            .order_by(DataTable.id)
+        )
+        return await _tables_with_shares(db, stmt)
+
+
 async def list_table_ids_for_user(user_id: int) -> list[str]:
-    """Ids of every table the user owns, user and project tables alike
+    """Ids of every table the user owns, user, project and AutoProject tables alike
     (collect BEFORE deleting the account, then sweep the directories)."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(

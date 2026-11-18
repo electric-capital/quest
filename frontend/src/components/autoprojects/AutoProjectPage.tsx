@@ -12,6 +12,7 @@ import { autoprojectRunPath, autoprojectPath } from '../../utils/autoprojectsRou
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { FileBrowser, isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile, type FileBrowserListing } from '../FileBrowser'
 import { LazyFileViewerModal } from '../LazyFileViewerModal'
+import { AutoProjectArtifacts } from './AutoProjectArtifacts'
 import { AutoProjectBrief } from './AutoProjectBrief'
 import { AutoProjectBriefHistory } from './AutoProjectBriefHistory'
 import { AutoProjectDetailPanel } from './AutoProjectDetailPanel'
@@ -44,11 +45,13 @@ interface ViewerFile {
  * moving between the two keeps the page).
  *
  * The main column (AutoProjectMainColumn) holds, top to bottom: the header, then
- * three cards: the Brief, the page's main content (AutoProjectBrief, edited in
+ * four cards: the Brief, the page's main content (AutoProjectBrief, edited in
  * place), AutoProject files (a compact FileBrowser over the AutoProject workspace whose
- * toolbar is the card's header row) and Updates (one per run, in the
+ * toolbar is the card's header row), Docs and tables (AutoProjectArtifacts: the
+ * Quest Docs and Quest Tables this AutoProject owns; absent while both gates
+ * are closed) and Updates (one per run, in the
  * viewer's sort order, AutoProjectUpdates), with the composer in the page flow
- * between the AutoProject files and Updates cards. The page opens at the top. Without a
+ * between the Docs and tables and Updates cards. The page opens at the top. Without a
  * detail view the column takes the whole width at the chat's reading
  * measure, centred.
  *
@@ -257,6 +260,7 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
           onDismissNotice={() => copy.dismissNotice('autoproject')}
         />
       </section>
+      <AutoProjectArtifacts autoproject={autoproject} />
     </>
   )
 

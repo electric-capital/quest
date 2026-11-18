@@ -45,7 +45,7 @@ Docs come in two **modes** that mirror [public projects](public-projects.md). **
 | Term | Meaning |
 |------|---------|
 | Owner | `docs.owner_id`. A project doc is owned by the project owner. |
-| Scope | Derived, never stored: `project` when `project_id` is set, else `user`. |
+| Scope | Derived, never stored: `project` when `project_id` is set, `autoproject` when `autoproject_id` is ([AutoProjects](autoprojects.md#docs-and-tables)), else `user`. |
 | Mode | `private` or `public`, stored on every row and fixed at creation ([Mode is fixed at creation](#mode-is-fixed-at-creation)). |
 | Share | A `doc_shares` row granting `read` or `write` to one user, or to everyone on the install (`user_id` NULL). |
 | Private conversation | Any conversation outside a public project: standalone, private project, routine, Slack, sub-agent, inference API, cross-user subagent. |
@@ -93,7 +93,7 @@ A version is a body. Creation takes no snapshot, metadata and share changes touc
 
 - `content_size` / `asset_count` are cached for list views. `last_write_source` is `conversation:<id>` from tools, `ui:<user_id>` from the UI (a legacy plain `ui` means the owner) or `action_request:<id>` from `write_doc`. `updated_at` doubles as the optimistic-concurrency token for rename, the content save and restore; flipping the owner's `require_approval` switch (access rule 7) through `update_doc_metadata()` bumps it like a rename.
 - In `doc_shares`, `user_id` NULL grants everyone on the install. The unique `(doc_id, user_id)` index cannot stop duplicate NULL rows in SQLite, so the partial unique index `ix_doc_shares_everyone` allows at most one everyone row per doc. `add_share()` upserts and refuses the owner as a recipient, because a share row would turn the owner's own writes into approval-gated ones; a doc or recipient deleted between the caller's checks and the insert raises `ShareTargetGoneError`. Share changes never bump `updated_at`, so an open editor's token survives them.
-- **Title uniqueness** is case-insensitive per (owner, project, mode), enforced by `_title_taken()` rather than an index: a NULL `project_id` is its own scope, the comparison uses Python `casefold()` because SQLite `lower()` folds ASCII only, and it is check-then-insert like the skills store, with no lock against a simultaneous create.
+- **Title uniqueness** is case-insensitive per (owner, project, AutoProject, mode), enforced by `_title_taken()` rather than an index: user docs are their own scope, the comparison uses Python `casefold()` because SQLite `lower()` folds ASCII only, and it is check-then-insert like the skills store, with no lock against a simultaneous create.
 
 ### Read sidecar
 

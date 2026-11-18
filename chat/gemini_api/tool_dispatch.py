@@ -708,14 +708,17 @@ def _doc_caller(ctx: ToolContext):
     """The Quest Docs service caller for this dispatch context.
 
     A sandbox script dispatches with ``conversation_id=None`` (no
-    read-before-edit record of its own) and the project and public flag of
-    the conversation that launched it, taken from its sandbox lease by the
-    script tool-call bridge, so it reads what that conversation reads.
+    read-before-edit record of its own) and the project, public flag and
+    AutoProject of the conversation that launched it, taken from its sandbox
+    lease by the script tool-call bridge, so it reads what that conversation
+    reads. ``ctx.autoproject_id`` is set for an AutoProject run and its
+    sub-agents and scripts.
     """
     from chat.docs.service import Caller
     return Caller(
         user=ctx.user, conversation_id=ctx.conversation_id,
         project_id=ctx.project_id, is_public=ctx.is_public, run_kind=ctx.run_kind,
+        autoproject_id=ctx.autoproject_id,
     )
 
 
@@ -802,6 +805,7 @@ def _table_caller(ctx: ToolContext):
     return Caller(
         user=ctx.user, conversation_id=ctx.conversation_id,
         project_id=ctx.project_id, is_public=ctx.is_public, run_kind=ctx.run_kind,
+        autoproject_id=ctx.autoproject_id,
     )
 
 

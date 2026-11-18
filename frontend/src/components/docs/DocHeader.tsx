@@ -18,7 +18,8 @@
  * Beside the title sit the mode badge (a public doc only, see utils/docMode),
  * a folder chip for a project doc (a link to that project's docs when the
  * project is the viewer's own, plain text for a doc shared from someone
- * else's project), a share chip: for the owner of a shared doc, "Shared
+ * else's project), an "AutoProject" chip for an AutoProject doc (a link to
+ * the AutoProject page for its owner), a share chip: for the owner of a shared doc, "Shared
  * with N people" / "Shared with everyone" opening the Share dialog; for a
  * recipient, who shared it and whether they can edit; and, while the
  * switch is on, an "Approval required" chip for every viewer. On the right, the
@@ -62,6 +63,7 @@ import type { Doc, DocDetail } from '../../api/types';
 import { useProjects } from '../../contexts/ProjectsContext';
 import { shouldShowDocModeBadge } from '../../utils/docMode';
 import { ownerShareSummary, recipientShareSummary, shareChipTitle } from '../../utils/docSharing';
+import { autoprojectPath } from '../../utils/autoprojectsRoute';
 import { docsListPath } from '../../utils/docsRoute';
 import { DocConfirmDialog } from './DocConfirmDialog';
 import { DocModeBadge } from './DocModeBadge';
@@ -444,7 +446,7 @@ export function DocHeader({
             )}
           </div>
 
-          {(showModeBadge || doc.project_id || shareSummary || doc.require_approval) && (
+          {(showModeBadge || doc.project_id || doc.autoproject_id || shareSummary || doc.require_approval) && (
             <div className="doc-header-meta">
               {showModeBadge && <DocModeBadge mode={doc.mode} />}
               {doc.require_approval && (
@@ -472,6 +474,22 @@ export function DocHeader({
                   <span className="doc-header-project-name">
                     {doc.shared_with_me ? 'Project doc' : projectName}
                   </span>
+                </span>
+              )}
+              {doc.autoproject_id && !doc.shared_with_me && (
+                <Link
+                  to={autoprojectPath(doc.autoproject_id)}
+                  className="doc-header-project-chip"
+                  title="Open the AutoProject this doc belongs to"
+                >
+                  <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">AutoProject</span>
+                </Link>
+              )}
+              {doc.autoproject_id && doc.shared_with_me && (
+                <span className="doc-header-project-chip doc-header-chip--static" title="A doc from an AutoProject">
+                  <Folder size={12} strokeWidth={2.25} aria-hidden="true" />
+                  <span className="doc-header-project-name">AutoProject doc</span>
                 </span>
               )}
               {shareSummary && canShare && (

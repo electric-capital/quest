@@ -75,6 +75,8 @@ def include_name(name, type_, parent_names):
 _INLINE_FKS = {
     ("docs", ("instructions_updated_by",)),
     ("conversations", ("autoproject_id",)),  # migration 4b57cca1158c
+    ("docs", ("autoproject_id",)),  # migration c5e8a1d3f7b2
+    ("data_tables", ("autoproject_id",)),  # migration c5e8a1d3f7b2
 }
 
 

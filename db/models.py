@@ -2001,6 +2001,7 @@ class Doc(Base):
     __table_args__ = (
         sa.Index("ix_docs_owner_id", "owner_id"),
         sa.Index("ix_docs_project_id", "project_id"),
+        sa.Index("ix_docs_autoproject_id", "autoproject_id"),
         sa.Index("ix_docs_updated_at", "updated_at"),
     )
 
@@ -2016,10 +2017,21 @@ class Doc(Base):
         nullable=False,
     )
 
-    # NULL = user doc; non-NULL = project doc (deleted with the project)
+    # Non-NULL = project doc (deleted with the project). A user doc has
+    # neither project_id nor autoproject_id.
     project_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
+    )
+
+    # Non-NULL = AutoProject doc (deleted with the AutoProject); never set
+    # together with project_id (enforced in db/doc_store.py). An AutoProject
+    # doc is always "private".
+    autoproject_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("autoprojects.id", ondelete="CASCADE"),
         nullable=True,
         default=None,
     )
@@ -2306,6 +2318,7 @@ class DataTable(Base):
     __table_args__ = (
         sa.Index("ix_data_tables_owner_id", "owner_id"),
         sa.Index("ix_data_tables_project_id", "project_id"),
+        sa.Index("ix_data_tables_autoproject_id", "autoproject_id"),
         sa.Index("ix_data_tables_updated_at", "updated_at"),
     )
 
@@ -2321,10 +2334,21 @@ class DataTable(Base):
         nullable=False,
     )
 
-    # NULL = user table; non-NULL = project table (deleted with the project)
+    # Non-NULL = project table (deleted with the project). A user table has
+    # neither project_id nor autoproject_id.
     project_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         sa.ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
+    )
+
+    # Non-NULL = AutoProject table (deleted with the AutoProject); never set
+    # together with project_id (enforced in db/table_store.py). An
+    # AutoProject table is always "private".
+    autoproject_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        sa.ForeignKey("autoprojects.id", ondelete="CASCADE"),
         nullable=True,
         default=None,
     )

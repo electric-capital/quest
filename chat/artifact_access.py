@@ -3,7 +3,8 @@
 Docs (``chat.docs.access``) and Tables (``chat.tables.access``) use the
 same visibility and write matrix: owner / share recipient, private /
 public mode, project scoping with doc sources and the owner's read-only
-reach from standalone conversations, public-conversation invisibility,
+reach from standalone conversations, AutoProject scoping with the same
+read-only reach, public-conversation invisibility,
 read-only run kinds, the ``ui`` column, Slack runs and the owner's
 require-approval switch. This module is that procedure, written
 once. It returns a :class:`CoreVerdict` with a machine-readable ``cause``
@@ -64,6 +65,7 @@ DenyCause = Literal[
     "read_only_share",       # read share (or read-only reach) in a conversation
     "public_from_private",   # public artifact seen from a private conversation
     "outside_project",       # owner's project artifact, from a standalone conversation
+    "outside_autoproject",   # owner's AutoProject artifact, from outside its runs
     "slack_needs_approval",  # shared private artifact, Slack cannot open a card
     "slack_approval_required",   # owner switch on, Slack cannot open a card
     "ui_read_only",          # UI, no write relationship
@@ -142,14 +144,17 @@ def resolve_core(
     project_id: str | None,
     run_kind: str,
     source_project_ids: Collection[str] = (),
+    autoproject_id: str | None = None,
     kind: str = "doc",
 ) -> CoreVerdict:
     """Run the shared matrix for one doc or table dict.
 
     ``item`` carries ``owner_id``, ``project_id``, ``mode``, ``shares`` and
-    optionally ``require_approval``. ``kind`` only names the artifact in
-    error messages. Raises ValueError for an unknown ``run_kind`` or mode,
-    or a dict without its ``shares`` list.
+    optionally ``autoproject_id`` and ``require_approval``.
+    ``autoproject_id`` is the calling run's AutoProject (None outside a
+    run). ``kind`` only names the artifact in error messages. Raises
+    ValueError for an unknown ``run_kind`` or mode, or a dict without its
+    ``shares`` list.
     """
     if run_kind not in RUN_KINDS:
         raise ValueError(f"unknown run_kind: {run_kind!r}")
@@ -158,8 +163,10 @@ def resolve_core(
         raise ValueError(f"unknown {kind} mode: {stored_mode!r}")
     shares = _shares(item, kind)  # fail closed before any verdict
 
-    # A user (non-project) artifact is always private, whatever its row says.
+    # A user or AutoProject (non-project) artifact is always private,
+    # whatever its row says.
     item_project_id = item["project_id"]
+    item_autoproject_id = item.get("autoproject_id")
     mode = "private" if item_project_id is None else stored_mode
 
     is_owner = item["owner_id"] == user_id
@@ -188,6 +195,18 @@ def resolve_core(
         elif mode != "public" or item_project_id not in source_project_ids:
             return _HIDDEN
 
+    # AutoProject artifacts: from that AutoProject's runs (or the UI) they
+    # follow the matrix. From elsewhere only the owner's other private
+    # standalone conversations (another AutoProject's runs included) reach
+    # them, read-only; project and public conversations see nothing.
+    outside_autoproject = (
+        item_autoproject_id is not None
+        and run_kind != "ui"
+        and autoproject_id != item_autoproject_id
+    )
+    if outside_autoproject and (is_public or project_id is not None or not is_owner):
+        return _HIDDEN
+
     # Public conversations never learn of private artifacts.
     if is_public and mode == "private":
         return _HIDDEN
@@ -206,6 +225,8 @@ def resolve_core(
         and mode != "public"
     ):
         return _read_only("outside_project", is_owner)
+    if outside_autoproject:
+        return _read_only("outside_autoproject", is_owner)
 
     may_write = is_owner or share == "write"
 
