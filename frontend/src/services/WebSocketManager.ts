@@ -29,6 +29,7 @@ import {
   sendDesktopNotification,
 } from './desktopNotifications';
 import { persistentWebSocket, type PersistentEvent } from './PersistentWebSocket';
+import { SEND_ACK_TIMEOUT_MS } from './sendAck';
 
 interface BufferState {
   responseParts: string[];
@@ -61,16 +62,8 @@ interface PendingSend {
   lateAckUnsubscribe: (() => void) | null;
 }
 
-/**
- * How long to wait for the server's ``send_message_accepted`` receipt
- * before declaring a send unconfirmed. The server appends the user row
- * synchronously on receipt, so on a healthy path the receipt arrives well
- * within a second or two; a longer silence means the frame most likely
- * never left the device (half-open mobile socket, radio off). The
- * receipt is still honored if it lands late -- the bubble flips back out
- * of the failed state.
- */
-const SEND_ACK_TIMEOUT_MS = 15_000;
+// SEND_ACK_TIMEOUT_MS (services/sendAck.ts): a receipt that lands after it
+// is still honored -- the bubble flips back out of the failed state.
 
 class WebSocketManagerClass {
   private buffers: Map<string, BufferState> = new Map();

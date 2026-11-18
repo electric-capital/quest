@@ -9,7 +9,7 @@ import {
 } from 'react'
 import '../ChatPanel.css'
 import type { FileSource } from '../../api/fileApi'
-import { ApiClientError } from '../../api/request'
+import { apiErrorCode } from '../../api/request'
 import { answerAutoProjectQuestion, deleteAutoProjectRun, unarchiveAutoProject, updateAutoProject } from '../../api/autoprojectsApi'
 import type { AutoProject, AutoProjectRun } from '../../api/types'
 import { autoprojectDraftKey } from '../../constants/drafts'
@@ -20,6 +20,7 @@ import type { AutoProjectRunsView } from '../../hooks/useAutoProjectRuns'
 import { useAutoProjectUnread } from '../../hooks/useAutoProjectUnread'
 import { persistentWebSocket } from '../../services/PersistentWebSocket'
 import { stopAutoProjectRun, autoprojectRunStartErrorMessage, AutoProjectRunStartError } from '../../services/autoprojectRuns'
+import { errorMessage } from '../../utils/errorMessage'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { UploadProgress, type UploadStatus } from '../UploadProgress'
 import { AutoProjectComposer } from './AutoProjectComposer'
@@ -28,6 +29,7 @@ import { AutoProjectNotice } from './AutoProjectNotice'
 import { autoprojectRunCardKey, type AutoProjectRunActivityView, type AutoProjectRunCard } from './AutoProjectRunEntry'
 import { AutoProjectUpdates, type PendingStart } from './AutoProjectUpdates'
 import { readAutoProjectUpdatesOrder, writeAutoProjectUpdatesOrder, type AutoProjectUpdatesOrder } from './autoprojectUpdatesOrder'
+import { prefersReducedMotion } from './autoprojectArrival'
 import {
   initialUploadStatus,
   startAutoProjectRunFromComposer,
@@ -51,18 +53,6 @@ const BRIEF_JUMP_AFTER_PX = 160
 const REVEAL_MIN_VISIBLE_PX = 160
 /** Gap (px) left above an update scrolled to the top of the view. */
 const REVEAL_MARGIN_PX = 12
-
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback
-}
-
-function errorCode(err: unknown): string | null {
-  return err instanceof ApiClientError ? err.errorCode ?? null : null
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-}
 
 /**
  * Cards kept for one active run: those seen before stay (they flip
@@ -600,11 +590,11 @@ export function AutoProjectMainColumn({
         await answerAutoProjectQuestion(autoprojectId, handleId, submission.text)
         await refresh()
       } catch (err) {
-        if (errorCode(err) === 'question_resolved') {
+        if (apiErrorCode(err) === 'question_resolved') {
           setNotice('This question was already answered or cancelled.')
           void refresh()
         } else {
-          setNotice(errorText(err, 'The answer could not be sent.'))
+          setNotice(errorMessage(err, 'The answer could not be sent.'))
         }
       } finally {
         submittingRef.current = false
@@ -647,7 +637,7 @@ export function AutoProjectMainColumn({
       const updated = await unarchiveAutoProject(autoprojectId)
       onAutoProjectDetail(updated)
     } catch (err) {
-      setUnarchiveError(errorText(err, 'The AutoProject could not be unarchived.'))
+      setUnarchiveError(errorMessage(err, 'The AutoProject could not be unarchived.'))
     } finally {
       setUnarchiving(false)
     }
@@ -689,7 +679,7 @@ export function AutoProjectMainColumn({
       removeRun(run.id)
       setDeleteTarget(null)
     } catch (err) {
-      const code = errorCode(err)
+      const code = apiErrorCode(err)
       if (code === 'autoproject_run_not_found') {
         // Already gone (another tab): drop it here too.
         removeRun(run.id)
@@ -697,7 +687,7 @@ export function AutoProjectMainColumn({
       } else if (code === 'autoproject_run_active') {
         setDeleteError('This update is still in progress. Stop it before deleting it.')
       } else {
-        setDeleteError(errorText(err, 'The update could not be deleted.'))
+        setDeleteError(errorMessage(err, 'The update could not be deleted.'))
       }
     } finally {
       setDeleting(false)

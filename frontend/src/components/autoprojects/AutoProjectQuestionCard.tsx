@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { LoaderCircle, MessageCircleQuestionMark } from 'lucide-react'
-import { answerAutoProjectQuestion, autoprojectErrorDetail } from '../../api/autoprojectsApi'
-import { ApiClientError } from '../../api/request'
+import { answerAutoProjectQuestion } from '../../api/autoprojectsApi'
+import { apiErrorCode, apiErrorDetail } from '../../api/request'
 import type { AutoProjectQuestion } from '../../api/types'
+import { errorMessage } from '../../utils/errorMessage'
 import { formatTimestamp } from '../../utils/formatters'
 import './AutoProjectQuestionCard.css'
 
@@ -34,8 +35,8 @@ const SEND_FAILED = 'Could not send the answer. Try again.'
  * answered elsewhere or cancelled by a stop), else null.
  */
 function resolvedOutcome(err: unknown, handleId: string): LocalOutcome | null {
-  if (!(err instanceof ApiClientError) || err.errorCode !== 'question_resolved') return null
-  const detail = autoprojectErrorDetail(err)
+  if (apiErrorCode(err) !== 'question_resolved') return null
+  const detail = apiErrorDetail(err)
   const answer = typeof detail?.answer === 'string' ? detail.answer : null
   return {
     handleId,
@@ -113,7 +114,7 @@ export function AutoProjectQuestionCard({
         onAnswered?.()
       } else {
         refocusRef.current = false
-        setError(err instanceof Error && err.message ? err.message : SEND_FAILED)
+        setError(errorMessage(err, SEND_FAILED))
       }
     } finally {
       setSending(null)

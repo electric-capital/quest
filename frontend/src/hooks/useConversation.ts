@@ -8,6 +8,7 @@ import { conversationStore, type ConversationState } from '../store/conversation
 import { unreadStore } from '../store/unreadStore';
 import { webSocketManager } from '../services/WebSocketManager';
 import { persistentWebSocket, type PersistentEvent } from '../services/PersistentWebSocket';
+import { newClientSendId } from '../services/sendAck';
 import {
   fetchConversation,
   fetchConversationLoadedSkills,
@@ -251,18 +252,6 @@ interface UseConversationResult {
 /**
  * Hook to subscribe to and interact with a specific conversation
  */
-/**
- * Random id for an outbound send. ``crypto.randomUUID`` is only defined in
- * secure contexts, and local instances are served over plain http on a raw
- * IP, so fall back to a time + random string there.
- */
-function newClientSendId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 export function useConversation(conversationId: string, options?: UseConversationOptions): UseConversationResult {
   const prevConversationIdRef = useRef<string | null>(null);
   const [origin, setOrigin] = useState<ConversationOrigin>('web');

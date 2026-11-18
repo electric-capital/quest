@@ -6,12 +6,13 @@ import type {
   AutoProjectRun,
 } from '../../api/types'
 import type { FileSource } from '../../api/fileApi'
+import { useClampOverflow } from '../../hooks/useClampOverflow'
 import { formatTimestamp } from '../../utils/formatters'
 import { ActionRequestMessage } from '../ActionRequestMessage'
 import { ConnectRequestMessage } from '../ConnectRequestMessage'
-import { MarkdownWorkspaceContext, markdownComponents } from '../Message'
-import { RichMarkdown } from '../RichMarkdown'
+import { MarkdownWorkspaceContext } from '../Message'
 import { AutoProjectActivityLine } from './AutoProjectActivityLine'
+import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
 import { playArrival } from './autoprojectArrival'
 import { AutoProjectQuestionCard } from './AutoProjectQuestionCard'
 import { AutoProjectRunError } from './AutoProjectRunError'
@@ -59,8 +60,9 @@ export interface AutoProjectRunActivityView {
  * on a result. Each is claimed once, so a remount never replays it.
  *
  * Everything is inside a MarkdownWorkspaceContext for the RUN's
- * conversation and its AutoProject, so workspace images and relative links in the
- * prompt, cards, result and notes resolve against that run's workspace,
+ * conversation and its AutoProject (the result's AutoProjectBriefMarkdown sets the
+ * same), so workspace images and relative links in the
+ * prompt, cards and result resolve against that run's workspace,
  * `autoproject://` references against the AutoProject's, and both open through the
  * page's one file viewer (`onOpenFile`, told the file's space).
  */
@@ -186,7 +188,7 @@ export const AutoProjectRunEntry = memo(function AutoProjectRunEntry({
           </div>
         ) : (
           <div ref={outcomeRef} className="autoproject-run-arrival">
-            <AutoProjectRunOutcome run={run} />
+            <AutoProjectRunOutcome autoprojectId={autoprojectId} run={run} onOpenFile={onOpenFile} />
           </div>
         )}
       </article>
@@ -195,7 +197,15 @@ export const AutoProjectRunEntry = memo(function AutoProjectRunEntry({
 })
 
 /** A finished run's result and state line. */
-function AutoProjectRunOutcome({ run }: { run: AutoProjectRun }) {
+function AutoProjectRunOutcome({
+  autoprojectId,
+  run,
+  onOpenFile,
+}: {
+  autoprojectId: string
+  run: AutoProjectRun
+  onOpenFile: (workspacePath: string, filename: string, source: FileSource) => void
+}) {
   const result = run.result?.trim() ? run.result : null
 
   return (
@@ -208,9 +218,13 @@ function AutoProjectRunOutcome({ run }: { run: AutoProjectRun }) {
         </p>
       )}
       {result && (
-        <div className="message-content autoproject-ctl-markdown autoproject-run-result">
-          <RichMarkdown components={markdownComponents}>{result}</RichMarkdown>
-        </div>
+        <AutoProjectBriefMarkdown
+          autoprojectId={autoprojectId}
+          conversationId={run.conversation_id}
+          content={result}
+          className="autoproject-run-result"
+          onOpenFile={onOpenFile}
+        />
       )}
       {!result && run.status === 'completed' && (
         <p className="autoproject-run-state">This update finished without a result.</p>
@@ -248,21 +262,10 @@ function isLongPrompt(prompt: string): boolean {
 export function AutoProjectRunRequest({ prompt }: { prompt: string }) {
   const long = isLongPrompt(prompt)
   const [expanded, setExpanded] = useState(false)
-  const [overflows, setOverflows] = useState(true)
   const textRef = useRef<HTMLDivElement>(null)
   const contentId = useId()
-
-  // Measure while clamped; an expanded prompt keeps the last answer.
-  useLayoutEffect(() => {
-    const text = textRef.current
-    if (!long || expanded || !text) return
-    const check = () => setOverflows(text.scrollHeight > text.clientHeight + 1)
-    check()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(check)
-    observer.observe(text)
-    return () => observer.disconnect()
-  }, [long, expanded, prompt])
+  // Measured while clamped; an expanded prompt keeps the last answer.
+  const overflows = useClampOverflow(textRef, long && !expanded, prompt, true)
 
   const clampable = long && overflows
   const clamped = clampable && !expanded

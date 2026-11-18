@@ -33,15 +33,9 @@
 import { createAutoProjectRunConversation, parseAutoProjectActiveRun, autoprojectActiveRunFromError } from '../api/autoprojectsApi';
 import { ApiClientError } from '../api/request';
 import type { ComposerAttachmentRef, AutoProjectActiveRun } from '../api/types';
+import { errorMessage } from '../utils/errorMessage';
 import { persistentWebSocket, type PersistentEvent } from './PersistentWebSocket';
-
-/**
- * How long to wait for the `send_message_accepted` receipt before the
- * start counts as unconfirmed; the same deadline as WebSocketManager's
- * SEND_ACK_TIMEOUT_MS (the server appends the user row and answers well
- * within a second on a healthy path).
- */
-export const AUTOPROJECT_RUN_SEND_ACK_TIMEOUT_MS = 15_000;
+import { newClientSendId, SEND_ACK_TIMEOUT_MS } from './sendAck';
 
 /**
  * Why a start failed: a server refusal code (REST or `send_message_rejected`,
@@ -127,18 +121,6 @@ const REASON_MESSAGES: Record<string, string> = {
   autoproject_run_start_failed: START_FAILED_MESSAGE,
 };
 
-/** Random id for the send; crypto.randomUUID only exists in secure contexts. */
-function newClientSendId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : START_FAILED_MESSAGE;
-}
-
 /**
  * Start a run of the AutoProject with `opts.message` as its prompt. Resolves once
  * the server has stored the message (the run is live); rejects with a
@@ -163,7 +145,7 @@ export async function startAutoProjectRun(
     conversationId = (await createAutoProjectRunConversation(autoprojectId)).conversation_id;
   } catch (err) {
     const reason = err instanceof ApiClientError && err.errorCode ? err.errorCode : 'start_failed';
-    throw new AutoProjectRunStartError(reason, errorMessage(err), {
+    throw new AutoProjectRunStartError(reason, errorMessage(err, START_FAILED_MESSAGE), {
       activeRun: autoprojectActiveRunFromError(err),
     });
   }
@@ -176,7 +158,7 @@ export async function startAutoProjectRun(
       attachedFilenames = result?.attachedFilenames;
       attachments = result?.attachments;
     } catch (err) {
-      throw new AutoProjectRunStartError('start_failed', errorMessage(err), { conversationId });
+      throw new AutoProjectRunStartError('start_failed', errorMessage(err, START_FAILED_MESSAGE), { conversationId });
     }
   }
 
@@ -249,7 +231,7 @@ export async function startAutoProjectRun(
     // the server (a half-open socket accepts writes): wait for the receipt.
     timer = window.setTimeout(() => {
       settle(() => reject(fail('unconfirmed', REASON_MESSAGES.unconfirmed)));
-    }, AUTOPROJECT_RUN_SEND_ACK_TIMEOUT_MS);
+    }, SEND_ACK_TIMEOUT_MS);
   });
 }
 
@@ -263,7 +245,7 @@ export function autoprojectRunStartErrorMessage(err: unknown): string {
     const known = REASON_MESSAGES[err.reason];
     if (known) return known;
   }
-  return errorMessage(err);
+  return errorMessage(err, START_FAILED_MESSAGE);
 }
 
 /**

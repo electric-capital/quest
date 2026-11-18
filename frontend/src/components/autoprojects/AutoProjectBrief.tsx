@@ -1,8 +1,9 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { History, Pencil } from 'lucide-react'
 import type { FileSource } from '../../api/fileApi'
 import type { AutoProject, AutoProjectBriefState } from '../../api/types'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useClampOverflow } from '../../hooks/useClampOverflow'
 import { AutoProjectBriefEditor } from './AutoProjectBriefEditor'
 import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
 import { briefAttribution, parseBriefSource } from './autoprojectBriefSource'
@@ -164,23 +165,10 @@ function AutoProjectBriefBody({
 }) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
-  const [overflows, setOverflows] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   const bodyId = useId()
-
-  // Measure while clamped; an expanded brief keeps the last answer.
-  useLayoutEffect(() => {
-    const el = bodyRef.current
-    if (!isMobile || expanded || !el) return
-    const check = () => setOverflows(el.scrollHeight > el.clientHeight + 1)
-    check()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(check)
-    observer.observe(el)
-    const inner = el.firstElementChild
-    if (inner) observer.observe(inner)
-    return () => observer.disconnect()
-  }, [isMobile, expanded, content])
+  // Measured while clamped; an expanded brief keeps the last answer.
+  const overflows = useClampOverflow(bodyRef, isMobile && !expanded, content, false)
 
   const clampable = isMobile && overflows
   const clamped = isMobile && !expanded

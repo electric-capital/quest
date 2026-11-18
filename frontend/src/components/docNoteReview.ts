@@ -18,6 +18,7 @@ import type {
   DocNoteSuggestion,
   StaleInstructionsCurrent,
 } from '../api/types';
+import { strippedCodePointLength } from '../utils/textLength';
 
 /**
  * The edited text an Accept sends: the trimmed draft once it differs from
@@ -55,7 +56,7 @@ export function docNoteMaxChars(noteKind: DocNoteKind): number {
 
 /** Characters as the server counts them: code points of the trimmed text. */
 export function docNoteCharCount(text: string): number {
-  return [...text.trim()].length;
+  return strippedCodePointLength(text);
 }
 
 /**

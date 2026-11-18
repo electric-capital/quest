@@ -8,15 +8,12 @@ import { useAutoProjects } from '../../hooks/useAutoProjects'
 import { useAutoProjectUnread } from '../../hooks/useAutoProjectUnread'
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters'
 import { newAutoProjectPath, autoprojectPath, autoprojectsListPath } from '../../utils/autoprojectsRoute'
+import { errorMessage } from '../../utils/errorMessage'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { AutoProjectNotice } from './AutoProjectNotice'
 import { AutoProjectLoadError, AutoProjectViewState } from './AutoProjectViewState'
 
 type RowAction = 'archive' | 'unarchive'
-
-function errorText(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback
-}
 
 /**
  * The AutoProjects list (/autoprojects, /autoprojects?archived=true): the user's unarchived
@@ -61,7 +58,7 @@ export function AutoProjectsListView({ archived }: { archived: boolean }) {
         await refresh()
       } catch (err) {
         const verb = action === 'archive' ? 'archived' : 'unarchived'
-        setActionError(errorText(err, `"${row.title}" could not be ${verb}.`))
+        setActionError(errorMessage(err, `"${row.title}" could not be ${verb}.`))
       } finally {
         setRowPending(row.id, false)
       }
@@ -85,7 +82,7 @@ export function AutoProjectsListView({ archived }: { archived: boolean }) {
       setDeleteTarget(null)
       await refresh()
     } catch (err) {
-      setDeleteError(errorText(err, 'The AutoProject could not be deleted.'))
+      setDeleteError(errorMessage(err, 'The AutoProject could not be deleted.'))
     } finally {
       setDeleting(false)
       setRowPending(row.id, false)

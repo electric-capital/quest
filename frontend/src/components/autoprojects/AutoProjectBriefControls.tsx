@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type KeyboardEvent } from 'react'
-import { ApiClientError } from '../../api/request'
-import { autoprojectErrorDetail } from '../../api/autoprojectsApi'
+import { apiErrorCode, apiErrorDetail } from '../../api/request'
+import { errorMessage } from '../../utils/errorMessage'
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters'
 import './AutoProjectBriefControls.css'
 
@@ -9,14 +9,11 @@ import './AutoProjectBriefControls.css'
  * (AutoProjectBriefControls.css, which also styles the brief's markdown and the
  * editors; the brief History has its own AutoProjectBriefHistory.css):
  *
- * - `autoprojectTextLength`: the length the server checks a brief against: after
- *   stripping, in code points (Python `len`), so an emoji counts once and
- *   trailing blank lines do not count.
- * - `AutoProjectCharCounter`: the `n / cap` counter under an editor. It never
- *   truncates (a paste or a merged text may go over); it turns to a warning
- *   tone at 90% of the cap and an error tone over it, with an "N characters
- *   over the limit" line in a polite live region. Editors disable Save while
- *   `isOverCap`.
+ * - `AutoProjectCharCounter`: the `n / cap` counter under an editor, of the
+ *   length the server checks (utils/textLength.ts). It never truncates (a
+ *   paste or a merged text may go over); it turns to a warning tone at 90%
+ *   of the cap and an error tone over it, with an "N characters over the
+ *   limit" line in a polite live region. Editors disable Save while over.
  * - `AutoProjectTimeAgo`: a relative time with the full local time on hover.
  * - `autoprojectSaveErrorMessage`: the inline message for a failed save or
  *   restore, mapping 400 `brief_too_long` (its `cap` / `actual` extras) to a
@@ -27,27 +24,6 @@ import './AutoProjectBriefControls.css'
 
 /** Share of the cap from which the counter takes its warning tone. */
 const NEAR_CAP_RATIO = 0.9
-
-export function autoprojectTextLength(text: string): number {
-  const stripped = text.trim()
-  let count = stripped.length
-  for (let i = 0; i < stripped.length; i += 1) {
-    const code = stripped.charCodeAt(i)
-    // A high surrogate followed by a low one is one code point.
-    if (code >= 0xd800 && code <= 0xdbff && i + 1 < stripped.length) {
-      const next = stripped.charCodeAt(i + 1)
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        count -= 1
-        i += 1
-      }
-    }
-  }
-  return count
-}
-
-export function isOverCap(length: number, cap: number): boolean {
-  return length > cap
-}
 
 export function AutoProjectCharCounter({
   id,
@@ -86,8 +62,8 @@ export function AutoProjectTimeAgo({ iso }: { iso: string }) {
 }
 
 export function autoprojectSaveErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiClientError && err.errorCode === 'brief_too_long') {
-    const detail = autoprojectErrorDetail(err)
+  if (apiErrorCode(err) === 'brief_too_long') {
+    const detail = apiErrorDetail(err)
     const cap = typeof detail?.cap === 'number' ? detail.cap : null
     const actual = typeof detail?.actual === 'number' ? detail.actual : null
     if (cap !== null && actual !== null && actual > cap) {
@@ -95,7 +71,7 @@ export function autoprojectSaveErrorMessage(err: unknown, fallback: string): str
     }
     return 'The brief is over the length limit.'
   }
-  return err instanceof Error && err.message ? err.message : fallback
+  return errorMessage(err, fallback)
 }
 
 /**

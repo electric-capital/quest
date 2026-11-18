@@ -3,13 +3,8 @@ import { AUTOPROJECT_BRIEF_MAX_CHARS, putAutoProjectBrief, staleBriefCurrent } f
 import type { AutoProject, AutoProjectBriefState } from '../../api/types'
 import { useAppConfig } from '../../contexts/AppConfigContext'
 import { briefWriterPhrase } from './autoprojectBriefSource'
-import {
-  AutoProjectCharCounter,
-  AutoProjectDiscardConfirm,
-  isOverCap,
-  autoprojectSaveErrorMessage,
-  autoprojectTextLength,
-} from './AutoProjectBriefControls'
+import { strippedCodePointLength } from '../../utils/textLength'
+import { AutoProjectCharCounter, AutoProjectDiscardConfirm, autoprojectSaveErrorMessage } from './AutoProjectBriefControls'
 
 /** The brief version a save is based on, and its text as the user was shown it. */
 interface BriefBase {
@@ -96,8 +91,8 @@ export function AutoProjectBriefEditor({
     el.setSelectionRange(el.value.length, el.value.length)
   }, [])
 
-  const length = autoprojectTextLength(draft)
-  const over = isOverCap(length, AUTOPROJECT_BRIEF_MAX_CHARS)
+  const length = strippedCodePointLength(draft)
+  const over = length > AUTOPROJECT_BRIEF_MAX_CHARS
   const unchanged = draft.trim() === base.text.trim()
   const canSave = !saving && !over && !unchanged
 

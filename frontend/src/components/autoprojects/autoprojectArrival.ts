@@ -28,7 +28,8 @@ export const ARRIVAL_MAX_HEIGHT_PX = 720
 const ARRIVAL_EASING = 'cubic-bezier(0.2, 0, 0, 1)'
 const HIGHLIGHT_CLASS = 'autoproject-arrived'
 
-function prefersReducedMotion(): boolean {
+/** The viewer asked for reduced motion. */
+export function prefersReducedMotion(): boolean {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 }
 

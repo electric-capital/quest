@@ -424,6 +424,32 @@ function MarkdownLink({ children, href, ...props }: React.AnchorHTMLAttributes<H
   );
 }
 
+/**
+ * The notice of a follow-up turn the server ran because a routine or an
+ * AutoProject run ended without calling its completion tool: the text, the
+ * time, and the exact prompt the model received in the tooltip. `kind`
+ * names its classes (`message-<kind>-nudge`, `<kind>-nudge-*`, Message.css).
+ */
+function NudgeNotice({
+  kind,
+  message,
+  text,
+}: {
+  kind: 'routine' | 'autoproject';
+  message: RoutineNudgeMessageType | AutoProjectNudgeMessageType;
+  text: string;
+}) {
+  return (
+    <div className={`message-${kind}-nudge`} title={message.content || undefined}>
+      <span className={`${kind}-nudge-icon`} aria-hidden="true">&#8635;</span>
+      <span className={`${kind}-nudge-text`}>{text}</span>
+      <span className={`${kind}-nudge-timestamp`}>
+        {message.timestamp ? formatTimestamp(message.timestamp) : ''}
+      </span>
+    </div>
+  );
+}
+
 /** Shared ReactMarkdown components prop for assistant messages */
 export const markdownComponents = {
   a: MarkdownLink,
@@ -736,17 +762,12 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
   // model to verify its work and finish (see chat/routine_runs.py). The
   // exact text the model received is in the tooltip.
   if (message.type === 'routine_nudge') {
-    const nudgeMsg = message as RoutineNudgeMessageType;
     return (
-      <div className="message-routine-nudge" title={nudgeMsg.content || undefined}>
-        <span className="routine-nudge-icon" aria-hidden="true">&#8635;</span>
-        <span className="routine-nudge-text">
-          Routine run ended without calling routine_completed — asked the model to check its work and finish
-        </span>
-        <span className="routine-nudge-timestamp">
-          {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
-        </span>
-      </div>
+      <NudgeNotice
+        kind="routine"
+        message={message as RoutineNudgeMessageType}
+        text="Routine run ended without calling routine_completed — asked the model to check its work and finish"
+      />
     );
   }
 
@@ -756,17 +777,12 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
   // (see chat/autoprojects/runs.py). The exact text the model received is in the
   // tooltip.
   if (message.type === 'autoproject_nudge') {
-    const nudgeMsg = message as AutoProjectNudgeMessageType;
     return (
-      <div className="message-autoproject-nudge" title={nudgeMsg.content || undefined}>
-        <span className="autoproject-nudge-icon" aria-hidden="true">&#8635;</span>
-        <span className="autoproject-nudge-text">
-          The update did not finish — asked the model to call complete_autoproject_run and hand off
-        </span>
-        <span className="autoproject-nudge-timestamp">
-          {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
-        </span>
-      </div>
+      <NudgeNotice
+        kind="autoproject"
+        message={message as AutoProjectNudgeMessageType}
+        text="The update did not finish — asked the model to call complete_autoproject_run and hand off"
+      />
     );
   }
 

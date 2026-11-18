@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import './NewAutoProjectPage.css'
-import { ApiClientError } from '../../api/request'
+import { apiErrorCode } from '../../api/request'
 import { createAutoProject } from '../../api/autoprojectsApi'
 import type { AutoProject } from '../../api/types'
 import { AUTOPROJECT_DRAFT_KEY } from '../../constants/drafts'
@@ -9,6 +9,7 @@ import { useAppConfig } from '../../contexts/AppConfigContext'
 import { useConversationSkills } from '../../contexts/ConversationSkillsContext'
 import { autoprojectRunStartErrorMessage } from '../../services/autoprojectRuns'
 import { autoprojectPath } from '../../utils/autoprojectsRoute'
+import { errorMessage } from '../../utils/errorMessage'
 import { UploadProgress, type UploadStatus } from '../UploadProgress'
 import { AutoProjectComposer } from './AutoProjectComposer'
 import { AutoProjectNotice, autoprojectNoticeState } from './AutoProjectNotice'
@@ -40,7 +41,7 @@ async function createAutoProjectForSubmission(
       thinking_effort: submission.thinkingEffort,
     })
   } catch (err) {
-    if (!(err instanceof ApiClientError) || !MODEL_REFUSALS.has(err.errorCode ?? '')) throw err
+    if (!MODEL_REFUSALS.has(apiErrorCode(err) ?? '')) throw err
     console.warn('The AutoProject was created without its default model', err)
     return createAutoProject({ prompt: submission.text })
   }
@@ -101,7 +102,7 @@ export function NewAutoProjectPage() {
       try {
         autoproject = await createAutoProjectForSubmission(submission, modelPickedRef.current)
       } catch (err) {
-        setError(err instanceof Error && err.message ? err.message : 'The AutoProject could not be created.')
+        setError(errorMessage(err, 'The AutoProject could not be created.'))
         // The composer cleared its queued skills on Send (after this call
         // returned, so the restore below lands last); nothing was sent.
         if (submission.skillIds.length > 0) {

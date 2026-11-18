@@ -19,7 +19,7 @@
  */
 
 import { API_BASE_URL } from './config';
-import { ApiClientError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from './request';
+import { ApiClientError, apiDelete, apiErrorDetail, apiGet, apiPatch, apiPost, apiPut } from './request';
 import type {
   CreateAutoProjectRequest,
   ListAutoProjectsResponse,
@@ -217,16 +217,6 @@ export function answerAutoProjectQuestion(
 
 // --- Error accessors -------------------------------------------------------
 
-/**
- * The structured `detail` object of an AutoProject error (`{error, message,
- * ...extras}`), or null (not an ApiClientError, or a string body).
- */
-export function autoprojectErrorDetail(err: unknown): Record<string, unknown> | null {
-  if (!(err instanceof ApiClientError)) return null;
-  const detail = err.details?.detail;
-  return detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
-}
-
 /** True for the 409 stale_brief of a brief save or restore. */
 export function isStaleBriefError(err: unknown): err is ApiClientError {
   return err instanceof ApiClientError && err.errorCode === 'stale_brief';
@@ -237,7 +227,7 @@ export function staleBriefCurrent(
   err: unknown,
 ): { brief: string; brief_version: number; brief_updated_at: string | null } | null {
   if (!isStaleBriefError(err)) return null;
-  const current = autoprojectErrorDetail(err)?.current;
+  const current = apiErrorDetail(err)?.current;
   if (!current || typeof current !== 'object') return null;
   const { brief, brief_version: version, brief_updated_at: updatedAt } =
     current as Record<string, unknown>;
@@ -264,5 +254,5 @@ export function parseAutoProjectActiveRun(value: unknown): AutoProjectActiveRun 
 /** The AutoProject's active run from a 409 autoproject_run_active error, else null. */
 export function autoprojectActiveRunFromError(err: unknown): AutoProjectActiveRun | null {
   if (!(err instanceof ApiClientError) || err.errorCode !== 'autoproject_run_active') return null;
-  return parseAutoProjectActiveRun(autoprojectErrorDetail(err)?.active_run);
+  return parseAutoProjectActiveRun(apiErrorDetail(err)?.active_run);
 }

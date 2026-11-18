@@ -5,9 +5,8 @@ import type { WorkspaceCopy } from '../../hooks/useWorkspaceCopy'
 import { useAutoProjectRun } from '../../hooks/useAutoProjectRun'
 import { formatTimestamp } from '../../utils/formatters'
 import { ChatPanel } from '../ChatPanel'
-import { MarkdownWorkspaceContext, markdownComponents } from '../Message'
-import { RichMarkdown } from '../RichMarkdown'
 import { FileBrowser } from '../FileBrowser'
+import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
 import { AutoProjectDetailPanel } from './AutoProjectDetailPanel'
 import { AutoProjectRunError } from './AutoProjectRunError'
 import { AutoProjectRunPanelContext, type AutoProjectRunPanelContextValue } from './AutoProjectRunPanelContext'
@@ -98,10 +97,6 @@ export function AutoProjectRunPanel({
     [autoprojectId, run],
   )
   const chatSource = useMemo(() => conversationSource(conversationId), [conversationId])
-  const notesWorkspace = useMemo(
-    () => ({ conversationId, autoprojectId, onOpenFile }),
-    [conversationId, autoprojectId, onOpenFile],
-  )
 
   if (!run || !ctx) {
     let note
@@ -196,11 +191,12 @@ export function AutoProjectRunPanel({
             What this update left for the next one: findings, dead ends, and where its files and
             artifacts are.
           </p>
-          <div className="message-content autoproject-ctl-markdown">
-            <MarkdownWorkspaceContext.Provider value={notesWorkspace}>
-              <RichMarkdown components={markdownComponents}>{notes}</RichMarkdown>
-            </MarkdownWorkspaceContext.Provider>
-          </div>
+          <AutoProjectBriefMarkdown
+            autoprojectId={autoprojectId}
+            conversationId={conversationId}
+            content={notes}
+            onOpenFile={onOpenFile}
+          />
         </div>
       ) : shownTab === 'transcript' ? (
         <AutoProjectRunPanelContext.Provider value={ctx}>

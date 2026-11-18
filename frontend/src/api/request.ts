@@ -52,6 +52,22 @@ export function describeRequestError(err: unknown): Record<string, unknown> {
   return { ...base, status: err.statusCode, code: err.errorCode, details: err.details };
 }
 
+/** The server's error code of a failed request (`err.errorCode`), or null. */
+export function apiErrorCode(err: unknown): string | null {
+  return err instanceof ApiClientError ? err.errorCode ?? null : null;
+}
+
+/**
+ * The structured `detail` object of an error in FastAPI's envelope
+ * (`{detail: {error, message, ...extras}}`), or null (not an
+ * ApiClientError, or a flat / string body).
+ */
+export function apiErrorDetail(err: unknown): Record<string, unknown> | null {
+  if (!(err instanceof ApiClientError)) return null;
+  const detail = err.details?.detail;
+  return detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
+}
+
 type QueryValue = string | number | boolean | null | undefined;
 
 /** Query-string params; `undefined` and `null` entries are omitted. */

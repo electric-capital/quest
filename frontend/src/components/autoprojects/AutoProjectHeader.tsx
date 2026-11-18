@@ -51,9 +51,10 @@ import {
   unarchiveAutoProject,
   updateAutoProject,
 } from '../../api/autoprojectsApi'
-import { ApiClientError } from '../../api/request'
+import { apiErrorCode } from '../../api/request'
 import type { AutoProject } from '../../api/types'
 import { autoprojectsListPath } from '../../utils/autoprojectsRoute'
+import { errorMessage } from '../../utils/errorMessage'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { AutoProjectNotice } from './AutoProjectNotice'
 import './AutoProjectHeader.css'
@@ -62,14 +63,6 @@ const NOTICE_MS = 5000
 const ARCHIVED_NOTICE = 'AutoProject archived. It is hidden from the sidebar and takes no new prompts.'
 const CAP_REACHED_FALLBACK =
   'You have reached the limit of active AutoProjects; archive or delete another AutoProject first.'
-
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback
-}
-
-function errorCode(err: unknown): string | null {
-  return err instanceof ApiClientError ? err.errorCode ?? null : null
-}
 
 const RUN_ACTIVE_MESSAGE =
   'An update is still in progress. Stop it or wait for it to finish before archiving.'
@@ -260,7 +253,7 @@ export function AutoProjectHeader({ autoproject, onAutoProjectDetail, jump }: Au
         setRenaming(false)
         setRenameValue('')
       } catch (err) {
-        if (errorCode(err) === 'invalid_title') {
+        if (apiErrorCode(err) === 'invalid_title') {
           // Fixable by editing the typed title: keep the input open.
           setRenameError(errorMessage(err, 'That title cannot be used.'))
           rejectedTitleRef.current = title
@@ -292,7 +285,7 @@ export function AutoProjectHeader({ autoproject, onAutoProjectDetail, jump }: Au
         onAutoProjectDetail?.(updated)
         if (action === 'archive') showNotice(ARCHIVED_NOTICE, 'status')
       } catch (err) {
-        const code = errorCode(err)
+        const code = apiErrorCode(err)
         if (code === 'autoproject_run_active') {
           showNotice(RUN_ACTIVE_MESSAGE, 'error')
         } else if (code === 'autoprojects_cap_reached') {
@@ -332,7 +325,7 @@ export function AutoProjectHeader({ autoproject, onAutoProjectDetail, jump }: Au
       leaveDeleted()
     } catch (err) {
       setDeleting(false)
-      if (errorCode(err) === 'autoproject_not_found') {
+      if (apiErrorCode(err) === 'autoproject_not_found') {
         // Already gone (another tab): leave as on success.
         leaveDeleted()
       } else {

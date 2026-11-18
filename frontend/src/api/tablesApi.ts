@@ -18,6 +18,7 @@ import { API_BASE_URL } from './config';
 import {
   ApiClientError,
   apiDelete,
+  apiErrorDetail,
   apiGet,
   apiPost,
   apiPut,
@@ -234,11 +235,7 @@ export async function removeTableShare(id: string, shareId: number): Promise<Tab
  * The structured `detail` object of a tables error (`{error, message,
  * ...extras}`), or null (not an ApiClientError, or a flat / string body).
  */
-export function tableErrorDetail(err: unknown): Record<string, unknown> | null {
-  if (!(err instanceof ApiClientError)) return null;
-  const detail = err.details?.detail;
-  return detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
-}
+export const tableErrorDetail = apiErrorDetail;
 
 /** True for the flat 409 stale_update of a metadata edit (updateTable). */
 export function isStaleUpdateError(err: unknown): err is ApiClientError {
