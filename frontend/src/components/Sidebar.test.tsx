@@ -1,11 +1,13 @@
 // Sidebar: the Tables block follows the `tables` feature gate exactly like the
 // Docs block -- rendered right under Docs while open, absent (and nothing
 // fetched) while closed -- and its rows / header navigate to the /tables URLs.
-// Everything around the docs and tables blocks is stubbed.
+// The AutoProjects block follows the `autoprojects` gate the same way, between
+// Projects and Docs. Everything around these blocks is stubbed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import type { Project, TableListRow } from '../api/types';
+import type { AutoProjectListRow, Project, TableListRow } from '../api/types';
+import type { UseAutoProjectsOptions } from '../hooks/useAutoProjects';
 import type { UseTablesOptions } from '../hooks/useTables';
 import { Sidebar } from './Sidebar';
 
@@ -14,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   projects: [] as Project[],
   drilledProjectId: null as string | null,
   useTables: vi.fn(),
+  useAutoProjects: vi.fn(),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -61,6 +64,7 @@ vi.mock('../hooks/useDocs', () => ({
   useDocs: () => ({ docs: [], loading: false, error: null }),
 }));
 vi.mock('../hooks/useTables', () => ({ useTables: mocks.useTables }));
+vi.mock('../hooks/useAutoProjects', () => ({ useAutoProjects: mocks.useAutoProjects }));
 vi.mock('../hooks/useFlipListAnimation', () => ({
   useFlipListAnimation: () => ({ current: null }),
 }));
@@ -114,8 +118,74 @@ function renderSidebar(path = '/', onNavigateAway?: () => void) {
   );
 }
 
+function serveTables() {
+  mocks.useTables.mockReset();
+  mocks.useTables.mockImplementation(() => ({
+    tables: [], loading: false, loadingMore: false, error: null, hasMore: false,
+    loadMore: vi.fn(), refresh: vi.fn(),
+  }));
+}
+
+const AP_ROW: AutoProjectListRow = {
+  id: 'ap1', title: 'Market study', archived: false, last_activity_at: '2026-11-10T10:00:00',
+  active_run: null, unread: false, event_seq: 1, unread_seq: 0, read_seq: 0,
+};
+
+function serveAutoProjects() {
+  mocks.useAutoProjects.mockReset();
+  mocks.useAutoProjects.mockImplementation((opts: UseAutoProjectsOptions = {}) => ({
+    autoprojects: opts.enabled === false ? [] : [AP_ROW],
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }));
+}
+
+describe('Sidebar AutoProjects block', () => {
+  beforeEach(() => {
+    mocks.projects = [];
+    mocks.drilledProjectId = null;
+    serveTables();
+    serveAutoProjects();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('is absent and fetches nothing while the autoprojects gate is closed', () => {
+    mocks.enabledFeatures = ['docs'];
+    const { container } = renderSidebar();
+    expect(container.querySelector('.autoprojects-section')).toBeNull();
+    expect(screen.queryByText('AutoProjects')).toBeNull();
+    expect(mocks.useAutoProjects).toHaveBeenCalled();
+    for (const [opts] of mocks.useAutoProjects.mock.calls) {
+      expect((opts as UseAutoProjectsOptions).enabled).toBe(false);
+    }
+  });
+
+  it('renders before Docs while the gate is open and opens the AutoProject URLs', () => {
+    mocks.enabledFeatures = ['docs', 'autoprojects'];
+    const { container } = renderSidebar('/autoprojects/ap1/runs/c9');
+    const labels = [...container.querySelectorAll('.sidebar-panel-main .section-label')].map(
+      (el) => el.textContent,
+    );
+    expect(labels).toEqual(['AutoProjects', 'Docs']);
+    // The run view highlights its AutoProject's row too.
+    expect(screen.getByTitle('Market study', { selector: 'button' }).getAttribute('aria-current')).toBe('page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New AutoProject' }));
+    expect(screen.getByTestId('location').textContent).toBe('/autoprojects/new');
+    fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
+    expect(screen.getByTestId('location').textContent).toBe('/autoprojects?archived=true');
+    fireEvent.click(screen.getByTitle('Market study', { selector: 'button' }));
+    expect(screen.getByTestId('location').textContent).toBe('/autoprojects/ap1');
+  });
+});
+
 describe('Sidebar Tables block', () => {
   beforeEach(() => {
+    serveAutoProjects();
     mocks.enabledFeatures = [];
     mocks.projects = [];
     mocks.drilledProjectId = null;
