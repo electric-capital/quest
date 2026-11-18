@@ -33,7 +33,7 @@ import { isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile } from '.
 import { useWorkspaceDownload } from '../hooks/useWorkspaceDownload';
 import { buildSlackThreadUrl } from '../utils/slackLinks';
 import { seedNewConversation } from '../utils/newConversation';
-import { autoprojectThreadPath } from '../utils/autoprojectsRoute';
+import { autoprojectPath } from '../utils/autoprojectsRoute';
 import './ChatPanel.css';
 
 interface ChatPanelProps {
@@ -258,7 +258,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
   // only interacts through the subagent_return approval card. Inference API
   // conversations are one-shot transcripts driven by POST /api/inference.
   // An AutoProject run takes exactly one user message (its prompt); the user
-  // continues in the AutoProject's thread, which starts the next run.
+  // continues on the AutoProject's page, which starts the next run.
   const isReadOnly = origin === 'slack' || origin === 'user_subagent' || origin === 'inference_api'
     || origin === 'autoproject';
 
@@ -288,7 +288,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
           ? (
             <>
               This is the work behind one update of an AutoProject.{' '}
-              <Link to={autoprojectThreadPath(autoprojectId)}>Continue in the AutoProject.</Link>
+              <Link to={autoprojectPath(autoprojectId)}>Continue in the AutoProject.</Link>
             </>
           )
           : 'This is the work behind one update of an AutoProject.')

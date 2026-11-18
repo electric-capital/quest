@@ -1,0 +1,195 @@
+/* The brief History (AutoProjectBriefHistory.tsx) in the detail panel: the
+ * version list, one version's view and its word diff to the current brief.
+ * The buttons, notes and markdown come from AutoProjectBriefControls.css.
+ *
+ * Colours come from the theme tokens only, so both schemes work without
+ * scheme blocks: the word diff uses the --diff-added-* / --diff-removed-*
+ * pairs. */
+
+.autoproject-brief-history {
+  min-width: 0;
+}
+
+.autoproject-brief-history-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.autoproject-brief-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.autoproject-brief-history-item {
+  position: relative;
+  padding: 0.5rem;
+  border-radius: 8px;
+  transition: background-color 0.15s;
+}
+
+.autoproject-brief-history-item:hover {
+  background-color: var(--hover);
+}
+
+/* The select button stretches over the whole row (::after), so a tap
+   anywhere on it opens the version. */
+.autoproject-brief-history-item-select {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.autoproject-brief-history-item-select::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+
+.autoproject-brief-history-item-select:focus {
+  outline: none;
+}
+
+.autoproject-brief-history-item-select:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.autoproject-brief-history-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.autoproject-brief-history-item-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.autoproject-brief-history-retention {
+  margin: 0.75rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.autoproject-brief-history-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.autoproject-brief-history-detail-head {
+  align-self: stretch;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.autoproject-brief-history-detail-title {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.autoproject-brief-history-detail-meta {
+  margin: 0.125rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.autoproject-brief-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.autoproject-brief-history-detail-body {
+  align-self: stretch;
+  min-width: 0;
+  margin-top: 0.25rem;
+}
+
+/* Word diff from a version to the current brief (the memory suggestions'
+   ReplacementDiff look): raw markdown, removed words struck on red, added
+   words on green. */
+.autoproject-brief-diff {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--surface-raised);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.autoproject-brief-diff-legend {
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.autoproject-brief-diff-legend > span {
+  padding: 0 0.25rem;
+}
+
+.autoproject-brief-diff-body {
+  padding: 0.4rem 0.5rem;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.autoproject-brief-diff-del,
+.autoproject-brief-diff-add {
+  border-radius: 2px;
+}
+
+.autoproject-brief-diff-del {
+  background-color: var(--diff-removed-strong);
+  color: var(--diff-removed-text);
+  text-decoration: line-through;
+}
+
+.autoproject-brief-diff-add {
+  background-color: var(--diff-added-strong);
+  color: var(--diff-added-text);
+  text-decoration: none;
+}

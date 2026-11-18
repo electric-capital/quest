@@ -8,7 +8,7 @@ import { AUTOPROJECT_DRAFT_KEY } from '../../constants/drafts'
 import { useAppConfig } from '../../contexts/AppConfigContext'
 import { useConversationSkills } from '../../contexts/ConversationSkillsContext'
 import { autoprojectRunStartErrorMessage } from '../../services/autoprojectRuns'
-import { autoprojectThreadPath } from '../../utils/autoprojectsRoute'
+import { autoprojectPath } from '../../utils/autoprojectsRoute'
 import { UploadProgress, type UploadStatus } from '../UploadProgress'
 import { AutoProjectComposer } from './AutoProjectComposer'
 import { AutoProjectNotice, autoprojectNoticeState } from './AutoProjectNotice'
@@ -47,14 +47,14 @@ async function createAutoProjectForSubmission(
 }
 
 /**
- * The New AutoProject page (/autoprojects/new): an empty thread whose composer creates
- * the AutoProject on the first Send (spec 8.1), the AutoProjects twin of the home
+ * The New AutoProject page (/autoprojects/new): an empty page whose composer creates
+ * the AutoProject on the first Send, the AutoProjects twin of the home
  * screen's deferred-create flow (HomeComposer):
  *
  * 1. POST /autoprojects with the prompt: the server cuts the title from it and
  *    keeps `title_is_default`, so the first run may rename the AutoProject. When
  *    the user picked a model in the composer, it (with its thinking level)
- *    also becomes the AutoProject's default model, as later picks in the thread
+ *    also becomes the AutoProject's default model, as later picks on its page
  *    do; a refused model is dropped from the create, never blocking it
  *    (createAutoProjectForSubmission). Without a pick the AutoProject keeps no default and
  *    the run takes the composer's seeded model. A refusal (e.g. 409
@@ -63,7 +63,7 @@ async function createAutoProjectForSubmission(
  *    the home screen), but the queued skills are put back.
  * 2. startAutoProjectRunFromComposer: the run conversation, the attachment uploads
  *    (UploadProgress strip meanwhile) and the send.
- * 3. Navigate to the thread. When the AutoProject exists but its run did not
+ * 3. Navigate to the AutoProject page. When the AutoProject exists but its run did not
  *    start, or some attachments failed to upload, the message rides the
  *    router state to the AutoProject page's AutoProjectNotice.
  *
@@ -128,7 +128,7 @@ export function NewAutoProjectPage() {
       submittingRef.current = false
       setSubmitting(false)
       setUploadStatus(null)
-      navigate(autoprojectThreadPath(autoproject.id), notice ? { state: autoprojectNoticeState(notice) } : undefined)
+      navigate(autoprojectPath(autoproject.id), notice ? { state: autoprojectNoticeState(notice) } : undefined)
     },
     [navigate, setQueuedSkillsForConversation],
   )

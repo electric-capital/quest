@@ -12,11 +12,11 @@ export const HOME_DRAFT_KEY = '__home_draft__';
 
 // The AutoProjects composers (components/autoprojects/AutoProjectComposer.tsx) never send on
 // a conversation they are bound to: every send creates a fresh run
-// conversation. The New AutoProject page binds its composer to AUTOPROJECT_DRAFT_KEY; a
-// AutoProject thread binds its own to autoprojectDraftKey(autoprojectId), so a model pick, a
+// conversation. The New AutoProject page binds its composer to AUTOPROJECT_DRAFT_KEY; an
+// AutoProject's page binds its own to autoprojectDraftKey(autoprojectId), so a model pick, a
 // queued skill or unsent text (store/autoprojectDrafts.ts) stays with that AutoProject.
-// Like HOME_DRAFT_KEY these keys must never
-// get a provider lock (the composer runs with skipSendLocks).
+// Like HOME_DRAFT_KEY these keys must never get a provider lock (the composer runs
+// with skipSendLocks).
 export const AUTOPROJECT_DRAFT_KEY = '__autoproject_draft__';
 
 export function autoprojectDraftKey(autoprojectId: string): string {

@@ -16,14 +16,14 @@
  * an `error` envelope for the conversation rejects. It listens on the
  * conversation channel only for that answer and does NOT subscribe to the
  * conversation or touch webSocketManager / conversationStore: how the
- * thread follows the run (autoproject_changed, or a subscription for live
+ * page follows the run (autoproject_changed, or a subscription for live
  * progress) is the caller's business.
  *
  * A conversation whose send failed is spent: the server takes exactly one
  * message per run conversation, and an unconfirmed send may still have
  * landed. Every call therefore creates a fresh conversation; never retry a
  * send on the conversation of a failed start (on `unconfirmed`, check the
- * thread before starting again).
+ * AutoProject's updates before starting again).
  *
  * `startAutoProjectRun` rejects with an AutoProjectRunStartError only; its `reason` is the
  * server's code where there is one, and `autoprojectRunStartErrorMessage` turns it

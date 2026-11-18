@@ -7,7 +7,7 @@ import type { AutoProjectListRow } from '../../api/types'
 import { useAutoProjects } from '../../hooks/useAutoProjects'
 import { useAutoProjectUnread } from '../../hooks/useAutoProjectUnread'
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters'
-import { newAutoProjectPath, autoprojectThreadPath, autoprojectsListPath } from '../../utils/autoprojectsRoute'
+import { newAutoProjectPath, autoprojectPath, autoprojectsListPath } from '../../utils/autoprojectsRoute'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { AutoProjectNotice } from './AutoProjectNotice'
 import { AutoProjectLoadError, AutoProjectViewState } from './AutoProjectViewState'
@@ -21,7 +21,7 @@ function errorText(err: unknown, fallback: string): string {
 /**
  * The AutoProjects list (/autoprojects, /autoprojects?archived=true): the user's unarchived
  * AutoProjects or the archived ones, newest activity first, each row linking to
- * its thread with the active run's working / "Needs you" mark (as in the
+ * its page with the active run's working / "Needs you" mark (as in the
  * sidebar's AutoProjects section), the relative last-activity time (the All Tables
  * format) and the unread dot.
  *
@@ -208,7 +208,7 @@ function AutoProjectsListRow({
 
   return (
     <li className={`autoprojects-list-item${row.archived ? ' archived' : ''}`}>
-      <Link to={autoprojectThreadPath(row.id)} className="autoprojects-list-row">
+      <Link to={autoprojectPath(row.id)} className="autoprojects-list-row">
         <span className={`autoprojects-list-row-title${unread ? ' unread' : ''}`}>{row.title}</span>
         {active && active.status === 'waiting' && (
           <span className="autoprojects-list-row-state waiting">Needs you</span>

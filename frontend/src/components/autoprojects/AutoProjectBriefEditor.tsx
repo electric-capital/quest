@@ -9,7 +9,7 @@ import {
   isOverCap,
   autoprojectSaveErrorMessage,
   autoprojectTextLength,
-} from './AutoProjectControls'
+} from './AutoProjectBriefControls'
 
 /** The brief version a save is based on, and its text as the user was shown it. */
 interface BriefBase {

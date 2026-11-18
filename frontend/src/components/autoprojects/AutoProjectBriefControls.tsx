@@ -2,12 +2,12 @@ import { useEffect, useId, useRef, type KeyboardEvent } from 'react'
 import { ApiClientError } from '../../api/request'
 import { autoprojectErrorDetail } from '../../api/autoprojectsApi'
 import { formatRelativeTimestamp, parseUTCTimestamp } from '../../utils/formatters'
-import './AutoProjectControls.css'
+import './AutoProjectBriefControls.css'
 
 /**
  * Small shared pieces of the AutoProject page's brief editor and detail panel
- * (AutoProjectControls.css, which also styles the brief's markdown, the editors
- * and the brief History):
+ * (AutoProjectBriefControls.css, which also styles the brief's markdown and the
+ * editors; the brief History has its own AutoProjectBriefHistory.css):
  *
  * - `autoprojectTextLength`: the length the server checks a brief against: after
  *   stripping, in code points (Python `len`), so an emoji counts once and

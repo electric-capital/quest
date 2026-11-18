@@ -13,14 +13,14 @@ export interface AutoProjectQuestionCardProps {
   /** Locks the option buttons (e.g. the composer is sending an answer). */
   disabled?: boolean
   /** After a successful answer (or a 409 question_resolved): the server's Question when known.
-   *  The thread refreshes its runs here. */
+   *  The page refreshes its runs here. */
   onAnswered?: (question: AutoProjectQuestion | null) => void
   /** Replaces the pending question's hint under the options (by default it
    *  points at the page's composer, above the Updates card). */
   hint?: ReactNode
 }
 
-/** The outcome this card learned from the server before the thread refetched. */
+/** The outcome this card learned from the server before the page refetched. */
 interface LocalOutcome {
   handleId: string
   status: 'answered' | 'cancelled'
@@ -47,11 +47,11 @@ function resolvedOutcome(err: unknown, handleId: string): LocalOutcome | null {
 }
 
 /**
- * A question an AutoProject run asked with `ask_autoproject_question`, shown in the AutoProject
- * thread under the run's prompt. Pending: the question with one button per
- * suggested answer (free text goes through the thread's composer). A click
+ * A question an AutoProject run asked with `ask_autoproject_question`, shown on the
+ * AutoProject page under the run's prompt. Pending: the question with one button per
+ * suggested answer (free text goes through the page's composer). A click
  * posts the answer; once the server accepts it the card shows it at once,
- * before the thread's refetch brings the answered question. Answered: the
+ * before the page's refetch brings the answered question. Answered: the
  * answer and its time. Cancelled: the run was stopped first.
  *
  * The option buttons unmount once the answer lands, so focus would fall to
@@ -75,7 +75,7 @@ export function AutoProjectQuestionCard({
 
   const handleId = question.handle_id
   // The prop wins once it is resolved; a local outcome only covers the gap
-  // until the thread's refetch, and only for the question it was taken for.
+  // until the page's refetch, and only for the question it was taken for.
   const local = question.status === 'pending' && outcome?.handleId === handleId ? outcome : null
   const status = local?.status ?? question.status
   const answer = local ? local.answer : question.answer

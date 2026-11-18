@@ -179,8 +179,8 @@ export function MobileShell({
       ? `list:${autoprojectsRoute.archived ? 'archived' : 'active'}`
       : autoprojectsRoute.kind === 'new'
         ? 'new'
-        : autoprojectsRoute.kind === 'thread'
-          ? `thread:${autoprojectsRoute.autoprojectId}`
+        : autoprojectsRoute.kind === 'page'
+          ? `page:${autoprojectsRoute.autoprojectId}`
           : `run:${autoprojectsRoute.autoprojectId}:${autoprojectsRoute.conversationId}`
     : null
   useEffect(() => {

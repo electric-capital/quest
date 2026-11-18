@@ -15,7 +15,7 @@ import { AutoProjectActivityLine } from './AutoProjectActivityLine'
 import { playArrival } from './autoprojectArrival'
 import { AutoProjectQuestionCard } from './AutoProjectQuestionCard'
 import { AutoProjectRunError } from './AutoProjectRunError'
-import { isActiveRunStatus } from './autoprojectThreadComposer'
+import { isActiveRunStatus } from './autoprojectComposerState'
 
 /** An approval or connect card of a run, as the runs page lists them. */
 export type AutoProjectRunCard = ActionRequestMessageType | ConnectRequestMessageType

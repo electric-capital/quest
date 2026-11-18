@@ -1,6 +1,6 @@
 /**
  * API client for AutoProjects (/app/api/autoprojects; see the module docstrings of
- * chat/autoprojects/routes.py, chat/autoprojects/thread.py for the response shapes and
+ * chat/autoprojects/routes.py, chat/autoprojects/views.py for the response shapes and
  * chat/autoprojects/http.py for the error bodies).
  *
  * Every call goes through the shared request wrapper, so failures reject
@@ -121,8 +121,8 @@ export async function deleteAutoProject(id: string): Promise<{ success: boolean 
 }
 
 /**
- * Acknowledge the thread up to `seq` (sent only by a focused client showing
- * the thread). The server moves `read_seq` forward only, clamped to
+ * Acknowledge the AutoProject's updates up to `seq` (sent only by a focused
+ * client showing its page). The server moves `read_seq` forward only, clamped to
  * `event_seq`, and returns the resulting seqs.
  */
 export function markAutoProjectRead(id: string, seq: number): Promise<AutoProjectReadState> {
@@ -175,7 +175,7 @@ export function restoreAutoProjectBriefVersion(
 // --- Runs and questions ----------------------------------------------------
 
 /**
- * One page of the thread, newest first. `beforeSeq` is the previous page's
+ * One page of the AutoProject's runs (its updates), newest first. `beforeSeq` is the previous page's
  * `next_before_seq`; `limit` 1..100 (server default 20).
  */
 export function listAutoProjectRuns(

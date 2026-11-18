@@ -1,9 +1,9 @@
 /**
- * The AutoProject thread's activity line: what the ACTIVE run of an AutoProject is
+ * The AutoProject page's activity line: what the ACTIVE run of an AutoProject is
  * doing right now, as one short label, plus whether a model turn is
  * streaming on the run's conversation.
  *
- * The thread is not a ChatPanel: this hook follows the run conversation's
+ * The page is not a ChatPanel: this hook follows the run conversation's
  * live events straight off the persistent socket and never touches
  * webSocketManager, conversationStore or useConversation. It keeps no
  * transcript, only the newest label.
@@ -54,9 +54,9 @@
  *
  * `streaming`: the ack's `run_active`; `resume_started`, `text_delta` and
  * `sub_agent_tool_use` set it true; `send_message_finished` sets it false
- * and keeps the last label (the thread re-renders the run from
+ * and keeps the last label (the page re-renders the run from
  * `autoproject_changed`). null until the first ack. The hook does not interpret
- * the run's AutoProject status: the thread decides what to show for `waiting`.
+ * the run's AutoProject status: the page decides what to show for `waiting`.
  */
 
 import { useEffect, useState } from 'react';
@@ -160,7 +160,7 @@ function seqOf(row: Row): number | null {
   return typeof row.seq === 'number' ? row.seq : null;
 }
 
-/** Follows one run conversation's live events for the thread's activity line.
+/** Follows one run conversation's live events for the page's activity line.
  *  Pass the ACTIVE run's conversation id (running or waiting), null otherwise. */
 export function useAutoProjectRunActivity(conversationId: string | null): AutoProjectRunActivity {
   const [state, setState] = useState<ActivityState>(() => initialState(conversationId));

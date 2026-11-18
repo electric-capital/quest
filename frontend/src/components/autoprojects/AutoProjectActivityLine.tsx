@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { parseUTCTimestamp } from '../../utils/formatters'
 
 /**
- * The compact activity line under an active run in the AutoProject thread (spec
- * 8.2): a working indicator (the chat's typing dots while the run works, a
+ * The compact activity line under an active run on the AutoProject page: a
+ * working indicator (the chat's typing dots while the run works, a
  * still "needs you" dot while it waits), the label of what the run is doing
  * now, the elapsed time since the run started (ticking every second, `m:ss`
  * or `h:mm:ss`) and Stop. "View run" sits on the update's header row

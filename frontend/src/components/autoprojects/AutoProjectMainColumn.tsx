@@ -34,12 +34,12 @@ import {
   type AutoProjectComposerSubmission,
 } from './autoprojectComposerSend'
 import {
-  deriveAutoProjectThreadComposer,
+  deriveAutoProjectComposerState,
   findActiveRun,
   isActiveRunStatus,
   oldestPendingQuestion,
   waitingOnPhrase,
-} from './autoprojectThreadComposer'
+} from './autoprojectComposerState'
 
 /** Distance (px) from the bottom within which the column counts as pinned there. */
 const NEAR_BOTTOM_PX = 80
@@ -100,7 +100,7 @@ function newestElement(section: HTMLElement | null, order: AutoProjectUpdatesOrd
  * the bottom. The page opens at the TOP, on the brief.
  *
  * It owns the run side of the page: the composer's state
- * (deriveAutoProjectThreadComposer: start a run, answer the pending question, or
+ * (deriveAutoProjectComposerState: start a run, answer the pending question, or
  * locked with Stop; an archived AutoProject gets an Unarchive notice instead), the
  * optimistic entry of a run being started, Stop, the delete-entry confirm,
  * the activity of the active run (useAutoProjectRunActivity, once, for that run
@@ -249,7 +249,7 @@ export function AutoProjectMainColumn({
   }
   const claimArrival = useCallback((key: string) => arrivalsRef.current.delete(key), [])
 
-  const composer = deriveAutoProjectThreadComposer({
+  const composer = deriveAutoProjectComposerState({
     archived: autoproject.archived,
     runs: runList,
     autoprojectActiveRun: autoproject.active_run,

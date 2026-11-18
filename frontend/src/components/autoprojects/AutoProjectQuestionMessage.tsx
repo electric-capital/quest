@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AutoProjectQuestion, AutoProjectQuestionTranscriptMessage } from '../../api/types'
 import { persistentWebSocket } from '../../services/PersistentWebSocket'
-import { autoprojectThreadPath } from '../../utils/autoprojectsRoute'
+import { autoprojectPath } from '../../utils/autoprojectsRoute'
 import { AutoProjectQuestionCard } from './AutoProjectQuestionCard'
 import { AutoProjectRunPanelContext } from './AutoProjectRunPanelContext'
 
@@ -74,7 +74,7 @@ export function AutoProjectQuestionMessage({ message }: { message: AutoProjectQu
   const hint = autoprojectId ? (
     <>
       {question.options.length > 0 ? 'Or answer in your own words ' : 'Answer '}
-      <Link to={autoprojectThreadPath(autoprojectId)} className="autoproject-question-hint-link">
+      <Link to={autoprojectPath(autoprojectId)} className="autoproject-question-hint-link">
         in the AutoProject
       </Link>
       .

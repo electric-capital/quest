@@ -184,13 +184,13 @@ class UnreadStore {
     this.emit();
   }
 
-  /** The main view now shows this AutoProject's thread (loaded). */
+  /** The main view now shows this AutoProject's page (loaded). */
   setViewedAutoProject(id: string): void {
     this.viewedAutoProjectId = id;
     this.acknowledgeViewedAutoProject();
   }
 
-  /** The main view no longer shows this AutoProject's thread. */
+  /** The main view no longer shows this AutoProject's page. */
   clearViewedAutoProject(id: string): void {
     if (this.viewedAutoProjectId === id) this.viewedAutoProjectId = null;
   }

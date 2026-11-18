@@ -1,4 +1,4 @@
-/* AutoProjectQuestionCard -- a run's ask_autoproject_question in the AutoProject thread. A
+/* AutoProjectQuestionCard -- a run's ask_autoproject_question on the AutoProject page. A
  * sibling of the inline action-request / connect cards (8px radius, accent
  * ring while it waits for the user, quieter once resolved), drawn with the
  * theme tokens so it follows the light and dark schemes. The error tint has

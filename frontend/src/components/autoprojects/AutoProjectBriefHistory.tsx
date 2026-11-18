@@ -12,7 +12,8 @@ import { boundedWordDiff, type WordDiffSegment } from '../../utils/wordDiff'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
 import { versionSourceLabel } from './autoprojectBriefSource'
-import { AutoProjectTimeAgo, autoprojectSaveErrorMessage } from './AutoProjectControls'
+import { AutoProjectTimeAgo, autoprojectSaveErrorMessage } from './AutoProjectBriefControls'
+import './AutoProjectBriefHistory.css'
 
 // Mirrors AUTOPROJECT_BRIEF_MAX_VERSIONS (chat/autoprojects/constants.py).
 const RETENTION_NOTE = 'The last 50 versions of the brief are kept.'

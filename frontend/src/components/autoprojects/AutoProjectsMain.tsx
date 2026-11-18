@@ -21,7 +21,7 @@ export function AutoProjectsMain({ route, enabled }: { route: AutoProjectsRoute;
       return <AutoProjectsListView archived={route.archived} />
     case 'new':
       return <NewAutoProjectPage />
-    case 'thread':
+    case 'page':
       return <AutoProjectPage key={route.autoprojectId} autoprojectId={route.autoprojectId} runConversationId={null} />
     case 'run':
       return (

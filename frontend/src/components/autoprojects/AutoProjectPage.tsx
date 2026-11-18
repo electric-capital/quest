@@ -8,7 +8,7 @@ import { useAutoProjectRuns } from '../../hooks/useAutoProjectRuns'
 import { useMarkAutoProjectViewed } from '../../hooks/useAutoProjectUnread'
 import { overwritePromptText, useWorkspaceCopy } from '../../hooks/useWorkspaceCopy'
 import { useWorkspaceDownload } from '../../hooks/useWorkspaceDownload'
-import { autoprojectRunPath, autoprojectThreadPath } from '../../utils/autoprojectsRoute'
+import { autoprojectRunPath, autoprojectPath } from '../../utils/autoprojectsRoute'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { FileBrowser, isCsvFile, isImageFile, isJsonFile, isPdfFile, isViewableFile, type FileBrowserListing } from '../FileBrowser'
 import { LazyFileViewerModal } from '../LazyFileViewerModal'
@@ -111,7 +111,7 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
   const routeState = location.state
   const closeRunRoute = useCallback(() => {
     if (fromPage) navigate(-1)
-    else navigate(autoprojectThreadPath(autoprojectId), { replace: true })
+    else navigate(autoprojectPath(autoprojectId), { replace: true })
   }, [fromPage, navigate, autoprojectId])
 
   const closePanel = useCallback(() => {

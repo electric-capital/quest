@@ -3,7 +3,7 @@
  * AutoProjects are top-level, so the drill-down has none): the user's unarchived
  * AutoProjects with the newest activity first. The whole header is a button that
  * opens the AutoProjects list, with a "+" beside it for New AutoProject; a row opens that
- * AutoProject's thread. Each row carries the unread dot and one status slot: a
+ * AutoProject's page. Each row carries the unread dot and one status slot: a
  * working spinner while a run is running, "Needs you" while one waits on the
  * user, otherwise the last-activity time. A quiet footer links to the full
  * list (when there are more AutoProjects than rows) and to the archived list.

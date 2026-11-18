@@ -20,7 +20,7 @@
 export type AutoProjectsRoute =
   | { kind: 'list'; archived: boolean }
   | { kind: 'new' }
-  | { kind: 'thread'; autoprojectId: string }
+  | { kind: 'page'; autoprojectId: string }
   | { kind: 'run'; autoprojectId: string; conversationId: string }
 
 const AUTOPROJECTS_PREFIX = '/autoprojects'
@@ -68,7 +68,7 @@ export function parseAutoProjectsRoute(pathname: string, search: string): AutoPr
     if (segments[0] === NEW_SEGMENT) return { kind: 'new' }
     const autoprojectId = decodeId(segments[0])
     if (autoprojectId === null || autoprojectId === NEW_SEGMENT) return null
-    return { kind: 'thread', autoprojectId }
+    return { kind: 'page', autoprojectId }
   }
 
   if (segments.length === 3 && segments[1] === RUNS_SEGMENT) {
@@ -86,17 +86,17 @@ export function autoprojectsListPath(opts: { archived?: boolean } = {}): string 
   return opts.archived ? `${AUTOPROJECTS_PREFIX}?archived=true` : AUTOPROJECTS_PREFIX
 }
 
-/** URL of the New AutoProject page (an empty thread that creates the AutoProject on first send). */
+/** URL of the New AutoProject page (an empty page that creates the AutoProject on first send). */
 export function newAutoProjectPath(): string {
   return `${AUTOPROJECTS_PREFIX}/${NEW_SEGMENT}`
 }
 
 /** URL of one AutoProject's page. */
-export function autoprojectThreadPath(autoprojectId: string): string {
+export function autoprojectPath(autoprojectId: string): string {
   return `${AUTOPROJECTS_PREFIX}/${encodeURIComponent(autoprojectId)}`
 }
 
 /** URL of an AutoProject's page with one run open in its detail panel, by the run's conversation id. */
 export function autoprojectRunPath(autoprojectId: string, conversationId: string): string {
-  return `${autoprojectThreadPath(autoprojectId)}/${RUNS_SEGMENT}/${encodeURIComponent(conversationId)}`
+  return `${autoprojectPath(autoprojectId)}/${RUNS_SEGMENT}/${encodeURIComponent(conversationId)}`
 }

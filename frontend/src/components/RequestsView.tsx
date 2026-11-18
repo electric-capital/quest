@@ -21,7 +21,7 @@ import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/
 import { useNavigationState } from '../contexts/NavigationContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AUTOPROJECTS_FEATURE } from '../api/autoprojectsApi';
-import { autoprojectRunPath, autoprojectThreadPath } from '../utils/autoprojectsRoute';
+import { autoprojectRunPath, autoprojectPath } from '../utils/autoprojectsRoute';
 import {
   totalPendingSuggestions,
   usePendingSuggestionCounts,
@@ -373,13 +373,13 @@ export function RequestsView() {
   };
 
   // A request an AutoProject run proposed (AutoProjects gate open): an open one is
-  // answered in the AutoProject's thread, which shows the run's open cards; a
+  // answered on the AutoProject's page, which shows the run's open cards; a
   // resolved one opens its run's transcript.
   const handleGoToAutoProject = (autoprojectId: string, request: EnrichedActionRequest) => {
     setShowRequestsView(false);
     navigate(
       request.status === 'open'
-        ? autoprojectThreadPath(autoprojectId)
+        ? autoprojectPath(autoprojectId)
         : autoprojectRunPath(autoprojectId, request.conversation_id),
     );
   };

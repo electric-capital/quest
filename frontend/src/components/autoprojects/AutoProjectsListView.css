@@ -126,7 +126,7 @@
   gap: 0.125rem;
 }
 
-/* One row: the thread link (title, state, time, unread dot) and the row's
+/* One row: the page link (title, state, time, unread dot) and the row's
  * action buttons beside it (buttons cannot sit inside the link). The item
  * carries the hover background so link and buttons read as one pill. */
 .autoprojects-list-item {

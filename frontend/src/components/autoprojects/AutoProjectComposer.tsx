@@ -1,11 +1,12 @@
 /**
  * AutoProjectComposer: the shared <Composer> set up for AutoProjects, used by the
- * New AutoProject page and the AutoProject thread.
+ * New AutoProject page and the AutoProject page.
  *
  * An AutoProject composer never sends on the conversation it is bound to: every
  * Send starts a run on a fresh run conversation (services/autoprojectRuns.ts), so
  * the composer is bound to a stable draft key (constants/drafts.ts:
- * AUTOPROJECT_DRAFT_KEY on the New AutoProject page, autoprojectDraftKey(autoprojectId) in a thread)
+ * AUTOPROJECT_DRAFT_KEY on the New AutoProject page, autoprojectDraftKey(autoprojectId) on an
+ * AutoProject's page)
  * that only keys the model and skills lookups, exactly like the home
  * screen's HOME_DRAFT_KEY:
  *
@@ -15,11 +16,11 @@
  *   once the run conversation exists (startAutoProjectRunFromComposer);
  * - `hideFlags`: AutoProject runs take no conversation flags;
  * - the model is seeded on mount (and on a draft key change) with the
- *   `initialModel` when given (a thread passes the AutoProject's model), else the
+ *   `initialModel` when given (an AutoProject's page passes its model), else the
  *   user's last-used private model from a fresh GET /me, and picks are
  *   draft-safe (setDraftModelForConversation: no conversation PATCH). A
  *   user's pick in the selector is then reported to `onModelChange` (the
- *   thread persists it as the AutoProject's default model, the New AutoProject page
+ *   AutoProject page persists it as the AutoProject's default model, the New AutoProject page
  *   passes it to the create); the seed never is;
  * - a draft key never keeps "loaded" skills (each run starts from a fresh
  *   context), so the skill picker always offers every skill again;
@@ -49,7 +50,7 @@ import { Composer } from '../Composer';
 import type { AutoProjectComposerSubmission } from './autoprojectComposerSend';
 
 export interface AutoProjectComposerProps {
-  /** The draft key (AUTOPROJECT_DRAFT_KEY, or autoprojectDraftKey(autoprojectId) in a thread). */
+  /** The draft key (AUTOPROJECT_DRAFT_KEY, or autoprojectDraftKey(autoprojectId) on an AutoProject's page). */
   draftKey: string;
   onSubmit: (submission: AutoProjectComposerSubmission) => void;
   /** A submit is in flight: the input is locked, no Stop. */

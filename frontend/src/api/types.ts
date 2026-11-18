@@ -2056,7 +2056,7 @@ export interface ShareTableRequest {
 }
 
 // AutoProjects types (/app/api/autoprojects). Field names match the response
-// builders of chat/autoprojects/thread.py (`autoproject_list_row`, `build_autoproject_detail`,
+// builders of chat/autoprojects/views.py (`autoproject_list_row`, `build_autoproject_detail`,
 // `build_brief_state`, `build_runs_page`, `read_state`) exactly.
 
 /** A run's state: `running` / `waiting` (on a question or approval) are active. */
@@ -2152,7 +2152,7 @@ export interface AutoProjectQuestion {
   answered_at: string | null;
 }
 
-/** One entry of the AutoProject thread (GET /autoprojects/{id}/runs). */
+/** One run of an AutoProject, an update on its page (GET /autoprojects/{id}/runs). */
 export interface AutoProjectRun {
   id: string;
   // 1-based run number within the AutoProject ("Run N").
@@ -2177,7 +2177,7 @@ export interface AutoProjectRun {
   open_requests: Array<ActionRequestMessage | ConnectRequestMessage>;
 }
 
-/** One page of the thread, newest first; page on with `next_before_seq`. */
+/** One page of an AutoProject's runs, newest first; page on with `next_before_seq`. */
 export interface AutoProjectRunsPage {
   runs: AutoProjectRun[];
   next_before_seq: number | null;

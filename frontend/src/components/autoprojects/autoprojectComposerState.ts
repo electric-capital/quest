@@ -1,5 +1,5 @@
 /**
- * The AutoProject thread's composer state machine (spec 8.2), as a pure function
+ * The AutoProject page's composer state machine, as a pure function
  * of what the AutoProject page knows, so AutoProjectMainColumn only renders its answer:
  *
  * - `archived`: the AutoProject is archived; no composer (the page shows the
@@ -29,9 +29,9 @@
 
 import type { AutoProjectActiveRun, AutoProjectQuestion, AutoProjectRun } from '../../api/types';
 
-export type AutoProjectThreadComposerMode = 'archived' | 'start' | 'answer' | 'locked';
+export type AutoProjectComposerMode = 'archived' | 'start' | 'answer' | 'locked';
 
-export interface AutoProjectThreadComposerInput {
+export interface AutoProjectComposerStateInput {
   archived: boolean;
   /** The loaded runs, ascending seq. */
   runs: AutoProjectRun[];
@@ -45,8 +45,8 @@ export interface AutoProjectThreadComposerInput {
   appName: string;
 }
 
-export interface AutoProjectThreadComposerView {
-  mode: AutoProjectThreadComposerMode;
+export interface AutoProjectComposerState {
+  mode: AutoProjectComposerMode;
   /** Locks the input without Stop (a submit in flight, or a run not loaded yet). */
   busy: boolean;
   /** Locks the input with Stop on `stopConversationId`. */
@@ -96,8 +96,8 @@ export function waitingOnPhrase(run: AutoProjectRun): string {
   return 'you';
 }
 
-export function deriveAutoProjectThreadComposer(input: AutoProjectThreadComposerInput): AutoProjectThreadComposerView {
-  const base: AutoProjectThreadComposerView = {
+export function deriveAutoProjectComposerState(input: AutoProjectComposerStateInput): AutoProjectComposerState {
+  const base: AutoProjectComposerState = {
     mode: 'start',
     busy: false,
     disabled: false,

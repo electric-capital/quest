@@ -6,7 +6,7 @@ import type { AutoProjectRunsView } from '../../hooks/useAutoProjectRuns'
 import { AutoProjectActivityLine } from './AutoProjectActivityLine'
 import { playArrival } from './autoprojectArrival'
 import { AutoProjectRunEntry, AutoProjectRunRequest, type AutoProjectRunActivityView, type AutoProjectRunCard } from './AutoProjectRunEntry'
-import { isActiveRunStatus } from './autoprojectThreadComposer'
+import { isActiveRunStatus } from './autoprojectComposerState'
 import type { AutoProjectUpdatesOrder } from './autoprojectUpdatesOrder'
 
 /** A run being started from the composer, shown until its run is in the runs list. */

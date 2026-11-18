@@ -1,5 +1,5 @@
 /**
- * Data layer for an AutoProject's thread: its runs, paged newest first by the
+ * Data layer for an AutoProject page's updates: its runs, paged newest first by the
  * server (GET /autoprojects/{id}/runs) and exposed in ASCENDING seq order (display
  * order, oldest at the top).
  *
@@ -14,8 +14,8 @@
  *   changes land; loaded runs older than that are kept.
  * - The older-page cursor is kept when older runs are kept; otherwise the
  *   page's own `next_before_seq` is taken.
- * - When the page reaches the bottom of the thread (`next_before_seq`
- *   null) it IS the whole thread and replaces the list. When it does not
+ * - When the page reaches the oldest run (`next_before_seq` null) it IS
+ *   the whole list and replaces it. When it does not
  *   overlap or touch the loaded runs (its lowest seq is above the newest
  *   loaded seq + 1 while older runs exist), a gap could hide runs, so the
  *   page replaces the list with its cursor (older pages load again on
@@ -104,7 +104,7 @@ function mergeNewestPage(
 ): { runs: AutoProjectRun[]; nextBeforeSeq: number | null; replaced: boolean } {
   const fetched = ascending(page);
   const replace = { runs: fetched, nextBeforeSeq: page.next_before_seq, replaced: true };
-  // The page reaches the bottom: it is the whole thread.
+  // The page reaches the oldest run: it is the whole list.
   if (page.next_before_seq === null || fetched.length === 0) return replace;
   if (prev.runs.length === 0) return replace;
   const lowest = fetched[0].seq;
@@ -205,7 +205,7 @@ export function useAutoProjectRuns(
   refreshRef.current = refresh;
 
   // Newest page on mount and whenever the AutoProject (or page size) changes,
-  // dropping the previous thread (and any in-flight response for it) first.
+  // dropping the previous AutoProject's runs (and any in-flight response for them) first.
   useEffect(() => {
     requestSeqRef.current += 1;
     loadOlderSeqRef.current += 1;

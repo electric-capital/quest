@@ -6,7 +6,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { AutoProjectBriefEditor } from './AutoProjectBriefEditor'
 import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
 import { briefAttribution, parseBriefSource } from './autoprojectBriefSource'
-import { AutoProjectTimeAgo } from './AutoProjectControls'
+import { AutoProjectTimeAgo } from './AutoProjectBriefControls'
 
 const EMPTY_TEXT = 'No brief yet. The first update writes it, or write one yourself.'
 

@@ -50,7 +50,7 @@ import { useTables } from '../hooks/useTables';
 import { parseTablesRoute, tableViewerPath, tablesListPath } from '../utils/tablesRoute';
 import { SIDEBAR_TABLE_LIMIT } from '../utils/allTablesGrouping';
 import { useAutoProjects } from '../hooks/useAutoProjects';
-import { newAutoProjectPath, parseAutoProjectsRoute, autoprojectThreadPath, autoprojectsListPath } from '../utils/autoprojectsRoute';
+import { newAutoProjectPath, parseAutoProjectsRoute, autoprojectPath, autoprojectsListPath } from '../utils/autoprojectsRoute';
 import { SearchModal } from './SearchModal';
 import { QuestLogo } from './QuestLogo';
 import { RequestsBadge } from './sidebar/RequestsBadge';
@@ -156,7 +156,7 @@ export const Sidebar = React.memo(function Sidebar({
   const userAutoProjects = useAutoProjects({ enabled: autoprojectsEnabled });
   const autoprojectsRoute = parseAutoProjectsRoute(location.pathname, location.search);
   const activeAutoProjectId =
-    autoprojectsRoute?.kind === 'thread' || autoprojectsRoute?.kind === 'run' ? autoprojectsRoute.autoprojectId : null;
+    autoprojectsRoute?.kind === 'page' || autoprojectsRoute?.kind === 'run' ? autoprojectsRoute.autoprojectId : null;
 
   // Per-project conversation filters. Default to false (hide archived, hide
   // Slack conversations) on every page load; no persistence. Independent of
@@ -557,7 +557,7 @@ export const Sidebar = React.memo(function Sidebar({
                 loading={userAutoProjects.loading}
                 error={userAutoProjects.error}
                 activeAutoProjectId={activeAutoProjectId}
-                onOpenAutoProject={(id) => handleOpenAutoProjectsPath(autoprojectThreadPath(id))}
+                onOpenAutoProject={(id) => handleOpenAutoProjectsPath(autoprojectPath(id))}
                 onOpenAll={() => handleOpenAutoProjectsPath(autoprojectsListPath())}
                 onOpenArchived={() => handleOpenAutoProjectsPath(autoprojectsListPath({ archived: true }))}
                 onNewAutoProject={() => handleOpenAutoProjectsPath(newAutoProjectPath())}

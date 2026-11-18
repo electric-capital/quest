@@ -6,7 +6,7 @@ import { RichMarkdown } from '../RichMarkdown'
 /**
  * A brief's markdown (the current brief in the main column, or one History
  * version in the detail panel), rendered with the chat markdown typography
- * (`message-content`, its bubble chrome stripped in AutoProjectControls.css).
+ * (`message-content`, its bubble chrome stripped in AutoProjectBriefControls.css).
  * Memoized: the parse of a long brief must not rerun on unrelated page
  * state such as typing in an editor.
  *
