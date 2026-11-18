@@ -137,14 +137,14 @@ def make_autoproject(env, who="alice", title="Launch plan", **kwargs):
     return autoproject
 
 
-def start_run(env, autoproject, prompt="Do the next step", who="alice"):
-    """A run the way the send path starts one: its conversation, then the
-    run row (``running``)."""
+def start_run(env, autoproject, prompt="Do the next step"):
+    """A run the way the send path starts one: its conversation (owned by
+    the AutoProject's owner), then the run row (``running``)."""
     from chat.storage import ChatStorage
 
-    conversation_id = _run(
-        ChatStorage.create_autoproject_run_conversation(uid(env, who), autoproject["id"])
-    )
+    conversation_id = _run(ChatStorage.create_autoproject_run_conversation(
+        autoproject["user_id"], autoproject["id"],
+    ))
     run = _run(env.store.allocate_run(
         autoproject["id"], conversation_id=conversation_id, prompt=prompt,
     ))
@@ -993,7 +993,7 @@ class TestAnswerQuestion:
         autoproject, _run_row, _handle = self._waiting(env)
         _other, _other_run, other_handle = self._waiting(env, make_autoproject(env, title="B"))
         bob_ap = make_autoproject(env, "bob", title="Bob")
-        bob_run = start_run(env, bob_ap, who="bob")
+        bob_run = start_run(env, bob_ap)
         set_waiting(env, bob_run)
         bob_handle = ask(env, bob_run, who="bob")
         # An approval card's handle is not a question either.
