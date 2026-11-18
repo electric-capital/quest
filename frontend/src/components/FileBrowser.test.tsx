@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   downloadFolder: vi.fn(),
   saveBlobToDisk: vi.fn(),
   globalHandlers: new Set<(event: Record<string, unknown>) => void>(),
+  reconnectHandlers: new Set<() => void>(),
 }));
 
 vi.mock('../api/fileApi', async (importOriginal) => {
@@ -39,6 +40,10 @@ vi.mock('../services/PersistentWebSocket', () => ({
     onGlobalEvent: (handler: (event: Record<string, unknown>) => void) => {
       mocks.globalHandlers.add(handler);
       return () => mocks.globalHandlers.delete(handler);
+    },
+    onReconnect: (handler: () => void) => {
+      mocks.reconnectHandlers.add(handler);
+      return () => mocks.reconnectHandlers.delete(handler);
     },
   },
 }));
@@ -104,6 +109,7 @@ afterEach(() => {
   mocks.downloadFolder.mockReset();
   mocks.saveBlobToDisk.mockReset();
   mocks.globalHandlers.clear();
+  mocks.reconnectHandlers.clear();
 });
 
 describe('FileBrowser source', () => {

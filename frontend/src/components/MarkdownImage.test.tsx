@@ -188,7 +188,7 @@ describe('MarkdownLink', () => {
 
     const plain = fireEvent.click(note);
     expect(plain).toBe(false); // default prevented: no new tab
-    expect(onOpenFile).toHaveBeenCalledWith('sub/note.txt', 'note.txt');
+    expect(onOpenFile).toHaveBeenCalledWith('sub/note.txt', 'note.txt', { kind: 'conversation', id: 'c1' });
 
     onOpenFile.mockClear();
     expect(fireEvent.click(note, { ctrlKey: true })).toBe(true);
