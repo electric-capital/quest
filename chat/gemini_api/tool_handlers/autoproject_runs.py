@@ -1,21 +1,23 @@
-"""AutoProject run log read tools: ``list_autoproject_runs`` and ``read_autoproject_run``.
+"""AutoProject run log read tools: ``list_autoproject_runs`` and
+``read_autoproject_run``.
 
-Both read the log of the AutoProject the calling conversation is an AutoProject run
-of (spec 00012 sections 5 and 6.2). The AutoProject comes from ``ToolContext``
-(``autoproject_id``), never from an argument, so a call can only ever name runs of
-its own AutoProject: ``read_autoproject_run(run=N)`` looks the number up within that AutoProject,
-and run N of another AutoProject is simply not found. Callers: the run's top-level
-model, its sub-agents and its sandbox scripts (the script bridge passes the
-lease's AutoProject ids); outside an AutoProject run both refuse with ``not_autoproject_run``.
+Both read the log of the AutoProject the calling conversation is an
+AutoProject run of. The AutoProject comes from ``ToolContext``
+(``autoproject_id``), never from an argument, so a call can only ever name
+runs of its own AutoProject: ``read_autoproject_run(run=N)`` looks the number
+up within that AutoProject, and run N of another AutoProject is simply not
+found. Callers: the run's top-level model, its sub-agents and its sandbox
+scripts (the script bridge passes the lease's AutoProject ids); outside an
+AutoProject run both refuse with ``not_autoproject_run``.
 
-Hidden vs missing (spec section 10, invariant 7): an AutoProject the caller does not
-own answers exactly like a missing one (``autoproject_not_found`` with the one
-not-found text), and a run number that was never allocated answers exactly
-like one whose entry was deleted (``run_not_found``).
+Hidden vs missing: an AutoProject the caller does not own answers exactly
+like a missing one (``autoproject_not_found`` with the one not-found text),
+and a run number that was never allocated answers exactly like one whose
+entry was deleted (``run_not_found``).
 
 An ACTIVE run (``running`` / ``waiting``) has no published log entry yet. A
-``brief_conflict`` (chat/autoprojects/runs.py) can leave a pending summary, result
-and notes saved on a run that is still active; both tools show such a run
+``brief_conflict`` (chat/autoprojects/runs.py) can leave a pending summary,
+result and notes saved on a run that is still active; both tools show such a run
 as in progress with ``summary``, ``result`` and ``notes`` null, and mark the
 calling run as the current one.
 

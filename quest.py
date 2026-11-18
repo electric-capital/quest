@@ -737,8 +737,9 @@ async def serve_spa_tables(rest: str = ""):
 @app.get("/autoprojects")
 @app.get("/autoprojects/{rest:path}")
 async def serve_spa_autoprojects(rest: str = ""):
-    """Serve SPA for the AutoProjects deep links (/autoprojects/new, /autoprojects/<id>
-    thread, /autoprojects/<id>/runs/<conversation id> run view)."""
+    """Serve SPA for the AutoProjects deep links (/autoprojects/new,
+    /autoprojects/<id> AutoProject page, /autoprojects/<id>/runs/<conversation
+    id> run view)."""
     return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 @app.get("/set-password")

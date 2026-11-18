@@ -1,11 +1,11 @@
-"""HTTP routes for AutoProjects (spec issue #213, section 7).
+"""HTTP routes for AutoProjects.
 
 Everything is under ``/app/api``, authenticated by
 ``get_current_user_cookie_or_apikey_checked`` (which enforces
 ``require_user_allowed``). Every route starts with the gate: 403
-``autoprojects_disabled`` while the ``autoprojects`` feature gate is closed for the user,
-then, for ``/autoprojects/{id}...``, 404 ``autoproject_not_found`` with the same body for
-a missing AutoProject and for one owned by someone else
+``autoprojects_disabled`` while the ``autoprojects`` feature gate is closed for
+the user, then, for ``/autoprojects/{id}...``, 404 ``autoproject_not_found``
+with the same body for a missing AutoProject and for one owned by someone else
 (``chat.autoprojects.http.require_autoproject_for_route``). FastAPI's 422 for an
 ill-typed body or query parameter comes before the handler runs.
 
@@ -234,7 +234,7 @@ async def mark_autoproject_read_endpoint(
     body: MarkAutoProjectReadRequest,
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """Acknowledge the thread up to ``seq`` (focused client only).
+    """Mark the AutoProject read up to ``seq`` (focused client only).
     ``read_seq`` only moves forward and is clamped to ``event_seq``."""
     await require_autoproject_for_route(user, autoproject_id)
     try:
@@ -322,7 +322,7 @@ async def list_runs_endpoint(
     limit: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
-    """One page of the thread, newest first."""
+    """One page of the AutoProject's runs, newest first."""
     await require_autoproject_for_route(user, autoproject_id)
     return await views.build_runs_page(autoproject_id, before_seq=before_seq, limit=limit)
 

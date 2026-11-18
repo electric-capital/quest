@@ -1,34 +1,38 @@
 """AutoProjects data access layer.
 
-Owns every write to the ``autoprojects``, ``autoproject_runs`` and ``autoproject_brief_versions``
-tables (spec issue #213, sections 3 and 4). Async functions that each open
+Owns every write to the ``autoprojects``, ``autoproject_runs`` and
+``autoproject_brief_versions`` tables. Async functions that each open
 a fresh ``AsyncSessionLocal()`` session (imported at module level so tests
 can monkeypatch it) and return plain dicts with ISO datetimes; the shapes
 are documented on :func:`_autoproject_to_dict`, :func:`_run_to_dict` and
 :func:`_brief_state`.
 
-Scoping: functions taking ``user_id`` are owner-scoped, and an AutoProject owned by
-someone else raises (or reads as) exactly what a missing AutoProject does
-(invariant 7). The rest take an AutoProject or run id only and are for callers that
-already did the access check (``require_owned_autoproject`` in routes, the run's
-own AutoProject resolved from ``ToolContext`` in tools, the run driver).
+Scoping: functions taking ``user_id`` are owner-scoped, and an AutoProject
+owned by someone else raises (or reads as) exactly what a missing AutoProject
+does. The rest take an AutoProject or run id only and are for callers that
+already did the access check (the routes' guard,
+``chat.autoprojects.http.require_autoproject_for_route`` over
+``service.require_owned_autoproject``; the run's own AutoProject resolved from
+``ToolContext`` in tools; the run driver).
 
 Concurrency: SQLite takes its single write lock at a transaction's first
 write, and reads before it see whatever was last committed. Every
-check-then-write here (the AutoProject cap, invariant 6's one active run, the
-brief's version token, the conversation sweep of an AutoProject delete) therefore
-issues its UPDATE or INSERT first and checks inside the same transaction,
-rolling back on refusal, so two concurrent writers cannot both pass a check.
+check-then-write here (the AutoProject cap, the one active run per
+AutoProject, the brief's version token, the conversation sweep of an
+AutoProject delete) therefore issues its UPDATE or INSERT first and checks
+inside the same transaction, rolling back on refusal, so two concurrent
+writers cannot both pass a check.
 
-Counters on the ``autoprojects`` row: ``event_seq`` is bumped by every write that
-changes what the thread shows and by AutoProject edits (the realtime
-``autoproject_changed`` event carries it), ``last_activity_at`` moves on create and
-on every run write (it orders the sidebar), and the unread pair follows the
-conversation scheme (``unread_seq > read_seq``, both only move forward).
+Counters on the ``autoprojects`` row: ``event_seq`` is bumped by every write
+that changes what the AutoProject page shows and by AutoProject edits (the
+realtime ``autoproject_changed`` event carries it), ``last_activity_at`` moves
+on create and on every run write (it orders the sidebar), and the unread pair
+follows the conversation scheme (``unread_seq > read_seq``, both only move
+forward).
 
-Caps and statuses come from chat/autoprojects/constants.py. The filesystem (the
-AutoProject workspace, the run conversations' directories) is never touched here;
-delete functions return the ids the caller sweeps.
+Caps and statuses come from chat/autoprojects/constants.py. The filesystem
+(the AutoProject workspace, the run conversations' directories) is never
+touched here; delete functions return the ids the caller sweeps.
 """
 
 from collections.abc import Iterable
@@ -191,7 +195,7 @@ class AutoProjectArchivedError(AutoProjectStoreError):
 
 class AutoProjectRunActiveError(AutoProjectStoreError):
     """The AutoProject has an active run (``running`` or ``waiting``) and the
-    operation needs none (invariant 6, archive, run delete).
+    operation needs none (starting another run, archive, run delete).
     ``details["active_run"]`` is ``{id, seq, status}``."""
 
     code = "autoproject_run_active"
@@ -234,7 +238,7 @@ class AutoProjectRunFinishedError(AutoProjectStoreError):
 
 class AutoProjectRunExistsError(AutoProjectStoreError):
     """The conversation already has its run: a run conversation takes
-    exactly one user message (invariant 1)."""
+    exactly one user message."""
 
     code = "autoproject_run_single_message"
 
@@ -770,7 +774,7 @@ async def set_title_from_run(autoproject_id: str, title: str) -> bool:
 
     The ``title_is_default`` check is in the UPDATE's WHERE and the UPDATE
     clears the flag, so at most one model-side rename ever lands and none
-    after the user renamed the AutoProject (invariant 4).
+    after the user renamed the AutoProject.
 
     Returns:
         Whether the title was applied.
@@ -809,9 +813,9 @@ async def set_autoproject_archived(user_id: int, autoproject_id: str, archived: 
         The AutoProject dict.
 
     Raises:
-        AutoProjectNotFoundError; AutoProjectRunActiveError when archiving an AutoProject with an
-        active run; AutoProjectCapReachedError when unarchiving would exceed
-        ``MAX_ACTIVE_AUTOPROJECTS_PER_USER``.
+        AutoProjectNotFoundError; AutoProjectRunActiveError when archiving an
+        AutoProject with an active run; AutoProjectCapReachedError when
+        unarchiving would exceed ``MAX_ACTIVE_AUTOPROJECTS_PER_USER``.
     """
     archived = bool(archived)
     async with AsyncSessionLocal() as db:
@@ -951,8 +955,8 @@ async def allocate_run(
 
     One write transaction that bumps ``next_run_seq``, ``event_seq`` and
     ``last_activity_at`` first (taking the write lock), then refuses an
-    archived AutoProject or one with an active run (invariant 6; this is the one
-    place it is checked), then inserts the run with the pre-bump
+    archived AutoProject or one with an active run (one active run per
+    AutoProject; this is the one place it is checked), then inserts the run with the pre-bump
     ``next_run_seq`` as its ``seq``. A refusal rolls back, so its seq is not
     consumed; a seq once used is never reused, run deletes included.
 
@@ -1349,7 +1353,7 @@ async def delete_run(user_id: int, autoproject_id: str, run_id: str) -> str:
 async def list_runs_page(
     autoproject_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
 ) -> dict:
-    """One page of the thread, newest first, keyset-paged on ``seq``.
+    """One page of the AutoProject's runs, newest first, keyset-paged on ``seq``.
 
     Returns:
         ``{"runs": [run dict, ...], "next_before_seq": int | None}``: at
@@ -1374,9 +1378,9 @@ async def list_runs_page(
 
 
 async def get_run_seqs(autoproject_id: str, run_ids: Iterable[str]) -> dict[str, int]:
-    """``{run_id: seq}`` for the runs of ``autoproject_id`` among ``run_ids`` (one
-    query). Deleted runs and runs of another AutoProject are absent. The thread
-    resolves brief sources ``run:<id>`` to "run N" with it."""
+    """``{run_id: seq}`` for the runs of ``autoproject_id`` among ``run_ids``
+    (one query). Deleted runs and runs of another AutoProject are absent. The
+    AutoProject page resolves brief sources ``run:<id>`` to "run N" with it."""
     ids = sorted({rid for rid in run_ids if isinstance(rid, str) and rid})
     if not ids:
         return {}
@@ -1716,8 +1720,8 @@ async def restore_brief_version(
 
 
 async def bump_event_seq(autoproject_id: str) -> Optional[int]:
-    """Bump ``event_seq`` for a thread change made outside this module (a
-    question posted or answered). Returns the new seq, or None when the
+    """Bump ``event_seq`` for a change to the AutoProject page made outside
+    this module (a question posted or answered). Returns the new seq, or None when the
     AutoProject is gone."""
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
@@ -1749,7 +1753,7 @@ async def mark_autoproject_unread(autoproject_id: str) -> bool:
 
 
 async def mark_autoproject_read(user_id: int, autoproject_id: str, *, up_to_seq: int) -> bool:
-    """Acknowledge the thread up to ``up_to_seq``: ``read_seq`` becomes
+    """Mark the AutoProject read up to ``up_to_seq``: ``read_seq`` becomes
     ``max(read_seq, min(up_to_seq, event_seq))``, so a late or repeated
     acknowledgement never hides newer output.
 

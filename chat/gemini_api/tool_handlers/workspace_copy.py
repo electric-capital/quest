@@ -3,8 +3,9 @@
 ``src`` and ``dest`` are both scheme-qualified (``chat://`` / ``proj://``,
 or ``chat://`` / ``autoproject://`` in a run of an AutoProject, see
 ``file_paths``); every direction is allowed, same-space copies included
-(devplan 00009, revised 2026-10-08: scheme-qualified file tools). The copy runs ``chat.file_storage.copy_entry`` in a worker thread
--- the same engine and error codes as the ``/files/copy-to-project`` /
+(devplan 00009, revised 2026-10-08: scheme-qualified file tools). The copy
+runs ``chat.file_storage.copy_entry`` in a worker thread -- the same engine
+and error codes as the ``/files/copy-to-project`` /
 ``/files/copy-from-project`` routes in ``chat/file_routes.py`` -- never
 moves, and publishes ``file_list_changed`` for the destination space only
 (a copy never changes its source).

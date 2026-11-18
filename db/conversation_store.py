@@ -167,10 +167,10 @@ async def list_conversations_meta(
             (``routine_id`` set). Runs whose routine was since deleted
             have ``routine_id`` nulled and are kept.
         include_autoproject_runs: If True, keep the run conversations of
-            AutoProjects (``autoproject_id`` set). Off by default: a run is shown in its
-            AutoProject's thread and never appears in the Conversations sidebar or
-            search. Account delete passes True so their directories are
-            swept too.
+            AutoProjects (``autoproject_id`` set). Off by default: a run is
+            shown on its AutoProject page and never appears in the
+            Conversations sidebar or search. Account delete passes True so
+            their directories are swept too.
         limit: Optional row cap (already-validated by the caller).
         before: Optional keyset cursor as ``(last_message_at, id)`` -- return
             only rows strictly older than this pair under the
@@ -283,8 +283,9 @@ async def record_messages_appended(
 # answers in the web UI. Slack, inference API and cross-user subagent
 # conversations are driven and read elsewhere (their web view is read-only),
 # so a dot on them would never clear in normal use. AutoProject runs (origin
-# "autoproject") are left out too: unread is tracked on the AutoProject, not on each run's
-# conversation, and the unread queries below also skip ``autoproject_id`` rows.
+# "autoproject") are left out too: unread is tracked on the AutoProject, not on
+# each run's conversation, and the unread queries below also skip
+# ``autoproject_id`` rows.
 UNREAD_ORIGINS = (None, "web")
 
 

@@ -282,9 +282,9 @@ async def list_action_requests_enriched(
     """List all action requests for a user with conversation/routine/project context.
 
     Returns enriched dicts that include routine_name, project_name, project_id,
-    autoproject_id and autoproject_title (an AutoProject run's request: the inbox links it to
-    the AutoProject thread) in addition to the standard action request fields. Uses
-    batch loading to avoid N+1 queries.
+    autoproject_id and autoproject_title (an AutoProject run's request: the
+    inbox links it to the AutoProject page) in addition to the standard action
+    request fields. Uses batch loading to avoid N+1 queries.
     """
     async with AsyncSessionLocal() as db:
         # 1. Get all action requests for the user

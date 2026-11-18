@@ -364,12 +364,12 @@ class ChatStorage:
     Ownership is authoritative in the conversations SQLite table.
 
     ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` /
-    ``get_table_dir`` / ``get_autoproject_dir`` (and the helpers built on them) are
-    the ONLY places that turn an id into a filesystem path. They validate the
-    id and containment-check the result, so every caller is safe by
-    construction; production code must not join ``CHATS_DIR`` /
-    ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` / ``AUTOPROJECTS_DIR`` with an
-    id itself. Ownership is
+    ``get_table_dir`` / ``get_autoproject_dir`` (and the helpers built on
+    them) are the ONLY places that turn an id into a filesystem path. They
+    validate the id and containment-check the result, so every caller is safe
+    by construction; production code must not join ``CHATS_DIR`` /
+    ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` / ``AUTOPROJECTS_DIR``
+    with an id itself. Ownership is
     deliberately NOT checked here -- schedulers, migrations and cross-user subagents resolve
     paths without a "current user"; HTTP routes go through
     ``chat.conversation_access`` which adds the DB ownership lookup.
@@ -493,16 +493,17 @@ class ChatStorage:
     def get_autoproject_workspace_root(autoproject_id: str) -> Path:
         """Return the AutoProject workspace root ``AUTOPROJECTS_DIR / id / "workspace"``.
 
-        The browsable root shared by every run of the AutoProject (``autoproject://`` for
-        the file tools, ``/autoproject`` in the sandbox). Inherits the canonical-id
-        and containment checks of :meth:`get_autoproject_dir` and additionally
-        refuses a ``workspace`` entry that resolves outside this AutoProject's own
-        dir (a planted symlink, incl. one into another AutoProject). The directory
-        is NOT created here.
+        The browsable root shared by every run of the AutoProject
+        (``autoproject://`` for the file tools, ``/autoproject`` in the
+        sandbox). Inherits the canonical-id and containment checks of
+        :meth:`get_autoproject_dir` and additionally refuses a ``workspace``
+        entry that resolves outside this AutoProject's own dir (a planted
+        symlink, incl. one into another AutoProject). The directory is NOT
+        created here.
 
         Raises:
-            InvalidStorageIdError: non-canonical id or path outside the AutoProject
-            dir.
+            InvalidStorageIdError: non-canonical id or path outside the
+            AutoProject dir.
         """
         autoproject_dir = ChatStorage.get_autoproject_dir(autoproject_id)
         return _check_contained(autoproject_dir, autoproject_dir / "workspace")
@@ -1194,11 +1195,11 @@ class ChatStorage:
     ) -> None:
         """Merge *fields* into the persisted ``autoproject_question`` entry in place.
 
-        Answering an AutoProject run's question (``answered`` plus the ``answer``)
-        or cancelling it (``cancelled``) writes the outcome into the entry
-        keyed by its ``wait_handle_id``, so the run view shows the same
-        state the AutoProject thread shows (chat/autoprojects/questions.py). Best-effort
-        like :meth:`update_connect_request_message`.
+        Answering an AutoProject run's question (``answered`` plus the
+        ``answer``) or cancelling it (``cancelled``) writes the outcome into
+        the entry keyed by its ``wait_handle_id``, so the run view shows the
+        same state the AutoProject page shows (chat/autoprojects/questions.py).
+        Best-effort like :meth:`update_connect_request_message`.
         """
         ChatStorage._rewrite_message_in_place(
             conversation_id,

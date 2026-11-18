@@ -1,17 +1,17 @@
 """AutoProject run driver and completion: how a run of an AutoProject finishes.
 
-An AutoProject run (spec issue #213, sections 6.2 and 6.3) is one conversation
-that answers one prompt and must end by calling ``complete_autoproject_run``,
-which writes the run's log entry (and optionally a new brief) straight into
-the AutoProject. Two pieces live here:
+An AutoProject run is one conversation that answers one prompt and must end
+by calling ``complete_autoproject_run``, which writes the run's log entry (and
+optionally a new brief) straight into the AutoProject. Two pieces live here:
 
-- :func:`complete_autoproject_run`, the body of the ``complete_autoproject_run`` loop
-  tool (``_handle_complete_autoproject_run`` in chat/gemini_api/turn_tools.py).
-  Validates the whole call before writing anything, applies the brief
-  against the version the run's prompt was built from (a brief the user
-  edited during the run is a ``brief_conflict``: the entry is saved and the
-  run stays open for a merge), completes the run and tells the loop to end
-  with no further model call.
+- :func:`complete_autoproject_run`, the body of the ``complete_autoproject_run``
+  loop tool (``_handle_complete_autoproject_run`` in
+  chat/gemini_api/turn_tools.py). Validates the whole call before writing
+  anything, applies the brief against the version the run's prompt was
+  built from (a brief the user edited during the run is a
+  ``brief_conflict``: the entry is saved and the run stays open for a
+  merge), completes the run and tells the loop to end with no further model
+  call.
 - :func:`drive_autoproject_run`, modelled on ``drive_routine_run``
   (chat/routine_runs.py), which wraps the first turn of a run
   (``_run_send_message`` in chat/realtime/socket.py) and every wait-handle
@@ -21,7 +21,7 @@ the AutoProject. Two pieces live here:
   ===========================================  ==============================
   The turn ended                                Run becomes
   ===========================================  ==============================
-  with ``complete_autoproject_run`` accepted           ``completed`` (by the tool)
+  with ``complete_autoproject_run`` accepted    ``completed`` (by the tool)
   suspended (``run_ended_suspended()``)         ``waiting``
   without either, nudges left                   one more turn with
                                                 :data:`AUTOPROJECT_COMPLETION_NUDGE`
@@ -39,8 +39,11 @@ cancel (a ``waiting`` run, or Stop on an approval card).
 
 Every status change bumps the AutoProject's ``event_seq`` (in the store) and
 publishes ``autoproject_changed`` and ``autoproject_list_changed``
-(:func:`_after_status_change`). Completed, failed and waiting runs mark the
-AutoProject unread; a stopped one does not (the user was looking at it; spec 10).
+(:func:`_after_status_change`). Every finish (completed, failed or stopped)
+goes through :func:`settle_finished_run`, directly or through :func:`end_run`
+for a stop or a failure: it closes the run conversation's open cards, marks
+the AutoProject unread and publishes. Completed, failed and waiting runs mark
+the AutoProject unread; a stopped one does not (the user was looking at it).
 """
 
 from __future__ import annotations
@@ -91,7 +94,7 @@ AUTOPROJECT_NUDGE_MESSAGE_TYPE = "autoproject_nudge"
 AUTOPROJECT_COMPLETION_NUDGE = (
     "SYSTEM: Your turn ended without calling complete_autoproject_run, so this "
     "AutoProject run has not saved its result or its handoff "
-    "notes, and the user has seen nothing of it: the AutoProject thread shows only "
+    "notes, and the user has seen nothing of it: the AutoProject page shows only "
     "the result of complete_autoproject_run. Finish any work the user's prompt "
     "asked for that is still outstanding, then call complete_autoproject_run as "
     "your last tool call with summary (one line), result (your answer to "
@@ -426,7 +429,7 @@ async def complete_autoproject_run(
 ) -> CompletionOutcome:
     """Finish the calling AutoProject run with its log entry (``complete_autoproject_run``).
 
-    The run is the calling conversation's own (invariant 5): ``autoproject_id`` and
+    The run is the calling conversation's own: ``autoproject_id`` and
     ``run_id`` come from the run context, never from ``args``.
 
     Order: validate every argument before writing anything (a refusal

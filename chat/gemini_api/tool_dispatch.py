@@ -202,11 +202,11 @@ class ToolContext:
     # what a routine run must not do reads it (suggest_doc_note: nobody
     # reviews a routine conversation's suggestions as it runs).
     is_routine: bool = False
-    # AutoProject run (the conversation has an autoproject_id, origin="autoproject"):
-    # autoproject_id is the conversation row's AutoProject, autoproject_run_id its autoproject_runs
-    # row. Not a run kind of its own: run_kind stays "top_level". The
-    # run-scoped AutoProject tools resolve the AutoProject and run from here, never from
-    # tool arguments (spec 00012 invariant 5).
+    # AutoProject run (the conversation has an autoproject_id,
+    # origin="autoproject"): autoproject_id is the conversation row's
+    # AutoProject, autoproject_run_id its autoproject_runs row. Not a run kind
+    # of its own: run_kind stays "top_level". The run-scoped AutoProject tools
+    # resolve the AutoProject and run from here, never from tool arguments.
     autoproject_id: str | None = None
     autoproject_run_id: str | None = None
 
@@ -309,13 +309,13 @@ async def _tool_edit_workspace_file(ctx: ToolContext, args: dict) -> str:
     )
 
 
-# Space-aware file tools (chat:// / proj:// / autoproject:// paths; devplan 00009,
-# revised 2026-10-08; issue #213). Offered in project conversations
+# Space-aware file tools (chat:// / proj:// / autoproject:// paths; devplan
+# 00009, revised 2026-10-08; issue #213). Offered in project conversations
 # (chat:// + proj://) and AutoProject runs (chat:// + autoproject://, keyed off
-# ctx.autoproject_id). A proj:// path without ctx.project_id or in an AutoProject run
-# returns a structured ``no_project`` error, an autoproject:// path outside an AutoProject
-# run ``no_autoproject``, a bare or malformed path ``invalid_path`` -- the handlers
-# never raise.
+# ctx.autoproject_id). A proj:// path without ctx.project_id or in an
+# AutoProject run returns a structured ``no_project`` error, an autoproject://
+# path outside an AutoProject run ``no_autoproject``, a bare or malformed path
+# ``invalid_path`` -- the handlers never raise.
 
 
 async def _tool_list_files(ctx: ToolContext, args: dict) -> str:
@@ -358,9 +358,9 @@ async def _tool_copy_file(ctx: ToolContext, args: dict) -> str:
     )
 
 
-# Read tools over the calling run's own AutoProject (issue #213, spec 6.2):
-# listed only in AutoProject runs (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the handlers refuse
-# a conversation without ctx.autoproject_id.
+# Read tools over the calling run's own AutoProject (issue #213): listed only
+# in AutoProject runs (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the handlers refuse a
+# conversation without ctx.autoproject_id.
 
 
 async def _tool_list_autoproject_runs(ctx: ToolContext, args: dict) -> str:
@@ -588,7 +588,7 @@ async def _tool_send_gmail_to_self(ctx: ToolContext, args: dict) -> str:
 async def _tool_set_conversation_name(ctx: ToolContext, args: dict) -> str:
     if ctx.is_autoproject_run:
         # The AutoProject-run prompt does not offer the tool: a run conversation's
-        # name is never shown (the AutoProject thread shows the AutoProject's title).
+        # name is never shown (the AutoProject page shows the AutoProject's title).
         return json.dumps({
             "error": (
                 "An AutoProject run has no conversation name to set. "
@@ -1089,16 +1089,17 @@ async def _dispatch_tool_call(
             or one-click). It does not change ``run_kind`` (a routine run
             is ``top_level`` and records doc notes deliveries); it keeps
             suggest_doc_note out (``ToolContext.is_routine``).
-        autoproject_id: The conversation's AutoProject id when it is an AutoProject run
-            (``conversations.autoproject_id``), else None. Like is_routine it does
-            not change ``run_kind``; it sets ``ToolContext.is_autoproject_run``,
-            switches the space-aware file tools to ``chat://`` +
-            ``autoproject://`` (``proj://`` is refused), mounts the AutoProject workspace
-            at ``/autoproject`` in the sandbox, and scopes list_autoproject_runs /
+        autoproject_id: The conversation's AutoProject id when it is an
+            AutoProject run (``conversations.autoproject_id``), else None. Like
+            is_routine it does not change ``run_kind``; it sets
+            ``ToolContext.is_autoproject_run``, switches the space-aware file
+            tools to ``chat://`` + ``autoproject://`` (``proj://`` is
+            refused), mounts the AutoProject workspace at ``/autoproject`` in
+            the sandbox, and scopes list_autoproject_runs /
             read_autoproject_run to this AutoProject.
-        autoproject_run_id: The ``autoproject_runs`` row id of that conversation, set
-            together with autoproject_id. The run-scoped AutoProject tools act on this
-            run only.
+        autoproject_run_id: The ``autoproject_runs`` row id of that
+            conversation, set together with autoproject_id. The run-scoped
+            AutoProject tools act on this run only.
 
     Returns:
         Tuple of (result_string, extra_parts) where extra_parts is a
@@ -1130,8 +1131,8 @@ async def _dispatch_tool_call(
 # load_skills, whose public arm admits PUBLIC_SYSTEM_SKILLS alone.
 _PUBLIC_DIRECT_TOOLS = frozenset({"run_script", "run_python", "load_skills"})
 
-# The loop tools of an AutoProject run (AUTOPROJECT_RUN_TOOLS): refused by shared dispatch,
-# which only sub-agents and scripts reach with these names.
+# The loop tools of an AutoProject run (AUTOPROJECT_RUN_TOOLS): refused by
+# shared dispatch, which only sub-agents and scripts reach with these names.
 _AUTOPROJECT_RUN_LOOP_TOOLS = frozenset({"complete_autoproject_run", "ask_autoproject_question"})
 
 
@@ -1231,7 +1232,7 @@ async def _dispatch_tool_call_inner(
             }), []
 
     # The AutoProject-run loop tools act on the calling run and only its own
-    # top-level model may call them (spec 5, invariant 5). The top-level
+    # top-level model may call them. The top-level
     # loop handles both names in TURN_TOOL_HANDLERS before shared dispatch,
     # so reaching here means a sub-agent or a script asked: refuse
     # explicitly rather than with an unknown-tool error.

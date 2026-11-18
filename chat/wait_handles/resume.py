@@ -12,8 +12,8 @@ These suspend sentinels feed into here:
   resolves the handle but deliberately kicks NO resume -- see
   ``_stopped_handle_ids``)
 * ``request_service_connection`` (web inline connect card)
-* ``ask_autoproject_question`` (an AutoProject run's question, answered from the
-  AutoProject thread)
+* ``ask_autoproject_question`` (an AutoProject run's question, answered from
+  the AutoProject page)
 
 For Slack-origin conversations the resume reads the conversation's
 stored ``origin`` and the matching ``slack_conversations`` row so the

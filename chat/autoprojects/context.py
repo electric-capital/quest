@@ -1,15 +1,14 @@
 """The AutoProject context: what an AutoProject run inherits, rendered for its system prompt.
 
 An AutoProject run starts with a fresh model context, so everything it knows about
-earlier AutoProject runs comes from this block (spec issue #213, section 6.1),
-rendered once per run (the session's system prompt is frozen for the life
-of the run conversation, so a run resumed after a question keeps the context
-it started with). In order:
+earlier AutoProject runs comes from this block, rendered once per run (the
+session's system prompt is frozen for the life of the run conversation, so a
+run resumed after a question keeps the context it started with). In order:
 
 1. **What an AutoProject run is**: fresh context, how to finish
    (``complete_autoproject_run``), how to ask (``ask_autoproject_question``), the read
    tools, and the rule that the user never opens the run. It stands alone:
-   a run needs no skill load to finish correctly (spec 6.5).
+   a run needs no skill load to finish correctly.
 2. **Title and run number**.
 3. **The brief**, whole, or a "No brief yet" line.
 4. **Recent runs**: the log window, full entries newest first (prompt
@@ -21,7 +20,7 @@ it started with). In order:
 5. **Earlier runs**: an index of one-line entries (``#seq date summary``),
    then a count of the runs in neither tier pointing at ``list_autoproject_runs``.
 
-Prompt injection (spec section 10): the brief, the summaries and the notes
+Prompt injection: the brief, the summaries and the notes
 are model-written text from earlier runs that reaches later prompts without
 review. Stored text is therefore delimited with tags (``<brief>``, ``<run
 seq date status>`` holding ``<prompt>``, ``<summary>``, ``<outcome>`` and
@@ -245,7 +244,7 @@ def _render_index_line(run: dict) -> str:
 _PREAMBLE = """\
 ## AutoProject
 
-This conversation is one run of an AutoProject, and the user's message is its prompt. Every run starts with a fresh context. What carries over between runs is this section, the log (`list_autoproject_runs`, `read_autoproject_run`) and the AutoProject files in `autoproject://`: the next run will know only what this one leaves there. The user follows this AutoProject in its thread, which shows each prompt with its result and nothing else of a run, so never tell them to open or look at this run.
+This conversation is one run of an AutoProject, and the user's message is its prompt. Every run starts with a fresh context. What carries over between runs is this section, the log (`list_autoproject_runs`, `read_autoproject_run`) and the AutoProject files in `autoproject://`: the next run will know only what this one leaves there. The user follows this AutoProject on its AutoProject page, which shows each prompt with its result and nothing else of a run, so never tell them to open or look at this run.
 
 - Finish by calling `complete_autoproject_run` once, as your last step. It takes `summary` (one line for the log), `result` (your answer to the user, the only text of this run they see), `notes` (the handoff to the next run: what it needs that the result does not say, such as findings, dead ends and where files and artifacts are) and, when this run changed the state of the work, `brief` (the whole brief, rewritten). A lasting preference the user states in a prompt (tone, sources, things to avoid) belongs in the brief, so later runs follow it. The call ends the run.
 - When only the user can unblock you, ask with `ask_autoproject_question` instead of guessing; the run waits for the answer.
@@ -448,7 +447,7 @@ def build_autoproject_context(
 
 def build_autoproject_subagent_context(autoproject: dict) -> str:
     """Render the read-only ``## AutoProject`` block for a sub-agent (``agent_task``)
-    spawned by an AutoProject run (spec 6.4): title and brief, with the
+    spawned by an AutoProject run: title and brief, with the
     same tags, labelling and per-field cuts as :func:`build_autoproject_context`,
     bounded by ``AUTOPROJECT_CONTEXT_MAX_CHARS`` too."""
     parts = [

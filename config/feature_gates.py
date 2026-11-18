@@ -125,18 +125,19 @@ FEATURE_BROWSER = "browser"
 # Access can be restricted to specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_DREAMING = "dreaming"
 
-# AutoProjects (see spec issue #213): long-lived, user-owned units of work
-# answered by runs that each start with a fresh model context over the
-# AutoProject's brief and work log (``autoprojects`` / ``autoproject_runs`` /
-# ``autoproject_brief_versions`` in quest.db, the AutoProject workspace under
+# AutoProjects: long-lived, user-owned units of work answered by runs that
+# each start with a fresh model context over the AutoProject's brief and work
+# log (``autoprojects`` / ``autoproject_runs`` / ``autoproject_brief_versions``
+# in quest.db, the AutoProject workspace under
 # ``<data_dir>/autoprojects/<id>/workspace`` resolved only via
-# ``ChatStorage.get_autoproject_dir``). Closed for a user = the AutoProject tools and the
-# system skill are hidden from the prompt (connected-services pseudo-key
-# "autoprojects"), the /app/api/autoprojects routes 403 ``autoprojects_disabled``, starting a run
-# is refused on the send path and the sidebar section is hidden. A waiting
-# run can still be stopped. Nothing is deleted: reopening the gate restores
-# everything. Access can be restricted to specific users
-# (PER_USER_ACCESS_FEATURES).
+# ``ChatStorage.get_autoproject_dir``). Closed for a user = the AutoProject
+# tools and the system skill are hidden from the prompt (connected-services
+# pseudo-key "autoprojects"), the /app/api/autoprojects routes 403
+# ``autoprojects_disabled``, starting a run is refused on the send path and the
+# sidebar section is hidden. A waiting run can still be stopped, and one whose
+# resume comes while the gate is closed is stopped instead of resumed. Nothing
+# is deleted: reopening the gate restores everything. Access can be restricted
+# to specific users (PER_USER_ACCESS_FEATURES).
 FEATURE_AUTOPROJECTS = "autoprojects"
 
 # All admin-gateable features. Extend this tuple (and FEATURE_LABELS) when a
@@ -264,9 +265,9 @@ FEATURE_LABELS: dict[str, dict[str, str]] = {
         "label": "AutoProjects",
         "description": (
             "Lets users keep long-lived AutoProjects they prompt into again and "
-            "again. Each prompt is answered by a run that starts with a "
+            "again. Each prompt is answered by an update that starts with a "
             "fresh context and inherits only a brief the model keeps "
-            "current, a log of earlier runs and the "
+            "current, a log of earlier updates and the "
             "AutoProject's shared files. Access can be granted to all users or "
             "only to specific users. Turning it off hides AutoProjects; nothing is "
             "deleted."

@@ -89,11 +89,12 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "list_tables",
     "get_table",
     "query_rows",
-    # AutoProject run log reads (spec 00012 section 6.4): scoped to the AutoProject
-    # of the AutoProject run that launched the container (the lease's autoproject_id,
-    # passed to dispatch below); outside an AutoProject run they refuse with
-    # not_autoproject_run. The two run-scoped loop tools (complete_autoproject_run,
-    # ask_autoproject_question) are never reachable from a script.
+    # AutoProject run log reads: scoped to the AutoProject of the AutoProject
+    # run that launched the container (the lease's autoproject_id, passed to
+    # dispatch below); outside an AutoProject run they refuse with
+    # not_autoproject_run. The two run-scoped loop tools
+    # (complete_autoproject_run, ask_autoproject_question) are never reachable
+    # from a script.
     "list_autoproject_runs",
     "read_autoproject_run",
 })

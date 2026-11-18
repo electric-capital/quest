@@ -404,14 +404,15 @@ _PROJECT_SCRIPT_EXAMPLE = (
 
 # --- AutoProject runs (issue #213) ----------------------------------------
 #
-# An AutoProject run has two file spaces like a project conversation, with the AutoProject
-# workspace in place of the project one: chat:// (the run's own
-# workspace, /workspace in scripts) and autoproject:// (the AutoProject workspace shared by
-# every run of the AutoProject, /autoproject in scripts). Its prompts offer the
-# five scheme-qualified file tools in their AutoProject-run wording
-# (AUTOPROJECT_RUN_FILE_TOOL_SPECS) and the run log reads (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS),
-# and hide the four *_workspace_file tools and the rest of the project-only
-# tools. Every other prompt hides AUTOPROJECT_ONLY_TOOL_CALL_TOOLS.
+# An AutoProject run has two file spaces like a project conversation, with the
+# AutoProject workspace in place of the project one: chat:// (the run's own
+# workspace, /workspace in scripts) and autoproject:// (the AutoProject
+# workspace shared by every run of the AutoProject, /autoproject in scripts).
+# Its prompts offer the five scheme-qualified file tools in their
+# AutoProject-run wording (AUTOPROJECT_RUN_FILE_TOOL_SPECS) and the run log
+# reads (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS), and hide the four *_workspace_file
+# tools and the rest of the project-only tools. Every other prompt hides
+# AUTOPROJECT_ONLY_TOOL_CALL_TOOLS.
 AUTOPROJECT_RUN_EXCLUDED_TOOLS: frozenset[str] = (
     PROJECT_HIDDEN_WORKSPACE_TOOLS
     | (PROJECT_ONLY_TOOL_CALL_TOOLS - SCHEME_FILE_TOOLS)
@@ -434,8 +435,8 @@ _AUTOPROJECT_RUN_PLAIN_PATHS_SENTENCES = (
 )
 
 # The top-level AutoProject run's paragraph. Static (the same for every run of
-# every AutoProject), so it sits with the AutoProject-run naming note in the cacheable
-# part of the prompt, never in the per-run ``## AutoProject`` block.
+# every AutoProject), so it sits with the AutoProject-run naming note in the
+# cacheable part of the prompt, never in the per-run ``## AutoProject`` block.
 _AUTOPROJECT_RUN_FILE_SPACES_SECTION = (
     "**Two file spaces:** This run has its own workspace and this "
     "AutoProject has a shared one. The file tools name the space in every "
@@ -660,14 +661,14 @@ _ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run
 
 **Routine completion (IMPORTANT):** When every piece of work the routine prompt asked for is done and you have written your final summary, call the top-level `routine_completed` tool (it has its own function declaration -- call it directly, not through `tool_call`) EXACTLY ONCE as your LAST tool call. A run that ends without this call is treated as unfinished: you will receive a follow-up message asking you to check that all the requested work was done and to call `routine_completed`. If part of the task could not be completed, still call `routine_completed` and explain what is missing in its `summary`."""
 
-# Replacement for AutoProject runs (issue #213): a run conversation
-# is never shown by name (the AutoProject thread shows the AutoProject's title), so
-# ``set_conversation_name`` is not offered. How an AutoProject run finishes is in the
-# ``## AutoProject`` section near the end of the prompt.
+# Replacement for AutoProject runs (issue #213): a run conversation is never
+# shown by name (the AutoProject page shows the AutoProject's title), so
+# ``set_conversation_name`` is not offered. How an AutoProject run finishes is
+# in the ``## AutoProject`` section near the end of the prompt.
 _AUTOPROJECT_RUN_NAMING_SECTION = """**AutoProject run:** This conversation is one run of an AutoProject and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. How to finish the run, ask the user and hand off to the next run is in the `## AutoProject` section at the end of this prompt. If the title shown there is still just the start of the first prompt, give this AutoProject a short title through `complete_autoproject_run`'s `autoproject_title` (it is ignored once a title has been set)."""
 
-# The two loop-level tools of an AutoProject run, appended to the numbered tool list
-# (which then counts fifteen). Their own function declarations carry the
+# The two loop-level tools of an AutoProject run, appended to the numbered tool
+# list (which then counts fifteen). Their own function declarations carry the
 # parameters; the ``## AutoProject`` section says when to call them.
 _AUTOPROJECT_RUN_TOOL_LINES = (
     "\n14. **complete_autoproject_run(summary, result, notes, brief?, "
@@ -675,7 +676,7 @@ _AUTOPROJECT_RUN_TOOL_LINES = (
     "its log entry, applies the brief and ends the run. Call it directly, "
     "not through `tool_call`."
     "\n15. **ask_autoproject_question(question, options?)** -- Ask the user one "
-    "question in the AutoProject thread and wait for the answer. Call it directly, "
+    "question on the AutoProject page and wait for the answer. Call it directly, "
     "not through `tool_call`."
 )
 
@@ -762,23 +763,24 @@ def get_system_prompt(
             into the "Project Memories" paragraph; empty -> the paragraph
             only names the read tools. Ignored when ``has_project`` is
             False.
-        autoproject_context: The ``## AutoProject`` block of a run of an AutoProject
-            (chat.autoprojects.context, frozen on the run row). Non-empty marks
-            the conversation as an AutoProject run: the block is placed as its own
-            section after every stable section and right before the proxy
-            preamble (which stays last), ``set_conversation_name`` is left
-            out of the enumeration and the naming section is replaced by
-            the AutoProject-run note plus the AutoProject run's "Two file spaces"
-            paragraph (``chat://`` and ``autoproject://``, static so it stays in
-            the cacheable prefix). The dynamic tools then offer the five
-            scheme-qualified file tools in their AutoProject-run wording
+        autoproject_context: The ``## AutoProject`` block of a run of an
+            AutoProject (chat.autoprojects.context, frozen on the run row).
+            Non-empty marks the conversation as an AutoProject run: the block
+            is placed as its own section after every stable section and right
+            before the proxy preamble (which stays last),
+            ``set_conversation_name`` is left out of the enumeration and the
+            naming section is replaced by the AutoProject-run note plus the
+            AutoProject run's "Two file spaces" paragraph (``chat://`` and
+            ``autoproject://``, static so it stays in the cacheable prefix).
+            The dynamic tools then offer the five scheme-qualified file tools
+            in their AutoProject-run wording
             (``AUTOPROJECT_RUN_FILE_TOOL_SPECS``) and the run log reads
             (``AUTOPROJECT_ONLY_TOOL_CALL_TOOLS``), hide the four
             ``*_workspace_file`` tools and the other project-only tools,
             and the file rules, examples and script example name
-            ``autoproject://`` / ``/autoproject``. The caller passes no project (an AutoProject
-            run never has one; ``autoproject_context`` wins if it did). Empty ->
-            the prompt is unchanged.
+            ``autoproject://`` / ``/autoproject``. The caller passes no
+            project (an AutoProject run never has one; ``autoproject_context``
+            wins if it did). Empty -> the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph and a
     ``/project`` script example; a standalone conversation's prompt carries
@@ -903,7 +905,7 @@ Facts the user has saved about themselves and how they want you to work, newest 
         top_level_exclude.add("suggest_project_memory")
         top_level_exclude.add("suggest_doc_note")
     if is_autoproject_run:
-        # A run conversation's name is never shown: the AutoProject thread shows
+        # A run conversation's name is never shown: the AutoProject page shows
         # the AutoProject's title, which the first run sets through
         # complete_autoproject_run's autoproject_title.
         top_level_exclude.add("set_conversation_name")
@@ -950,8 +952,8 @@ Facts the user has saved about themselves and how they want you to work, newest 
         naming_section = _ROUTINE_NAMING_SECTION
     else:
         naming_section = _CONVERSATION_NAMING_SECTION
-    # The AutoProject context changes between AutoProject runs, so it sits after every
-    # stable section: the prefix before it stays cacheable across runs.
+    # The AutoProject context changes between AutoProject runs, so it sits after
+    # every stable section: the prefix before it stays cacheable across runs.
     autoproject_section = f"\n{autoproject_context.strip()}\n" if is_autoproject_run else ""
     if is_autoproject_run:
         project_script_example = _AUTOPROJECT_RUN_SCRIPT_EXAMPLE
@@ -1158,9 +1160,9 @@ def get_user_subagent_system_prompt(
     # Cross-user runs cannot mutate connected services or Quest artifacts.
     # Dispatch enforces the boundary; the prompt advertises only reads.
     # The run is a standalone conversation in the target's account, so the
-    # project-only tools never apply, nor do the AutoProject-run-only ones. Nobody
-    # reviews suggestions here, so
-    # the suggest tools are out (doc notes stay readable: list_doc_notes).
+    # project-only tools never apply, nor do the AutoProject-run-only ones.
+    # Nobody reviews suggestions here, so the suggest tools are out (doc notes
+    # stay readable: list_doc_notes).
     user_subagent_exclude = (
         {
             "wait_for_handles", "request_service_connection",
@@ -1638,15 +1640,15 @@ def get_sub_agent_system_prompt(
             note. Project conversations only.
         connected_accounts: Pre-rendered "Connected accounts" paragraph (the
             user's multi-connection services); empty -> nothing added.
-        autoproject_context: The read-only ``## AutoProject`` block for a sub-agent of an
-            AutoProject run
-            (chat.autoprojects.context.load_autoproject_subagent_context), placed after
-            the important rules, right before the proxy preamble (which
-            stays last), behind the sub-agent's "Two file spaces"
+        autoproject_context: The read-only ``## AutoProject`` block for a
+            sub-agent of an AutoProject run
+            (chat.autoprojects.context.load_autoproject_subagent_context),
+            placed after the important rules, right before the proxy preamble
+            (which stays last), behind the sub-agent's "Two file spaces"
             paragraph (it shares the run's ``chat://`` and ``autoproject://``
-            workspaces). Non-empty also selects the AutoProject run's tools as in
-            get_system_prompt(): the file tools in their AutoProject-run wording
-            and the run log reads, without the ``*_workspace_file`` and
+            workspaces). Non-empty also selects the AutoProject run's tools as
+            in get_system_prompt(): the file tools in their AutoProject-run
+            wording and the run log reads, without the ``*_workspace_file`` and
             other project-only tools. Empty -> the prompt is unchanged.
 
     Project conversations also get the "Two file spaces" paragraph (the
@@ -1725,8 +1727,8 @@ def get_sub_agent_system_prompt(
     sub_agent_exclude |= _doc_write_tool_names() | _table_write_tool_names()
     is_autoproject_run = bool(autoproject_context and autoproject_context.strip())
     if is_autoproject_run:
-        # The parent AutoProject run's file tools (chat:// and autoproject://) and run
-        # log reads; neither loop tool is a tool_call tool.
+        # The parent AutoProject run's file tools (chat:// and autoproject://)
+        # and run log reads; neither loop tool is a tool_call tool.
         sub_agent_exclude |= AUTOPROJECT_RUN_EXCLUDED_TOOLS
     elif has_project:
         sub_agent_exclude |= PROJECT_HIDDEN_WORKSPACE_TOOLS
@@ -1803,9 +1805,9 @@ def get_sub_agent_system_prompt(
             "on your behalf."
         )
 
-    # The read-only AutoProject block of an AutoProject run's sub-agent: last before the
-    # proxy preamble, like the top-level ``## AutoProject`` section, after the
-    # static file-spaces paragraph.
+    # The read-only AutoProject block of an AutoProject run's sub-agent: last
+    # before the proxy preamble, like the top-level ``## AutoProject`` section,
+    # after the static file-spaces paragraph.
     autoproject_section = (
         f"\n{_AUTOPROJECT_RUN_SUB_AGENT_FILE_SPACES_SECTION}\n\n{autoproject_context.strip()}\n"
         if is_autoproject_run else ""

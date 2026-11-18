@@ -1,6 +1,6 @@
 """Caps and shared error text for AutoProjects.
 
-Every limit the spec leaves tunable lives here so the store, the context
+Every tunable AutoProject limit lives here so the store, the context
 builder, the tools, the routes and the tests agree on one number. Every cap
 that feeds the AutoProject context (brief, notes, summary, window) is enforced at
 write time, not at prompt-build time, so the context stays bounded however
@@ -112,8 +112,8 @@ AUTOPROJECTS_SERVICE_KEY = "autoprojects"
 def autoproject_not_found_message(autoproject_id: str) -> str:
     """The ONE not-found text.
 
-    Used verbatim for an AutoProject that does not exist AND for an AutoProject owned by
-    someone else (invariant 7: a foreign AutoProject behaves exactly like a missing
+    Used verbatim for an AutoProject that does not exist AND for an AutoProject
+    owned by someone else (a foreign AutoProject behaves exactly like a missing
     one). Never build an AutoProject not-found message any other way.
     """
     return f"AutoProject not found: {autoproject_id}"

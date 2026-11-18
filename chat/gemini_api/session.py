@@ -233,7 +233,7 @@ async def cancel_pending_wait_handles_for_conversation(
     Publishes a ``wait_handle_resolved`` event per cancelled row so any
     FE tabs viewing the conversation can unlock their composer, and
     rewrites the transcript message of each cancelled AutoProject question
-    so the run view shows it cancelled (the AutoProject thread reads the handle).
+    so the run view shows it cancelled (the AutoProject page reads the handle).
     """
     from db import tool_wait_handle_store
     from chat.realtime import bus, events as realtime_events

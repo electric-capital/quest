@@ -1,22 +1,22 @@
-"""AutoProject questions: an AutoProject run asks the user something in the AutoProject thread.
+"""AutoProject questions: an AutoProject run asks the user something on the AutoProject page.
 
 A run of an AutoProject that cannot go on without the user calls
 ``ask_autoproject_question(question, options?)`` (the loop arm in
 ``chat/gemini_api/turn_tools.py``). The arm posts the question as a pending
 ``autoproject_question`` wait handle, records it in the run's transcript and
-suspends the run; the AutoProject driver (``chat/autoprojects/runs.py``) then marks the
-run ``waiting``. The user answers from the thread
+suspends the run; the AutoProject driver (``chat/autoprojects/runs.py``) then
+marks the run ``waiting``. The user answers from the AutoProject page
 (``chat.autoprojects.service.answer_question``), which resolves the handle and
 kicks the resume, and the run continues with ``{"answer": "..."}`` as the
 tool result. A Stop cancels the handle and the question reads as
 cancelled everywhere.
 
-Questions have no table: the wait-handle row is the question (spec issue
-#213, section 4.1). Its ``payload`` is ``{question, options}``, its
-``response`` ``{answer}``, and it is correlated to the run
-(``correlation_kind="autoproject_run"``, ``correlation_id=<run id>``) from
-creation. The thread groups questions by the run's conversation, not by the
-correlation, so a row always lands under its own run.
+Questions have no table: the wait-handle row is the question. Its
+``payload`` is ``{question, options}``, its ``response`` ``{answer}``, and it
+is correlated to the run (``correlation_kind="autoproject_run"``,
+``correlation_id=<run id>``) from creation. The AutoProject page groups
+questions by the run's conversation, not by the correlation, so a row always
+lands under its own run.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Tool name (the model calls it, top-level or through ``tool_call``),
 # durable chat-history message type (the run view renders it) and
-# wait-handle kind (the resume bucket and the thread match on it). Kept as
+# wait-handle kind (the resume bucket and the AutoProject page match on it). Kept as
 # three names like chat/connect_requests.py, although two of them share a
 # spelling.
 TOOL_NAME = "ask_autoproject_question"
@@ -47,7 +47,7 @@ HANDLE_KIND = ToolWaitHandleKind.AUTOPROJECT_QUESTION.value
 # ``correlation_kind`` of a question's handle; ``correlation_id`` is the run id.
 CORRELATION_KIND = "autoproject_run"
 
-# A question's status in the thread and in the transcript message. A
+# A question's status on the AutoProject page and in the transcript message. A
 # handle that ended any other way than an answer (a Stop, a completion
 # cancelling open handles) reads as cancelled.
 QUESTION_STATUS_PENDING = "pending"
@@ -63,7 +63,7 @@ QUESTION_STATUS_CANCELLED = "cancelled"
 class AutoProjectQuestionNotFoundError(AutoProjectStoreError):
     """No such question in this AutoProject: the handle is missing, of another
     kind, another user's, or its run belongs to another AutoProject. All read the
-    same (invariant 7)."""
+    same, so another user's question reads exactly like a missing one."""
 
     code = "question_not_found"
 
@@ -74,7 +74,7 @@ class AutoProjectQuestionNotFoundError(AutoProjectStoreError):
 
 class AutoProjectQuestionResolvedError(AutoProjectStoreError):
     """The question is no longer open: answered already, or cancelled (a
-    Stop, or its run finished). ``details`` carries its thread ``status``
+    Stop, or its run finished). ``details`` carries its ``status``
     and ``answer`` (None unless answered)."""
 
     code = "question_resolved"
@@ -200,8 +200,9 @@ def validate_answer(answer: Any) -> str:
 
 
 def question_status(handle: dict) -> str:
-    """The thread status of a question's wait handle: ``pending``,
-    ``answered`` (accepted) or ``cancelled`` (every other terminal status)."""
+    """The status of a question's wait handle as the AutoProject page shows
+    it: ``pending``, ``answered`` (accepted) or ``cancelled`` (every other
+    terminal status)."""
     status = handle.get("status")
     if status == ToolWaitHandleStatus.PENDING:
         return QUESTION_STATUS_PENDING
@@ -218,7 +219,7 @@ def _answer_of(handle: dict) -> Optional[str]:
 
 
 def question_view(handle: dict) -> dict:
-    """A question as the thread and ``read_autoproject_run`` show it.
+    """A question as the AutoProject page and ``read_autoproject_run`` show it.
 
     Shape::
 
@@ -277,7 +278,7 @@ def make_question_message(handle: dict) -> dict:
 
     Shape: ``{"type": "autoproject_question", "wait_handle_id", "status":
     "pending", "question", "options"}``; the loop adds the timestamp. The
-    ``status`` values are the thread's (:func:`question_status`), and
+    ``status`` values are the AutoProject page's (:func:`question_status`), and
     answering adds ``answer`` (:func:`rewrite_question_message`).
     """
     payload = handle.get("payload") or {}

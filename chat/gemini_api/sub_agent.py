@@ -120,18 +120,20 @@ async def _run_sub_agent(
             1st-level ``parent_tool_id``) so the FE can render the grandchild's
             tool calls one extra indent level deep, under the nested-agent node
             rather than flat under the 1st-level agent row.
-        autoproject_context: The read-only ``## AutoProject`` block when the parent is an
-            AutoProject run (``load_autoproject_subagent_context``, loaded
-            by the spawn arm), placed in the sub-agent's system prompt;
+        autoproject_context: The read-only ``## AutoProject`` block when the
+            parent is an AutoProject run (``load_autoproject_subagent_context``,
+            loaded by the spawn arm), placed in the sub-agent's system prompt;
             ``""`` otherwise. Passed through to a nested sub-agent unchanged.
         autoproject_id: The parent's AutoProject when it is an AutoProject run
-            (``RunContext.autoproject_id``), else None. Passed to every tool call
-            the sub-agent dispatches, so ``autoproject://`` paths, the ``/autoproject``
-            sandbox mount and the AutoProject-run read tools (``list_autoproject_runs``,
-            ``read_autoproject_run``) reach the parent run's AutoProject. Passed through
-            to a nested sub-agent unchanged.
-        autoproject_run_id: The parent's AutoProject run (``RunContext.autoproject_run_id``),
-            else None; passed along with ``autoproject_id``.
+            (``RunContext.autoproject_id``), else None. Passed to every tool
+            call the sub-agent dispatches, so ``autoproject://`` paths, the
+            ``/autoproject`` sandbox mount and the AutoProject-run read tools
+            (``list_autoproject_runs``, ``read_autoproject_run``) reach the
+            parent run's AutoProject. Passed through to a nested sub-agent
+            unchanged.
+        autoproject_run_id: The parent's AutoProject run
+            (``RunContext.autoproject_run_id``), else None; passed along with
+            ``autoproject_id``.
 
     Returns:
         The sub-agent's response string.
@@ -717,10 +719,11 @@ async def _run_parallel_sub_agents(
                'prompt', 'description', and optional 'model'.
         project_id: Optional project UUID (the parent's), passed to every
             sub-agent (see ``_run_sub_agent``), as are
-            ``workspace_notice_flags`` and ``autoproject_context`` (the read-only
-            ``## AutoProject`` block of an AutoProject run's sub-agents, loaded once for
-            the whole batch), ``autoproject_id`` and ``autoproject_run_id`` (the parent
-            AutoProject run's, else None).
+            ``workspace_notice_flags`` and ``autoproject_context`` (the
+            read-only ``## AutoProject`` block of an AutoProject run's
+            sub-agents, loaded once for the whole batch), ``autoproject_id``
+            and ``autoproject_run_id`` (the parent AutoProject run's, else
+            None).
         project_guide: Optional project-specific instructions.
         usage_accumulator: Optional dict to accumulate usage.
 
@@ -749,7 +752,7 @@ async def _run_parallel_sub_agents(
     # Build coroutines for each task
     async def run_one_task(task_spec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Run a single sub-agent task and return (id, result_dict)."""
-        spec_id = task_spec["id"]
+        task_id = task_spec["id"]
         agent_name = task_spec.get("name", "Sub-Agent")
         agent_prompt = task_spec.get("prompt", "")
         agent_model = task_spec.get("model") or parent_model
@@ -763,7 +766,7 @@ async def _run_parallel_sub_agents(
         if agent_model in SUB_AGENT_DISALLOWED_MODELS:
             logger.info(
                 "Rejected disallowed sub-agent model '%s' for task '%s' (id=%s, user=%s)",
-                agent_model, agent_name, spec_id, user["email"],
+                agent_model, agent_name, task_id, user["email"],
             )
             error_msg = (
                 f"Model '{agent_model}' is not permitted for sub-agents. "
@@ -780,7 +783,7 @@ async def _run_parallel_sub_agents(
                     })
                 except Exception:
                     logger.debug("Failed to emit sub_agent_finished (error) event", exc_info=True)
-            return spec_id, {
+            return task_id, {
                 "status": "error",
                 "name": agent_name,
                 "error": error_msg,
@@ -823,14 +826,14 @@ async def _run_parallel_sub_agents(
                 autoproject_id=autoproject_id,
                 autoproject_run_id=autoproject_run_id,
             )
-            return spec_id, {
+            return task_id, {
                 "status": "success",
                 "name": agent_name,
                 "response": response,
                 "_usage": task_usage,
             }
         except Exception as e:
-            logger.exception("Error in parallel sub-agent '%s' (id=%s, user=%s)", agent_name, spec_id, user["email"])
+            logger.exception("Error in parallel sub-agent '%s' (id=%s, user=%s)", agent_name, task_id, user["email"])
             # Emit a sub_agent_finished event so the UI can flip this
             # particular sub-agent's row to the errored terminal state.
             # _run_sub_agent raised before it could emit its own event.
@@ -845,7 +848,7 @@ async def _run_parallel_sub_agents(
                     })
                 except Exception:
                     logger.debug("Failed to emit sub_agent_finished (error) event", exc_info=True)
-            return spec_id, {
+            return task_id, {
                 "status": "error",
                 "name": agent_name,
                 "error": f"Sub-agent '{agent_name}' failed: {str(e)}",
@@ -858,7 +861,7 @@ async def _run_parallel_sub_agents(
 
     # Assemble results dict keyed by task ID
     results = {}
-    for spec_id, result_dict in completed:
+    for task_id, result_dict in completed:
         # Aggregate usage into the parent accumulator
         if usage_accumulator is not None:
             task_usage = result_dict.pop("_usage", {})
@@ -871,7 +874,7 @@ async def _run_parallel_sub_agents(
             usage_accumulator["call_count"] = usage_accumulator.get("call_count", 0) + task_usage.get("call_count", 0)
         else:
             result_dict.pop("_usage", None)
-        results[spec_id] = result_dict
+        results[task_id] = result_dict
 
     return json.dumps({"results": results})
 
@@ -921,10 +924,11 @@ async def _run_parallel_sub_agents_template(
         usage_accumulator: Optional dict to accumulate usage.
         on_event: Optional event callback.
         parent_tool_id: Optional parent tool ID for event tracking.
-        autoproject_context: The read-only ``## AutoProject`` block of an AutoProject run's
-            sub-agents (``""`` otherwise), passed to every agent.
-        autoproject_id: The parent AutoProject run's AutoProject (None otherwise), passed
-            to every agent with ``autoproject_run_id``.
+        autoproject_context: The read-only ``## AutoProject`` block of an
+            AutoProject run's sub-agents (``""`` otherwise), passed to every
+            agent.
+        autoproject_id: The parent AutoProject run's AutoProject (None
+            otherwise), passed to every agent with ``autoproject_run_id``.
         autoproject_run_id: The parent AutoProject run (None otherwise).
 
     Returns:

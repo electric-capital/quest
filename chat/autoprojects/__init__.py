@@ -1,5 +1,5 @@
 """AutoProjects: long-lived units of work answered by fresh-context runs over
-an accumulated brief and work log (spec issue #213).
+an accumulated brief and work log.
 
 Model-facing text says "AutoProject" and "AutoProject run".
 
@@ -12,11 +12,11 @@ Modules:
   delete AutoProject or run), starting a run, answering a run's question, the
   startup sweeps.
 - ``routes`` -- the ``/app/api/autoprojects`` HTTP routes; ``http`` -- their
-  error mapping and route guard; ``thread`` -- their response shapes (AutoProject
-  detail, brief versions, the thread's run pages).
+  error mapping and route guard; ``views`` -- their response shapes (AutoProject
+  detail, brief versions, the pages of runs).
 - ``runs`` -- ``complete_autoproject_run`` and the run driver (run statuses).
 - ``questions`` -- ``ask_autoproject_question``: the ``autoproject_question`` wait
-  handle, its validation, transcript message and thread view.
+  handle, its validation, transcript message and AutoProject page view.
 - ``events`` -- the ``autoproject_changed`` / ``autoproject_list_changed`` publishes.
 
 The rows (``autoprojects``, ``autoproject_runs``, ``autoproject_brief_versions``) are written

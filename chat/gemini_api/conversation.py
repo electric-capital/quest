@@ -627,8 +627,7 @@ async def run_conversation_turn(
         # Resolve per-conversation flags. ``nested_subagents`` lets 1st-level
         # sub-agents spawn one tier of 2nd-level sub-agents (Haiku / Flash-Lite
         # only). NULL/empty flags mean no opt-in behaviors are active. An
-        # AutoProject run takes no flags (spec 00012 section 6.1),
-        # whatever a caller passed.
+        # AutoProject run takes no flags, whatever a caller passed.
         if autoproject_id:
             flags = None
         from chat.conversation_flags import (
@@ -670,9 +669,10 @@ async def run_conversation_turn(
                 )
             subagent_caller = await _get_user_by_id(subagent_run["caller_user_id"])
 
-        # AutoProject runs (conversations.autoproject_id set, origin="autoproject") are
-        # private standalone conversations (spec 00012 invariant 8) with one
-        # autoproject_runs row each; the run-scoped AutoProject tools act on that row.
+        # AutoProject runs (conversations.autoproject_id set,
+        # origin="autoproject") are always private standalone conversations
+        # with one autoproject_runs row each; the run-scoped AutoProject tools
+        # act on that row.
         autoproject_run = None
         if autoproject_id:
             if project_id:

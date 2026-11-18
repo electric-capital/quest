@@ -1757,8 +1757,7 @@ suggestions are refused until the user reviews them.
 
 
 def _autoprojects_content(_base_url: str, _api_key: str) -> str:
-    # Wording rule (spec 00012 section 6.5): "AutoProject run" and "this
-    # AutoProject".
+    # Wording rule: "AutoProject run" and "this AutoProject".
     return f"""## AutoProjects
 
 An AutoProject is long-lived work the user keeps prompting into. Each prompt
@@ -1784,7 +1783,7 @@ longer guidance on what to write where.
 
 ### `result`: for the user
 
-The answer to this run's prompt, complete in itself: the AutoProject thread shows
+The answer to this run's prompt, complete in itself: the AutoProject page shows
 the user this text and nothing else of the run. Lead with the answer or the
 outcome, then what they need to act on it, and name the files and
 artifacts they will want (an `autoproject://` path, a doc or table title). Do not
@@ -1846,7 +1845,7 @@ For small choices, pick a sensible default, keep going, and state the
 assumption in the result and the notes. Do not ask permission for what the
 prompt already asked for. Writes to connected services still go through
 `create_action_request`; the user resolves those cards from the AutoProject
-thread.
+page.
 
 ### Files: `autoproject://` versus `chat://`
 

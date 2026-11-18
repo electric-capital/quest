@@ -20,8 +20,7 @@ Handler calling convention:
   :class:`SuspendForSlackReply`, :class:`SuspendForActionRequest`,
   :class:`SuspendForServiceConnection`, :class:`SuspendForAutoProjectQuestion`,
   :class:`FinishInferenceResponse`, :class:`FinishAutoProjectRun`) -- those are
-  control flow, not errors, and must
-  propagate to the loop unchanged.
+  control flow, not errors, and must propagate to the loop unchanged.
 
 The loop calls ``_log_large_tool_result`` once per handled call, so no
 handler logs its own result.
@@ -238,14 +237,15 @@ class SuspendForServiceConnection(Exception):
 
 class SuspendForAutoProjectQuestion(Exception):
     """Raised by the ``ask_autoproject_question`` arm when a run of an
-    AutoProject must suspend until the user answers its question in the AutoProject
-    thread (chat/autoprojects/questions.py).
+    AutoProject must suspend until the user answers its question on the
+    AutoProject page (chat/autoprojects/questions.py).
 
     Mirrors :class:`SuspendForServiceConnection`: the dispatch loop records
     it per call (siblings in the same batch keep running), unwinds without
     a ``tool_result``, and the resume bucket closes the dangling tool_use
-    with the ``autoproject_question`` wait-handle row's ``response``. The AutoProject run
-    driver sets the run ``waiting`` when the turn ends this way.
+    with the ``autoproject_question`` wait-handle row's ``response``. The
+    AutoProject run driver sets the run ``waiting`` when the turn ends this
+    way.
     """
 
     def __init__(self, handle_id: str, tool_id: str, run_id: str) -> None:
@@ -681,8 +681,8 @@ async def _open_action_request_card(
 
 
 async def _load_spawn_autoproject_context(ctx: RunContext) -> str:
-    """The read-only ``## AutoProject`` block for the sub-agents of one spawn call
-    (spec 6.4), or ``""`` outside a run of an AutoProject.
+    """The read-only ``## AutoProject`` block for the sub-agents of one spawn
+    call, or ``""`` outside a run of an AutoProject.
 
     Loaded fresh per spawn call (once for a whole parallel batch), so a
     sub-agent sees the brief as it is now. Called inside the spawn arm's
@@ -1149,16 +1149,16 @@ async def _handle_complete_autoproject_run(
     """Finish the calling AutoProject run (``complete_autoproject_run``).
 
     The run is the calling conversation's own (``ctx.autoproject_id`` /
-    ``ctx.autoproject_run_id``, invariant 5); the work is
-    ``chat.autoprojects.runs.complete_autoproject_run``. An accepted call appends the
-    closing tool_result and ends the loop through the :class:`FinishAutoProjectRun`
-    sentinel, with no further model call. A refusal (validation, a
+    ``ctx.autoproject_run_id``, never ids from the arguments); the work is
+    ``chat.autoprojects.runs.complete_autoproject_run``. An accepted call
+    appends the closing tool_result and ends the loop through the
+    :class:`FinishAutoProjectRun` sentinel, with no further model call. A refusal (validation, a
     ``brief_conflict``, a finished run) is the tool result and the run
     continues so the model can retry.
 
     Registered under both the top-level name and the ``tool_call``-riding
-    key (:data:`COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY`); in the latter form
-    the tool's own arguments sit under ``arguments``. Sub-agents and
+    key (:data:`COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY`); in the latter
+    form the tool's own arguments sit under ``arguments``. Sub-agents and
     scripts never reach this arm: shared dispatch refuses the name
     (``_dispatch_tool_call_inner``).
     """
@@ -1204,25 +1204,26 @@ async def _handle_complete_autoproject_run(
 async def _handle_ask_autoproject_question(
     ctx: RunContext, call: ToolCall, turn: TurnState,
 ) -> str:
-    """Ask the user a question in the AutoProject thread and suspend
+    """Ask the user a question on the AutoProject page and suspend
     (``ask_autoproject_question``).
 
-    See chat/autoprojects/questions.py. The run is the calling conversation's own
-    (``ctx.autoproject_id`` / ``ctx.autoproject_run_id``, invariant 5). The arm validates
-    the arguments, checks the run is still active, opens a pending
-    ``autoproject_question`` wait handle, records the durable ``autoproject_question``
-    transcript message and raises :class:`SuspendForAutoProjectQuestion`; the
-    resume bucket closes the tool_use with the answer. A refusal
+    See chat/autoprojects/questions.py. The run is the calling conversation's
+    own (``ctx.autoproject_id`` / ``ctx.autoproject_run_id``, never ids from
+    the arguments). The arm validates the arguments, checks the run is still
+    active, opens a pending ``autoproject_question`` wait handle, records the
+    durable ``autoproject_question`` transcript message and raises
+    :class:`SuspendForAutoProjectQuestion`; the resume bucket closes the
+    tool_use with the answer. A refusal
     (validation, a finished run, a store failure) is the tool result
     ``{error, code, ...}`` and the run continues.
 
     The run's status is NOT set here: the AutoProject run driver
-    (``drive_autoproject_run``) sets ``waiting``, marks the AutoProject unread and
-    publishes when the turn ends on the dangling tool_use.
+    (``drive_autoproject_run``) sets ``waiting``, marks the AutoProject unread
+    and publishes when the turn ends on the dangling tool_use.
 
     Registered under both the top-level name and the ``tool_call``-riding
-    key (:data:`ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY`); in the latter form
-    the tool's own arguments sit under ``arguments``. Sub-agents and
+    key (:data:`ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY`); in the latter
+    form the tool's own arguments sit under ``arguments``. Sub-agents and
     scripts never reach this arm: shared dispatch refuses the name
     (``_dispatch_tool_call_inner``).
     """

@@ -244,11 +244,12 @@ def make_autoproject_changed(
 ) -> dict[str, Any]:
     """Envelope for ``autoproject_changed``.
 
-    Per-user global published after every change to an AutoProject's thread or
-    brief (a run starting, changing status or finishing, a brief write).
-    ``event_seq`` is the AutoProject's thread counter after the change: an open
-    thread of ``autoproject_id`` re-fetches its newest page when it moved.
-    ``brief_version`` lets the brief panel re-fetch only when it moved.
+    Per-user global published after every change to what an AutoProject's
+    page shows (a run starting, changing status or finishing, a brief write).
+    ``event_seq`` is the AutoProject's change counter after the change: an
+    open AutoProject page of ``autoproject_id`` re-fetches its newest page of
+    runs when it moved. ``brief_version`` lets the page re-fetch the brief
+    only when it moved.
     ``active_run`` is ``{id, seq, status}`` of the AutoProject's running or
     waiting run, or None, so the composer and the activity line update
     without a fetch. Carries no AutoProject text. Published through

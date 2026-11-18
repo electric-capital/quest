@@ -1,24 +1,22 @@
 """The AutoProject service: the rules behind every AutoProject route and the send
 path.
 
-AutoProject lifecycle (spec issue #213, sections 7 and 10): :func:`create_autoproject`,
-:func:`update_autoproject`, the user's brief edit and restore (:func:`set_brief`,
-:func:`restore_brief`), :func:`set_autoproject_archived`, the read
-acknowledgement (:func:`mark_autoproject_read`), and the deletes
-(:func:`delete_autoproject`, :func:`delete_run`), which stop live turns, cancel
-wait handles, close the run conversations' open approval cards and sweep
-their directories. Each checks the gate and ownership itself and publishes
-through chat/autoprojects/events.py; the route-facing shapes are built in
-chat/autoprojects/views.py.
+AutoProject lifecycle: :func:`create_autoproject`, :func:`update_autoproject`,
+the user's brief edit and restore (:func:`set_brief`, :func:`restore_brief`),
+:func:`set_autoproject_archived`, the read acknowledgement
+(:func:`mark_autoproject_read`), and the deletes (:func:`delete_autoproject`,
+:func:`delete_run`), which stop live turns, cancel wait handles, close the run
+conversations' open approval cards and sweep their directories. Each checks
+the gate and ownership itself and publishes through chat/autoprojects/events.py;
+the route-facing shapes are built in chat/autoprojects/views.py.
 
-A run starts in two steps (spec issue #213, section 7): ``POST
-/autoprojects/{id}/runs`` creates the run's conversation
-(:func:`create_run_conversation`, an early refusal for the UI), and the
-first ``send_message`` on that conversation allocates the ``autoproject_runs`` row
-(:func:`start_run`, the authoritative check). :func:`start_run` is where
-invariant 6 (one active run per AutoProject) is enforced from the send path; the
-store's ``allocate_run`` does the transactional check, so lifting the rule
-later is one change here and there.
+A run starts in two steps: ``POST /autoprojects/{id}/runs`` creates the run's
+conversation (:func:`create_run_conversation`, an early refusal for the UI),
+and the first ``send_message`` on that conversation allocates the
+``autoproject_runs`` row (:func:`start_run`, the authoritative check).
+:func:`start_run` is where the one-active-run-per-AutoProject rule is enforced
+from the send path; the store's ``allocate_run`` does the transactional check,
+so lifting the rule later is one change here and there.
 
 :func:`answer_question` answers a run's open question (``ask_autoproject_question``,
 chat/autoprojects/questions.py) and continues the run.
@@ -27,9 +25,10 @@ The startup sweeps (:func:`run_startup_sweeps`) settle what a restart
 leaves behind: a ``running`` run whose in-memory turn is gone, and run
 conversations created but never sent.
 
-Every refusal is a ``db.autoproject_store.AutoProjectStoreError`` subclass with a stable
-``code``, so routes (through ``chat.autoprojects.http.autoproject_http_exception``) and
-the send path put it straight into their error bodies.
+Every refusal is a ``db.autoproject_store.AutoProjectStoreError`` subclass with
+a stable ``code``, so routes (through
+``chat.autoprojects.http.autoproject_http_exception``) and the send path put it
+straight into their error bodies.
 """
 
 from __future__ import annotations
@@ -93,7 +92,7 @@ RUN_DELETED_REASON = "autoproject_run_deleted"
 
 
 class AutoProjectsDisabledError(AutoProjectStoreError):
-    """The ``autoprojects`` feature gate is closed for the user (spec 9)."""
+    """The ``autoprojects`` feature gate is closed for the user."""
 
     code = "autoprojects_disabled"
 
@@ -218,8 +217,8 @@ async def start_run(
 ) -> StartedRun:
     """Accept the single message of a run conversation and allocate its run.
 
-    THE one place the send path enforces invariant 6 (one active run per
-    AutoProject) and invariant 1 (one user message per run conversation). Called
+    THE one place the send path enforces one active run per AutoProject and
+    one user message per run conversation. Called
     by ``_handle_send_message`` before the user message is appended, so a
     refused send leaves nothing in the transcript.
 
@@ -249,7 +248,7 @@ async def start_run(
         )
     require_autoprojects_enabled(user)
 
-    # Invariant 1: a run conversation takes exactly one user message. The
+    # A run conversation takes exactly one user message. The
     # unique index on autoproject_runs.conversation_id (allocate_run) catches a
     # race between two first sends.
     if int(conversation.get("last_message_seq") or 0) > 0:
@@ -262,7 +261,7 @@ async def start_run(
     run_model = _resolve_run_model(model, autoproject)
     run_effort = thinking_effort or autoproject.get("thinking_effort")
 
-    # An AutoProject run is always private (invariant 8).
+    # An AutoProject run is always private.
     from config.model_selection import is_model_allowed
 
     if not is_model_allowed(run_model, public=False):
@@ -278,7 +277,7 @@ async def start_run(
         "AutoProject run started (autoproject=%s, run=%s, seq=%s, conversation=%s, model=%s)",
         autoproject_id, run["id"], run["seq"], conversation["id"], run_model,
     )
-    # The AutoProject gained an active run (thread and list row both changed).
+    # The AutoProject gained an active run (its page and list row both changed).
     await events.publish_autoproject_state(autoproject_id)
     return StartedRun(
         run=run, autoproject=autoproject, model=run_model, thinking_effort=run_effort,
@@ -316,7 +315,7 @@ async def answer_question(
 
     Resolves the question's ``autoproject_question`` wait handle with the answer,
     writes the outcome into the run's transcript message, publishes the
-    resolution and the thread change, and kicks the run's resume. While
+    resolution and the AutoProject page change, and kicks the run's resume. While
     another card of the same tool-call batch (an approval card) is still
     pending, the resume gate holds the run until that one is resolved too.
 
@@ -339,8 +338,8 @@ async def answer_question(
     """
     await require_owned_autoproject(user, autoproject_id)
 
-    # Invariant 7: a missing handle, another kind, another user's, or one
-    # of another AutoProject's run all read the same.
+    # A missing handle, another kind, another user's, or one of another
+    # AutoProject's run all read the same.
     handle = await tool_wait_handle_store.get_handle_for_user(user["id"], handle_id)
     if handle is None or handle.get("kind") != HANDLE_KIND:
         raise AutoProjectQuestionNotFoundError(handle_id)
@@ -401,7 +400,7 @@ async def answer_question(
         logger.debug(
             "[autoproject_question] publish wait_handle_resolved failed", exc_info=True,
         )
-    # The thread changed (the question shows its answer); the list row did
+    # The AutoProject page changed (the question shows its answer); the list row did
     # not (the run is still waiting until its resume starts).
     try:
         await autoproject_store.bump_event_seq(autoproject_id)
@@ -611,12 +610,12 @@ async def set_autoproject_archived(user: dict, autoproject_id: str, archived: bo
 
 
 async def mark_autoproject_read(user: dict, autoproject_id: str, *, seq: int) -> dict:
-    """Acknowledge the thread up to ``seq`` (``POST /autoprojects/{id}/read``,
-    sent by a client showing the thread in a focused window) and publish
+    """Mark the AutoProject read up to ``seq`` (``POST /autoprojects/{id}/read``,
+    sent by a client showing the AutoProject page in a focused window) and publish
     ``autoproject_list_changed`` when ``read_seq`` moved.
 
     An admin impersonating the owner changes nothing: the admin looking at
-    the thread is not the owner reading it.
+    the AutoProject page is not the owner reading it.
 
     Returns:
         The AutoProject dict after the acknowledgement.
@@ -637,7 +636,7 @@ async def mark_autoproject_read(user: dict, autoproject_id: str, *, seq: int) ->
 
 
 # ---------------------------------------------------------------------------
-# Deleting an AutoProject or a run (spec 10)
+# Deleting an AutoProject or a run
 # ---------------------------------------------------------------------------
 
 # How long a delete waits for the cancelled live turns of the doomed

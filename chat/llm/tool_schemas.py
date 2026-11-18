@@ -1612,11 +1612,12 @@ TOOL_CALL_REGISTRY: dict[str, ToolSpec] = {
         },
     },
     # The run log of the AutoProject this conversation is an AutoProject run of
-    # (spec 00012 section 6.2; chat/gemini_api/tool_handlers/autoproject_runs.py).
-    # Listed only in AutoProject runs and their sub-agents (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
-    # below keeps them out of every other prompt) and gated on the ``autoprojects``
-    # pseudo-key; outside an AutoProject run the handlers refuse with not_autoproject_run.
-    # Reads of the caller's own AutoProject only, so not mutating.
+    # (chat/gemini_api/tool_handlers/autoproject_runs.py). Listed only in
+    # AutoProject runs and their sub-agents (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS
+    # below keeps them out of every other prompt) and gated on the
+    # ``autoprojects`` pseudo-key; outside an AutoProject run the handlers
+    # refuse with not_autoproject_run. Reads of the caller's own AutoProject
+    # only, so not mutating.
     "list_autoproject_runs": {
         "name": "list_autoproject_runs",
         "description": (
@@ -4116,7 +4117,7 @@ _ROUTINE_COMPLETED: ToolSpec = {
 # ---------------------------------------------------------------------------
 
 # Loop-level tools of a run of an AutoProject (a conversation with an
-# ``autoproject_id``; issue #213, spec 6.2). Both act on the run of the calling
+# ``autoproject_id``; issue #213). Both act on the run of the calling
 # conversation, resolved server-side (chat/gemini_api/turn_tools.py); they
 # take no AutoProject or run id. Model-facing text says "AutoProject" and
 # "AutoProject run".
@@ -4153,7 +4154,7 @@ _COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
                 "type": "string",
                 "description": (
                     "Your answer to the user, in markdown: shown as the "
-                    "reply in the AutoProject thread, and the only text of this "
+                    "reply on the AutoProject page, and the only text of this "
                     "run the user sees. At most "
                     f"{AUTOPROJECT_RUN_RESULT_MAX_CHARS:,} characters; put large "
                     "outputs in `autoproject://` files, Quest Docs or Quest Tables "
@@ -4209,7 +4210,7 @@ _COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
 _ASK_AUTOPROJECT_QUESTION: ToolSpec = {
     "name": "ask_autoproject_question",
     "description": (
-        "Ask the user one question in the AutoProject thread when only they can "
+        "Ask the user one question on the AutoProject page when only they can "
         "unblock this run, instead of guessing: an ambiguous goal, a "
         "choice between materially different approaches, missing access or "
         "data, or a step that is costly or hard to undo. Ask before the "
@@ -4225,8 +4226,8 @@ _ASK_AUTOPROJECT_QUESTION: ToolSpec = {
             "question": {
                 "type": "string",
                 "description": (
-                    "The question, self-contained: the user reads it in "
-                    "the AutoProject thread without this run's context, so say "
+                    "The question, self-contained: the user reads it on "
+                    "the AutoProject page without this run's context, so say "
                     "what you need and why (at most "
                     f"{AUTOPROJECT_QUESTION_MAX_CHARS:,} characters)."
                 ),
@@ -4387,8 +4388,8 @@ PROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
 })
 
 # The five scheme-qualified file tools (a subset of
-# PROJECT_ONLY_TOOL_CALL_TOOLS). A run of an AutoProject offers them too,
-# over chat:// and autoproject:// instead of chat:// and proj:// (the handlers take
+# PROJECT_ONLY_TOOL_CALL_TOOLS). A run of an AutoProject offers them too, over
+# chat:// and autoproject:// instead of chat:// and proj:// (the handlers take
 # the spaces from the conversation, chat/gemini_api/tool_handlers/
 # file_paths.py), while the rest of the project-only tools stay out of it.
 SCHEME_FILE_TOOLS: frozenset[str] = frozenset({
@@ -4402,12 +4403,13 @@ assert SCHEME_FILE_TOOLS <= PROJECT_ONLY_TOOL_CALL_TOOLS
 
 # Dynamic tools that exist only in AutoProject runs (and their
 # sub-agents): the run log reads. The twin of PROJECT_ONLY_TOOL_CALL_TOOLS:
-# every prompt builder excludes these unless it builds an AutoProject run's prompt
-# (chat/gemini_api/system_prompt.py), even for a user with the ``autoprojects``
-# gate open, where their ``requires_service`` alone would show them. The
-# handlers refuse outside an AutoProject run (not_autoproject_run), so a hallucinated call
-# is harmless. Never in PUBLIC_TOOL_CALL_ALLOWLIST (an AutoProject run is never
-# public); in SCRIPT_TOOL_CALL_ALLOWLIST (an AutoProject run's scripts read its log).
+# every prompt builder excludes these unless it builds an AutoProject run's
+# prompt (chat/gemini_api/system_prompt.py), even for a user with the
+# ``autoprojects`` gate open, where their ``requires_service`` alone would
+# show them. The handlers refuse outside an AutoProject run
+# (not_autoproject_run), so a hallucinated call is harmless. Never in
+# PUBLIC_TOOL_CALL_ALLOWLIST (an AutoProject run is never public); in
+# SCRIPT_TOOL_CALL_ALLOWLIST (an AutoProject run's scripts read its log).
 AUTOPROJECT_ONLY_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "list_autoproject_runs",
     "read_autoproject_run",
@@ -4720,8 +4722,8 @@ CORE_TOOL_CALL_TOOLS: frozenset[str] = frozenset({
     "write_file",
     "edit_file",
     "copy_file",
-    # AutoProject runs only (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the ## AutoProject section names
-    # them, so they are documented in full there (spec 00012 default 20).
+    # AutoProject runs only (AUTOPROJECT_ONLY_TOOL_CALL_TOOLS); the ## AutoProject
+    # section names them, so they are documented in full there.
     *AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
 })
 
@@ -4930,10 +4932,10 @@ def _autoproject_run_file_tool_specs() -> dict[str, ToolSpec]:
     return specs
 
 
-# The five scheme-qualified file tools as an AutoProject run's prompts document them
-# (chat/gemini_api/system_prompt.py renders them in place of the registry
-# entries for an AutoProject run and its sub-agents). Prompt text only: dispatch and
-# the provider tool tiers use the registry entries.
+# The five scheme-qualified file tools as an AutoProject run's prompts document
+# them (chat/gemini_api/system_prompt.py renders them in place of the registry
+# entries for an AutoProject run and its sub-agents). Prompt text only:
+# dispatch and the provider tool tiers use the registry entries.
 AUTOPROJECT_RUN_FILE_TOOL_SPECS: dict[str, ToolSpec] = _autoproject_run_file_tool_specs()
 
 

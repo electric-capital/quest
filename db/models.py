@@ -131,11 +131,12 @@ class ToolWaitHandleKind(StrEnum):
     # subagent_conversation_id, target_user_email); response carries
     # {"status": "returned"|"denied"|"failed", "response", "files": [...]}.
     USER_SUBAGENT = "user_subagent"
-    # Question a run of an AutoProject asks the user in the AutoProject thread
-    # (ask_autoproject_question, chat/autoprojects/questions.py); payload carries
-    # (question, options), response carries {"answer": "..."} written by
-    # chat/autoprojects/service.py answer_question. correlation_kind "autoproject_run" /
-    # correlation_id = the run id are populated at create time. No expiry.
+    # Question a run of an AutoProject asks the user on the AutoProject page
+    # (ask_autoproject_question, chat/autoprojects/questions.py); payload
+    # carries (question, options), response carries {"answer": "..."} written
+    # by chat/autoprojects/service.py answer_question. correlation_kind
+    # "autoproject_run" / correlation_id = the run id are populated at create
+    # time. No expiry.
     AUTOPROJECT_QUESTION = "autoproject_question"
 
 
@@ -1164,8 +1165,9 @@ class AutoProject(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # True while ``title`` is still the text cut from the first prompt. Only
-    # then may a run name the AutoProject (complete_autoproject_run ``autoproject_title``); a
-    # rename by the user or the run's naming clears it for good.
+    # then may a run name the AutoProject (complete_autoproject_run
+    # ``autoproject_title``); a rename by the user or the run's naming clears it
+    # for good.
     title_is_default: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=True, server_default=sa.true()
     )
@@ -1192,8 +1194,9 @@ class AutoProject(Base):
         String(20), nullable=True, default=None
     )
 
-    # Archived AutoProjects leave the sidebar and refuse new runs; the thread stays
-    # readable. Unarchived AutoProjects count against MAX_ACTIVE_AUTOPROJECTS_PER_USER.
+    # Archived AutoProjects leave the sidebar and refuse new runs; the
+    # AutoProject page stays readable. Unarchived AutoProjects count against
+    # MAX_ACTIVE_AUTOPROJECTS_PER_USER.
     archived: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
@@ -1204,10 +1207,10 @@ class AutoProject(Base):
         sa.Integer, nullable=False, default=1, server_default="1"
     )
 
-    # Bumped on every change to what the thread shows (run start, status,
-    # entry, delete, brief, question) and on AutoProject edits. Unread state is the
-    # conversation-unread scheme over this counter: the AutoProject is unread while
-    # ``unread_seq > read_seq``; both only move forward.
+    # Bumped on every change to what the AutoProject page shows (run start,
+    # status, entry, delete, brief, question) and on AutoProject edits. Unread
+    # state is the conversation-unread scheme over this counter: the AutoProject
+    # is unread while ``unread_seq > read_seq``; both only move forward.
     event_seq: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, default=0, server_default="0"
     )
@@ -1292,9 +1295,10 @@ class AutoProjectRun(Base):
     model: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, default=None
     )
-    # The rendered ## AutoProject block the run's system prompt was built with (up
-    # to AUTOPROJECT_CONTEXT_MAX_CHARS), written once on the run's first turn; NULL
-    # until then. Deferred: only get_run_context / freeze_run_context read it.
+    # The rendered ## AutoProject block the run's system prompt was built with
+    # (up to AUTOPROJECT_CONTEXT_MAX_CHARS), written once on the run's first
+    # turn; NULL until then. Deferred: only get_run_context /
+    # freeze_run_context read it.
     context: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None, deferred=True
     )
@@ -1451,10 +1455,10 @@ class Conversation(Base):
     # created by another user's approved run_user_subagent action request; the
     # owner can view but not send), and "inference_api" (a one-shot headless
     # run driven by POST /api/inference; also read-only for the owner), and
-    # "autoproject" (one run of an AutoProject, ``autoproject_id`` set; it takes exactly one
-    # user message, stays out of the Conversations list and is read-only when
-    # opened; unread state is tracked on the AutoProject). NULL is treated as "web"
-    # by application code.
+    # "autoproject" (one run of an AutoProject, ``autoproject_id`` set; it takes
+    # exactly one user message, stays out of the Conversations list and is
+    # read-only when opened; unread state is tracked on the AutoProject). NULL
+    # is treated as "web" by application code.
     origin: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True, default=None
     )

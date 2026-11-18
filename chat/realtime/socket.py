@@ -639,10 +639,9 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
 
     project_id = meta.get("project_id")
     routine_id = meta.get("routine_id")
-    # An AutoProject run conversation (spec issue #213): its single message
-    # starts the run through the AutoProject service below, and the prompt is
-    # stored verbatim (no ``%%flags`` parsing; AutoProject runs get no
-    # conversation flags, spec 6.1).
+    # An AutoProject run conversation: its single message starts the run
+    # through the AutoProject service below, and the prompt is stored verbatim
+    # (no ``%%flags`` parsing; AutoProject runs get no conversation flags).
     autoproject_id = meta.get("autoproject_id")
 
     # First-message flag parsing. A brand-new conversation has

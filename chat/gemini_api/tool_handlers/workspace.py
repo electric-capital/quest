@@ -6,24 +6,25 @@ A project conversation has two file spaces (devplan 00009, revised
 2026-10-08: scheme-qualified file tools): its own conversation workspace
 (``chat://``, the default target of every file-producing tool) and the
 project workspace shared by every conversation of the project
-(``proj://``). A run of an AutoProject (issue #213) has ``chat://`` and
-the AutoProject workspace shared by every run of the AutoProject (``autoproject://``) instead;
-it has no ``proj://``. The ``*_workspace_file`` tools take bare paths in
-the conversation workspace; the space-aware tools take a mandatory scheme
-(parsed by ``file_paths.parse_space_path`` against the conversation's
-``conversation_spaces``). Both families are thin wrappers over the
-root-parameterised internals ``_list_files`` / ``_read_file`` /
+(``proj://``). A run of an AutoProject (issue #213) has ``chat://`` and the
+AutoProject workspace shared by every run of the AutoProject
+(``autoproject://``) instead; it has no ``proj://``. The ``*_workspace_file``
+tools take bare paths in the conversation workspace; the space-aware tools
+take a mandatory scheme (parsed by ``file_paths.parse_space_path`` against
+the conversation's ``conversation_spaces``). Both families are thin wrappers
+over the root-parameterised internals ``_list_files`` / ``_read_file`` /
 ``_write_file`` / ``_edit_file``; the ``_FileSpace`` they pass fixes the
 read-sidecar keys, the ``file_list_changed`` scope and the wording of
 results and errors. ``copy_file`` lives in ``workspace_copy.py``.
 
 Read-before-edit sidecar keys: the ``*_workspace_file`` tools use bare
 paths (``notes.md``), the space-aware tools the canonical scheme path
-(``chat://notes.md``, ``proj://reports/q3.md``, ``autoproject://brief.md``). A
-read or write of a conversation file records BOTH keys, so either tool
-family licenses an edit through either; ``proj://`` and ``autoproject://`` keys
-never collide with a bare key. The sidecar is per conversation, so an AutoProject
-file read in an earlier run does not license an edit in a later one.
+(``chat://notes.md``, ``proj://reports/q3.md``,
+``autoproject://data/prices.csv``). A read or write of a conversation file
+records BOTH keys, so either tool family licenses an edit through either;
+``proj://`` and ``autoproject://`` keys never collide with a bare key. The
+sidecar is per conversation, so an AutoProject file read in an earlier run
+does not license an edit in a later one.
 """
 
 import asyncio
