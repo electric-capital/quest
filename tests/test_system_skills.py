@@ -119,8 +119,11 @@ def test_list_system_skills_project_db_only_for_legacy_projects():
 
 
 def test_list_system_skills_none_means_include_all_backends():
-    # Passing connected_services=None is the legacy "include all" path.
-    visible_ids = {s.id for s in list_system_skills(None, has_project=True)}
+    # Passing connected_services=None is the legacy "include all" path; it
+    # does not bypass the project or AutoProject-run scoping.
+    visible_ids = {
+        s.id for s in list_system_skills(None, has_project=True, is_autoproject_run=True)
+    }
     for sid in CATALOG:
         assert sid in visible_ids
 

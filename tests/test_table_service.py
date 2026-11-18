@@ -72,6 +72,7 @@ def env(tmp_path, monkeypatch):
 
     import chat.storage as storage_mod
     import db.action_request_store as action_request_store
+    import db.autoproject_store as autoproject_store
     import db.conversation_store as conversation_store
     import db.doc_store as doc_store
     import db.memory_store as memory_store
@@ -83,7 +84,7 @@ def env(tmp_path, monkeypatch):
 
     models.Base.metadata.create_all(sync_engine)
     for mod in (
-        action_request_store, conversation_store, doc_store,
+        action_request_store, autoproject_store, conversation_store, doc_store,
         memory_store, project_store, routine_store, table_store, user_store,
     ):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)

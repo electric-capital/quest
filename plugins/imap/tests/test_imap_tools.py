@@ -777,7 +777,8 @@ class TestSkill:
         from chat.gemini_api import tool_dispatch as td
 
         ctx = SimpleNamespace(user={**two_accounts.user, "api_key": "k"},
-                              conversation_id=None, project_id=None)
+                              conversation_id=None, project_id=None,
+                              is_autoproject_run=False)
         with patch.object(td, "_get_connected_services", return_value={"imap": True}):
             out = _run(td._tool_load_skills(ctx, {"skill_ids": ["system:imap"]}))
         assert "bob@other.org" in out

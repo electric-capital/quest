@@ -604,6 +604,10 @@ class TestPreviewAndLabels:
     def test_public_blocked_loop_tools_unchanged(self):
         from chat.gemini_api.turn_tools import (
             _PUBLIC_BLOCKED_LOOP_TOOLS,
+            ASK_AUTOPROJECT_QUESTION_KEY,
+            ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
+            COMPLETE_AUTOPROJECT_RUN_KEY,
+            COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY,
             REQUEST_SERVICE_CONNECTION_KEY,
             WAIT_FOR_HANDLES_KEY,
         )
@@ -617,6 +621,11 @@ class TestPreviewAndLabels:
             "return_final_response",
             WAIT_FOR_HANDLES_KEY,
             REQUEST_SERVICE_CONNECTION_KEY,
+            # An AutoProject run is never public; defense in depth.
+            COMPLETE_AUTOPROJECT_RUN_KEY,
+            COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY,
+            ASK_AUTOPROJECT_QUESTION_KEY,
+            ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
         })
 
 

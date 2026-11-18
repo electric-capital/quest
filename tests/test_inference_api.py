@@ -385,6 +385,9 @@ _CORE_READ_OR_WORKSPACE_TOOLS = {
     "browser_select", "browser_press", "browser_hover", "browser_scroll",
     "browser_back", "browser_wait", "browser_screenshot", "browser_evaluate",
     "browser_close",
+    # AutoProject run log reads: listed in AutoProject runs only, and an
+    # inference run is never one, so the handlers refuse them there.
+    "list_autoproject_runs", "read_autoproject_run",
 }
 _CORE_MUTATING_TOOLS = {
     "archive_gmail_message", "modify_gmail_labels",
