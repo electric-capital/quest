@@ -99,6 +99,13 @@ function tableRow(id: string, overrides: Partial<TableListRow> = {}): TableListR
   };
 }
 
+/** The sidebar row button titled `title` (the status span may share the title). */
+function rowButton(title: string): HTMLElement {
+  const button = screen.getAllByTitle(title).find((el) => el.tagName === 'BUTTON');
+  if (!button) throw new Error(`no row button titled ${title}`);
+  return button;
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{location.pathname + location.search}</div>;
@@ -172,13 +179,13 @@ describe('Sidebar AutoProjects block', () => {
     );
     expect(labels).toEqual(['AutoProjects', 'Docs']);
     // The run view highlights its AutoProject's row too.
-    expect(screen.getByTitle('Market study', { selector: 'button' }).getAttribute('aria-current')).toBe('page');
+    expect(rowButton('Market study').getAttribute('aria-current')).toBe('page');
 
     fireEvent.click(screen.getByRole('button', { name: 'New AutoProject' }));
     expect(screen.getByTestId('location').textContent).toBe('/autoprojects/new');
     fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
     expect(screen.getByTestId('location').textContent).toBe('/autoprojects?archived=true');
-    fireEvent.click(screen.getByTitle('Market study', { selector: 'button' }));
+    fireEvent.click(rowButton('Market study'));
     expect(screen.getByTestId('location').textContent).toBe('/autoprojects/ap1');
   });
 });

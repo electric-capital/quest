@@ -50,6 +50,13 @@ function rowTitles(container: HTMLElement): string[] {
   return [...container.querySelectorAll('.autoproject-row .doc-row-title')].map((el) => el.textContent ?? '');
 }
 
+/** The sidebar row button titled `title` (the status span may share the title). */
+function rowButton(title: string): HTMLElement {
+  const button = screen.getAllByTitle(title).find((el) => el.tagName === 'BUTTON');
+  if (!button) throw new Error(`no row button titled ${title}`);
+  return button;
+}
+
 afterEach(cleanup);
 
 describe('AutoProjectsSection', () => {
@@ -83,7 +90,7 @@ describe('AutoProjectsSection', () => {
     const quiet = row('Quiet one');
     renderSection({ autoprojects: [working, waiting, unread, quiet] });
 
-    const rowFor = (title: string) => screen.getByTitle(title, { selector: 'button' });
+    const rowFor = rowButton;
     expect(within(rowFor('Site build')).getByRole('img', { name: 'Working' })).toBeTruthy();
     expect(within(rowFor('Hiring plan')).getByText('Needs you')).toBeTruthy();
     expect(within(rowFor('Market study')).getByRole('img', { name: 'Unread' })).toBeTruthy();
@@ -100,10 +107,10 @@ describe('AutoProjectsSection', () => {
     const b = row('Beta');
     const { handlers } = renderSection({ autoprojects: [a, b], activeAutoProjectId: b.id });
 
-    expect(screen.getByTitle('Beta', { selector: 'button' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByTitle('Alpha', { selector: 'button' }).getAttribute('aria-current')).toBeNull();
+    expect(rowButton('Beta').getAttribute('aria-current')).toBe('page');
+    expect(rowButton('Alpha').getAttribute('aria-current')).toBeNull();
 
-    fireEvent.click(screen.getByTitle('Alpha', { selector: 'button' }));
+    fireEvent.click(rowButton('Alpha'));
     expect(handlers.onOpenAutoProject).toHaveBeenCalledWith(a.id);
     fireEvent.click(screen.getByTitle('All AutoProjects'));
     expect(handlers.onOpenAll).toHaveBeenCalledTimes(1);
