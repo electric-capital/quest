@@ -1,7 +1,8 @@
 /**
  * File browser panel component for workspace file management. One card per
- * file space (`source`): a conversation's own workspace ("Chat Files") or a
- * project's shared workspace ("Project Files"). Every operation -- listing,
+ * file space (`source`): a conversation's own workspace ("Chat Files"), a
+ * project's shared workspace ("Project Files") or an AutoProject's workspace ("AutoProject
+ * files", shared by every run of the AutoProject). Every operation -- listing,
  * upload, new folder, delete, downloads, the viewer and its Save to Drive --
  * goes through that source's routes, and the card refreshes only on
  * `file_list_changed` events for its own space.
@@ -85,10 +86,32 @@ export interface FileRowAction {
 interface FileBrowserProps {
   /**
    * The file space browsed: a conversation's own workspace (card titled
-   * "Chat Files") or a project's shared workspace ("Project Files"). Null
-   * renders the no-conversation empty state.
+   * "Chat Files"), a project's shared workspace ("Project Files") or an
+   * AutoProject's workspace ("AutoProject files"). Null renders the no-conversation empty
+   * state.
    */
   source: FileSource | null;
+  /**
+   * The dense variant for a card inside a page column (the AutoProject page):
+   * Upload and New folder become icon buttons beside the hidden-files
+   * toggle and Refresh instead of the full-width button row, the toolbar
+   * row shows Up and the path only inside a folder (no Back / Forward),
+   * rows are one line, and the empty state is one line with an upload
+   * link. Drag and drop works as in the default card.
+   */
+  compact?: boolean;
+  /**
+   * Compact only: content at the start of the toolbar row (the AutoProject page's
+   * card title and item count), so a host card's header and the browser's
+   * toolbar are one row.
+   */
+  toolbarLead?: React.ReactNode;
+  /**
+   * Called with each listing the card shows once it has loaded: the
+   * directory and how many entries it shows (dot-named ones only while
+   * revealed). Lets a host summarise the space without a listing of its own.
+   */
+  onListing?: (listing: FileBrowserListing) => void;
   /**
    * Extra per-row actions for the row's menu. Called on render for each row
    * whose menu is open; return [] for none.
@@ -102,6 +125,21 @@ interface FileBrowserProps {
   onDismissNotice?: () => void;
 }
 
+/** What a card currently lists (FileBrowser `onListing`). */
+export interface FileBrowserListing {
+  /** Root-relative directory, `/` for the space root. */
+  path: string;
+  /** Entries shown (dot-named ones only while the card reveals them). */
+  count: number;
+}
+
+/** Card titles per file space. */
+const CARD_TITLE: Record<FileSource['kind'], string> = {
+  conversation: 'Chat Files',
+  project: 'Project Files',
+  autoproject: 'AutoProject files',
+};
+
 /** A host-owned card message: `error` in the error style, `warning` in the accent tint. */
 export interface FileBrowserNotice {
   message: string;
@@ -111,24 +149,42 @@ export interface FileBrowserNotice {
 /** Card title for a file space. */
 export function fileBrowserTitle(source: FileSource | null): string {
   if (!source) return 'Files';
-  return source.kind === 'project' ? 'Project Files' : 'Chat Files';
+  return CARD_TITLE[source.kind];
 }
 
 /**
  * Whether a ``file_list_changed`` event concerns the space a card shows:
  * conversation routes/tools publish scope "conversation" with the
  * conversation id, project routes publish scope "project" with the project
- * id (and a null conversation id); copy routes and sandbox runs publish one
- * event per scope.
+ * id (and a null conversation id), AutoProject routes and a run's autoproject:// writes
+ * publish scope "autoproject" with the AutoProject id; copy routes and sandbox runs
+ * publish one event per scope.
  */
 export function fileListEventMatchesSource(
   event: Record<string, unknown>,
   source: FileSource,
 ): boolean {
-  if (source.kind === 'conversation') {
-    return event.scope === 'conversation' && event.conversation_id === source.id;
+  switch (source.kind) {
+    case 'conversation':
+      return event.scope === 'conversation' && event.conversation_id === source.id;
+    case 'project':
+      return event.scope === 'project' && event.project_id === source.id;
+    case 'autoproject':
+      return event.scope === 'autoproject' && event.autoproject_id === source.id;
   }
-  return event.scope === 'project' && event.project_id === source.id;
+}
+
+/** The empty-state hint of a card: what the space is for. */
+function emptyHint(source: FileSource): React.ReactNode {
+  switch (source.kind) {
+    case 'project':
+      return 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.';
+    case 'autoproject':
+      return 'Shared across the updates of this AutoProject, as autoproject:// paths. You can drop or upload files and folders here.';
+    case 'conversation':
+      return <>You can drop or upload files and folders here for the agent to work on.
+        Files created by the agent will also appear here.</>;
+  }
 }
 
 function formatFileSize(bytes: number | null): string {
@@ -149,13 +205,14 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ source, rowActions, notice, onDismissNotice }: FileBrowserProps) {
+export function FileBrowser({ source, compact = false, toolbarLead, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
   // Primitives for effect deps: hosts may pass a fresh object every render.
   const sourceKind = source?.kind ?? null;
   const sourceId = source?.id ?? null;
   const {
     currentPath,
     files,
+    listedPath,
     loading,
     error,
     uploadProgress,
@@ -207,27 +264,42 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
   );
   const hiddenCount = files.length - visibleFiles.length;
 
+  // Report each loaded listing to the host (onListing). Kept in a ref so a
+  // host passing a fresh callback every render does not re-fire it.
+  const onListingRef = useRef(onListing);
+  onListingRef.current = onListing;
+  const visibleCount = visibleFiles.length;
+  useEffect(() => {
+    if (listedPath === null) return;
+    onListingRef.current?.({ path: listedPath, count: visibleCount });
+  }, [listedPath, visibleCount]);
+
   // Auto-refresh when the BE publishes a ``file_list_changed`` per-user
   // global. Filters by scope/id so only events for this card's own space
   // trigger a refetch (see fileListEventMatchesSource). A short debounce
   // coalesces bursts (e.g. several write_file calls in one turn) into a
-  // single silent fetch.
+  // single silent fetch. A socket reconnect refreshes the same way: events
+  // published while it was down are lost.
   useEffect(() => {
     if (!sourceKind || !sourceId) return;
     const watched: FileSource = { kind: sourceKind, id: sourceId };
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = persistentWebSocket.onGlobalEvent((event) => {
-      if (event.type !== 'file_list_changed') return;
-      if (!fileListEventMatchesSource(event, watched)) return;
-
+    const schedule = () => {
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         silentRefresh();
       }, FILE_LIST_REFRESH_DEBOUNCE_MS);
+    };
+    const unsubscribeEvents = persistentWebSocket.onGlobalEvent((event) => {
+      if (event.type !== 'file_list_changed') return;
+      if (!fileListEventMatchesSource(event, watched)) return;
+      schedule();
     });
+    const unsubscribeReconnect = persistentWebSocket.onReconnect(schedule);
     return () => {
-      unsubscribe();
+      unsubscribeEvents();
+      unsubscribeReconnect();
       if (timer !== null) clearTimeout(timer);
     };
   }, [sourceKind, sourceId, silentRefresh]);
@@ -366,6 +438,60 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
     }
   }, [currentPath, source, deleteItem]);
 
+  const uploadLabel = uploadProgress
+    ? uploadPercent !== null
+      ? `Uploading ${uploadPercent}%`
+      : 'Uploading...'
+    : 'Upload files';
+  const headerActions = (
+    <div className="file-browser-header-actions">
+      {compact && (
+        <>
+          <button
+            type="button"
+            className="nav-button"
+            onClick={handleUploadClick}
+            disabled={uploadProgress || isInitialLoading}
+            title={uploadLabel}
+            aria-label={uploadLabel}
+          >
+            <Upload size={16} />
+          </button>
+          <button
+            type="button"
+            className="nav-button"
+            onClick={handleNewFolderClick}
+            disabled={uploadProgress || isInitialLoading}
+            title="New folder"
+            aria-label="New folder"
+          >
+            <FolderPlus size={16} />
+          </button>
+        </>
+      )}
+      <button
+        className={`hidden-toggle-button${showHidden ? ' active' : ''}`}
+        onClick={() => setShowHidden(!showHidden)}
+        title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+        aria-pressed={showHidden}
+      >
+        {showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+      </button>
+      <button
+        className="refresh-button"
+        onClick={refresh}
+        disabled={isInitialLoading}
+        title="Refresh"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M23 4v6h-6" />
+          <path d="M1 20v-6h6" />
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+        </svg>
+      </button>
+    </div>
+  );
+
   // No file space: nothing to browse until a conversation is selected.
   if (!source) {
     return (
@@ -382,39 +508,48 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
 
   return (
     <div
-      className={`file-browser ${isDragOver ? 'drag-over' : ''}`}
+      className={`file-browser${compact ? ' file-browser--compact' : ''}${isDragOver ? ' drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Header with title */}
-      <div className="file-browser-header">
-        <h3>{fileBrowserTitle(source)}</h3>
-        <div className="file-browser-header-actions">
-          <button
-            className={`hidden-toggle-button${showHidden ? ' active' : ''}`}
-            onClick={() => setShowHidden(!showHidden)}
-            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
-            aria-pressed={showHidden}
-          >
-            {showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
-          </button>
-          <button
-            className="refresh-button"
-            onClick={refresh}
-            disabled={isInitialLoading}
-            title="Refresh"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M23 4v6h-6" />
-              <path d="M1 20v-6h6" />
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-          </button>
+      {/* Header with title (left out by the compact card: its actions then
+          end the navigation row) */}
+      {!compact && (
+        <div className="file-browser-header">
+          <h3>{fileBrowserTitle(source)}</h3>
+          {headerActions}
         </div>
-      </div>
+      )}
 
-      {/* Navigation bar */}
+      {/* Navigation bar. Compact: the host's lead, then Up and the path only
+          inside a folder, then the actions. */}
+      {compact ? (
+        <div className="file-browser-nav">
+          {toolbarLead}
+          {canGoUp ? (
+            <>
+              <button
+                className="nav-button"
+                onClick={goUp}
+                disabled={isInitialLoading}
+                title="Up one level"
+                aria-label="Up one level"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+              <span className="current-path" title={currentPath}>
+                {currentPath}
+              </span>
+            </>
+          ) : (
+            <span className="file-browser-nav-spacer" />
+          )}
+          {headerActions}
+        </div>
+      ) : (
       <div className="file-browser-nav">
         <button
           className="nav-button"
@@ -450,16 +585,24 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
           {currentPath}
         </span>
       </div>
+      )}
 
-      {/* Action buttons: Upload Files + New Folder, equal width */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        onChange={handleFileInputChange}
+        style={{ display: 'none' }}
+      />
+      {compact ? (
+        uploadProgress && uploadPercent !== null && (
+          <div className="upload-progress-bar file-browser-compact-progress">
+            <div className="upload-progress-bar-fill" style={{ width: `${uploadPercent}%` }} />
+          </div>
+        )
+      ) : (
+      /* Action buttons: Upload Files + New Folder, equal width */
       <div className="file-browser-actions">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          onChange={handleFileInputChange}
-          style={{ display: 'none' }}
-        />
         <div className="file-browser-action-buttons">
           <button
             className="action-button upload-button"
@@ -495,6 +638,7 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
           </div>
         )}
       </div>
+      )}
 
       {/* Error display */}
       {error && (
@@ -536,6 +680,27 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
       <div className="file-list">
         {loading && files.length === 0 ? (
           <div className="file-browser-loading">Loading...</div>
+        ) : !loading && visibleFiles.length === 0 && compact ? (
+          <div className="file-browser-empty file-browser-empty--compact">
+            {hiddenCount > 0 ? (
+              <p>
+                No files shown: {hiddenCount} hidden item{hiddenCount !== 1 ? 's' : ''}.
+              </p>
+            ) : (
+              <p>
+                No files yet. Drop files here or{' '}
+                <button
+                  type="button"
+                  className="file-browser-empty-upload"
+                  onClick={handleUploadClick}
+                  disabled={uploadProgress || isInitialLoading}
+                >
+                  upload
+                </button>
+                .
+              </p>
+            )}
+          </div>
         ) : !loading && visibleFiles.length === 0 ? (
           <div className="file-browser-empty">
             <p>No files yet</p>
@@ -544,12 +709,7 @@ export function FileBrowser({ source, rowActions, notice, onDismissNotice }: Fil
                 {hiddenCount} hidden item{hiddenCount !== 1 ? 's' : ''}. Toggle "Show hidden files" to reveal {hiddenCount !== 1 ? 'them' : 'it'}.
               </p>
             ) : (
-              <p className="drop-hint">
-                {source.kind === 'project'
-                  ? 'Shared by every chat in this project; chats reach these files as proj:// paths. You can drop or upload files and folders here.'
-                  : <>You can drop or upload files and folders here for the agent to work on.
-                    Files created by the agent will also appear here.</>}
-              </p>
+              <p className="drop-hint">{emptyHint(source)}</p>
             )}
           </div>
         ) : (

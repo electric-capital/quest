@@ -19,6 +19,8 @@ import { TablesGateClosed } from './tables/TablesGateClosed'
 import { TableViewer } from './tables/TableViewer'
 import { TablesListView } from './tables/TablesListView'
 import type { TablesRoute } from '../utils/tablesRoute'
+import { AutoProjectsMain } from './autoprojects/AutoProjectsMain'
+import type { AutoProjectsRoute } from '../utils/autoprojectsRoute'
 
 interface MobileShellProps {
   activeConversationId: string | null
@@ -26,6 +28,8 @@ interface MobileShellProps {
   onConversationSelect: (id: string, projectId?: string | null) => void
   onNewConversation: (id: string, projectId?: string | null) => void
   onProjectIdLoaded: (conversationId: string, projectId: string) => void
+  /** A conversation opened by its URL turned out to be an AutoProject run. */
+  onAutoProjectIdLoaded: (conversationId: string, autoprojectId: string) => void
   /** Parsed /docs URL (parseDocsRoute), or null off the docs routes. */
   docsRoute: DocsRoute | null
   /** Whether the `docs` feature gate is open for the current user. */
@@ -34,6 +38,10 @@ interface MobileShellProps {
   tablesRoute: TablesRoute | null
   /** Whether the `tables` feature gate is open for the current user. */
   tablesEnabled: boolean
+  /** Parsed /autoprojects URL (parseAutoProjectsRoute), or null off the AutoProjects routes. */
+  autoprojectsRoute: AutoProjectsRoute | null
+  /** Whether the `autoprojects` feature gate is open for the current user. */
+  autoprojectsEnabled: boolean
 }
 
 interface ConversationSelectOpts {
@@ -45,8 +53,11 @@ interface ConversationSelectOpts {
  * Sidebar/ChatPanel/RightPanel row when useIsMobile() matches. Same routes,
  * same data layer — only the layout tree differs: a fixed top bar, a slide-in
  * drawer hosting the existing Sidebar, and a single main pane (chat, home
- * composer, requests, or a Quest Docs or Quest Tables view). The
- * desktop-only RightPanel is intentionally absent.
+ * composer, requests, or a Quest Docs, Tables or AutoProjects view). The
+ * RightPanel lives in the workspace drawer behind the top bar's folder
+ * button, for a chat; the docs, tables and AutoProjects views have no workspace
+ * (an AutoProject page shows its files in its main column, and a run's Chat Files
+ * in its full-screen run view).
  */
 export function MobileShell({
   activeConversationId,
@@ -54,10 +65,13 @@ export function MobileShell({
   onConversationSelect,
   onNewConversation,
   onProjectIdLoaded,
+  onAutoProjectIdLoaded,
   docsRoute,
   docsEnabled,
   tablesRoute,
   tablesEnabled,
+  autoprojectsRoute,
+  autoprojectsEnabled,
 }: MobileShellProps) {
   const { appName } = useAppConfig()
   const {
@@ -159,6 +173,25 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tablesRouteKey])
 
+  // Same for an AutoProjects view (a list, New AutoProject, an AutoProject page
+  // or one of its runs).
+  const autoprojectsRouteKey = autoprojectsRoute
+    ? autoprojectsRoute.kind === 'list'
+      ? `list:${autoprojectsRoute.archived ? 'archived' : 'active'}`
+      : autoprojectsRoute.kind === 'new'
+        ? 'new'
+        : autoprojectsRoute.kind === 'page'
+          ? `page:${autoprojectsRoute.autoprojectId}`
+          : `run:${autoprojectsRoute.autoprojectId}:${autoprojectsRoute.conversationId}`
+    : null
+  useEffect(() => {
+    if (autoprojectsRouteKey === null) return
+    setDrawerOpen(false)
+    setWorkspaceOpen(false)
+  }, [autoprojectsRouteKey])
+
+  const hasWorkspace = !docsRoute && !tablesRoute && !autoprojectsRoute
+
   const closeOverlays = useCallback(() => {
     setDrawerOpen(false)
     setWorkspaceOpen(false)
@@ -222,9 +255,9 @@ export function MobileShell({
             <span className="mobile-topbar-title-text">{appName}</span>
           )}
         </div>
-        {/* No workspace beside a docs or tables view (desktop hides the
-            RightPanel there too); keep the slot so the title stays put. */}
-        {docsRoute || tablesRoute ? (
+        {/* No workspace beside a docs, tables or AutoProjects view (desktop hides
+            the RightPanel there too); keep the slot so the title stays put. */}
+        {!hasWorkspace ? (
           <span className="mobile-topbar-button mobile-topbar-button-end" aria-hidden="true" />
         ) : (
           <button
@@ -267,10 +300,15 @@ export function MobileShell({
               />
             )}
           </div>
+        ) : autoprojectsRoute ? (
+          <div className="main-content docs-main">
+            <AutoProjectsMain route={autoprojectsRoute} enabled={autoprojectsEnabled} />
+          </div>
         ) : activeConversationId ? (
           <ChatPanel
             conversationId={activeConversationId}
             onProjectIdLoaded={onProjectIdLoaded}
+            onAutoProjectIdLoaded={onAutoProjectIdLoaded}
           />
         ) : (
           <HomeComposer onNewConversation={handleNewConversation} />

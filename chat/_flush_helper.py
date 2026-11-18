@@ -33,6 +33,10 @@ FLUSH_EVENT_TYPES: frozenset[str] = frozenset({
     # The inline connect card (request_service_connection); rewritten in
     # place on resolve like action_request.
     "connect_request",
+    # An AutoProject run's question to the user (ask_autoproject_question,
+    # chat/autoprojects/questions.py); rewritten in place on answer or cancel like
+    # connect_request, so it must be on disk before the run suspends.
+    "autoproject_question",
     "stats",
     # A run-fatal error is appended as a durable structured message by the
     # top-level handler in run_conversation_turn; flushing on it persists the
@@ -49,6 +53,10 @@ FLUSH_EVENT_TYPES: frozenset[str] = frozenset({
     # row is appended to messages_out before this is emitted so it lands in
     # the transcript ahead of the nudge turn's messages.
     "routine_nudge",
+    # The AutoProjects twin: an AutoProject run ended without calling
+    # complete_autoproject_run and its driver (chat/autoprojects/runs.py) is about to run
+    # a follow-up turn; the notice row is appended before this is emitted.
+    "autoproject_nudge",
 })
 
 

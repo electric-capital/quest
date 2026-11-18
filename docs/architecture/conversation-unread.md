@@ -28,7 +28,7 @@ A run ends when the model finishes its output, when the turn fails (the error ro
 Four cases are excluded:
 
 - **A run the user stopped.** They were looking at it, and the interrupted marker is not news.
-- **Conversations read elsewhere** (`UNREAD_ORIGINS`): Slack, inference API and cross-user subagent conversations are read-only in the web UI and consumed in another place, so a dot on them would never clear in normal use.
+- **Conversations read elsewhere** (`UNREAD_ORIGINS`): Slack, inference API and cross-user subagent conversations are read-only in the web UI and consumed in another place, so a dot on them would never clear in normal use. AutoProject run conversations are outside it too: their unread state is kept on the AutoProject, with the same two seqs and acknowledgement rules ([AutoProjects -- Unread](autoprojects.md#unread)).
 - **A routine's own run.** A routine's conversation (`routine_id` set) stays read through the routine run, scheduled or one-click, including its resumes after an approval. It takes unread state from the first run that a message the user sent themselves started, and from every run after that. The callers pass `user_started`: true for a WS send that is not the routine prompt, false for the routine prompt and for a resume, which continues whichever run suspended. A resume is marked when `unread_seq` is already non-zero, which on a routine's conversation only a user-started run can have made it. The scheduler does not call the hook at all.
 - **Archived conversations.** A run that ends on one leaves it read.
 

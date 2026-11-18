@@ -18,8 +18,9 @@ Handler calling convention:
 * A handler returns the tool-result string, or raises one of the suspend
   sentinels defined below (:class:`SuspendForWaitHandles`,
   :class:`SuspendForSlackReply`, :class:`SuspendForActionRequest`,
-  :class:`FinishInferenceResponse`) -- those are control flow, not
-  errors, and must propagate to the loop unchanged.
+  :class:`SuspendForServiceConnection`, :class:`SuspendForAutoProjectQuestion`,
+  :class:`FinishInferenceResponse`, :class:`FinishAutoProjectRun`) -- those are
+  control flow, not errors, and must propagate to the loop unchanged.
 
 The loop calls ``_log_large_tool_result`` once per handled call, so no
 handler logs its own result.
@@ -67,6 +68,14 @@ REQUEST_SERVICE_CONNECTION_KEY = "tool_call:request_service_connection"
 ROUTINE_COMPLETED_KEY = "routine_completed"
 ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY = "tool_call:routine_completed"
 
+# The two loop tools of a run of an AutoProject (AUTOPROJECT_RUN_TOOLS). Like
+# routine_completed they have their own top-level schemas and are accepted
+# through ``tool_call`` too, since weaker models route loop tools that way.
+COMPLETE_AUTOPROJECT_RUN_KEY = "complete_autoproject_run"
+COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY = "tool_call:complete_autoproject_run"
+ASK_AUTOPROJECT_QUESTION_KEY = "ask_autoproject_question"
+ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY = "tool_call:ask_autoproject_question"
+
 # Loop-handled tool arms hard-rejected in public-project conversations
 # (defense in depth beside the trimmed PUBLIC_TOOLS schema): sub-agent
 # spawners, wait_for_handles, and the origin-specific finish/reply tools.
@@ -76,7 +85,9 @@ ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY = "tool_call:routine_completed"
 # and routine runs in public projects need it (PUBLIC_ROUTINE_TOOLS).
 # ``create_action_request`` is absent too: its arm admits only the
 # public-safe request types there (PUBLIC_ACTION_REQUEST_TYPES, the Quest
-# Docs and Quest Tables cards) and rejects every other type itself.
+# Docs and Quest Tables cards) and rejects every other type itself. The
+# AutoProject-run tools are listed although an AutoProject run is never public (its
+# arms also refuse outside an AutoProject run): defense in depth.
 _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "agent_task",
     "agent_task_parallel",
@@ -86,6 +97,10 @@ _PUBLIC_BLOCKED_LOOP_TOOLS = frozenset({
     "return_final_response",
     WAIT_FOR_HANDLES_KEY,
     REQUEST_SERVICE_CONNECTION_KEY,
+    COMPLETE_AUTOPROJECT_RUN_KEY,
+    COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY,
+    ASK_AUTOPROJECT_QUESTION_KEY,
+    ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
 })
 
 
@@ -220,6 +235,31 @@ class SuspendForServiceConnection(Exception):
         self.sibling_handle_ids: list[str] = []
 
 
+class SuspendForAutoProjectQuestion(Exception):
+    """Raised by the ``ask_autoproject_question`` arm when a run of an
+    AutoProject must suspend until the user answers its question on the
+    AutoProject page (chat/autoprojects/questions.py).
+
+    Mirrors :class:`SuspendForServiceConnection`: the dispatch loop records
+    it per call (siblings in the same batch keep running), unwinds without
+    a ``tool_result``, and the resume bucket closes the dangling tool_use
+    with the ``autoproject_question`` wait-handle row's ``response``. The
+    AutoProject run driver sets the run ``waiting`` when the turn ends this
+    way.
+    """
+
+    def __init__(self, handle_id: str, tool_id: str, run_id: str) -> None:
+        super().__init__(
+            f"ask_autoproject_question suspended "
+            f"(tool_id={tool_id}, handle_id={handle_id}, run_id={run_id})"
+        )
+        self.handle_id = handle_id
+        self.tool_id = tool_id
+        self.run_id = run_id
+        # Same logging-only role as SuspendForActionRequest.sibling_handle_ids.
+        self.sibling_handle_ids: list[str] = []
+
+
 class FinishInferenceResponse(Exception):
     """Raised by the ``return_final_response`` arm when a one-shot
     inference API run (origin="inference_api") has delivered its final
@@ -238,6 +278,24 @@ class FinishInferenceResponse(Exception):
         super().__init__(
             f"return_final_response delivered (tool_id={tool_id})"
         )
+        self.tool_id = tool_id
+
+
+class FinishAutoProjectRun(Exception):
+    """Raised by the ``complete_autoproject_run`` arm when a run of an
+    AutoProject has been completed and the loop must end with no further model
+    call.
+
+    Same shape as :class:`FinishInferenceResponse`: the run is genuinely
+    finished (its row is ``completed``, written by chat/autoprojects/runs.py), and
+    the matching ``tool_result`` is appended BEFORE the raise so the
+    transcript closes cleanly. The run driver (``drive_autoproject_run``) reads the
+    run row, not this exception. Inherits from ``Exception`` (not
+    ``BaseException``) so it never masks ``CancelledError``.
+    """
+
+    def __init__(self, tool_id: str) -> None:
+        super().__init__(f"complete_autoproject_run accepted (tool_id={tool_id})")
         self.tool_id = tool_id
 
 
@@ -292,6 +350,10 @@ def registry_key_for(tool_name: str, args: dict[str, Any]) -> str:
             return REQUEST_SERVICE_CONNECTION_KEY
         if inner == ROUTINE_COMPLETED_KEY:
             return ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY
+        if inner == COMPLETE_AUTOPROJECT_RUN_KEY:
+            return COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY
+        if inner == ASK_AUTOPROJECT_QUESTION_KEY:
+            return ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY
     return tool_name
 
 
@@ -540,26 +602,6 @@ async def _build_wait_for_handles_result(
     return payload
 
 
-async def _publish_request_count(user_id: int) -> None:
-    """Best-effort: publish the per-user action-request counts to the
-    persistent WS so the sidebar badge updates without waiting for a poll.
-    """
-    try:
-        from chat.realtime import bus as _rt_bus
-        from chat.realtime import events as _rt_events
-        from db.action_request_store import count_action_requests_by_status
-        counts = await count_action_requests_by_status(user_id)
-        _rt_bus.publish_to_user(
-            user_id,
-            _rt_events.make_request_count_changed(counts),
-        )
-    except Exception:
-        logger.debug(
-            "[conversation] publish request_count_changed failed",
-            exc_info=True,
-        )
-
-
 async def _open_action_request_card(
     ctx: RunContext,
     *,
@@ -636,6 +678,25 @@ async def _open_action_request_card(
     })
 
     return request_id, wait_handle_id
+
+
+async def _load_spawn_autoproject_context(ctx: RunContext) -> str:
+    """The read-only ``## AutoProject`` block for the sub-agents of one spawn
+    call, or ``""`` outside a run of an AutoProject.
+
+    Loaded fresh per spawn call (once for a whole parallel batch), so a
+    sub-agent sees the brief as it is now. Called inside the spawn arm's
+    runner: a store error, or an AutoProject deleted under the run, becomes the
+    spawn's tool error through :func:`_run_spawn_arm`.
+    """
+    if not ctx.autoproject_id:
+        return ""
+    from chat.autoprojects.context import load_autoproject_subagent_context
+
+    text = await load_autoproject_subagent_context(ctx.autoproject_id)
+    if text is None:
+        raise RuntimeError("this run's AutoProject no longer exists")
+    return text
 
 
 async def _run_spawn_arm(
@@ -736,6 +797,7 @@ async def _handle_agent_task(
         sub_provider = ctx.provider
 
     async def _runner(usage: dict) -> str:
+        autoproject_context = await _load_spawn_autoproject_context(ctx)
         return await _run_sub_agent(
             app=ctx.app,
             provider=sub_provider,
@@ -754,6 +816,9 @@ async def _handle_agent_task(
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
             level=1,
+            autoproject_context=autoproject_context,
+            autoproject_id=ctx.autoproject_id,
+            autoproject_run_id=ctx.autoproject_run_id,
         )
 
     return await _run_spawn_arm(
@@ -779,6 +844,7 @@ async def _handle_agent_task_parallel(
     task_names = [t.get("name", "Sub-Agent") for t in tasks_list]
 
     async def _runner(usage: dict) -> str:
+        autoproject_context = await _load_spawn_autoproject_context(ctx)
         return await _run_parallel_sub_agents(
             app=ctx.app,
             provider=ctx.provider,
@@ -795,6 +861,9 @@ async def _handle_agent_task_parallel(
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
+            autoproject_context=autoproject_context,
+            autoproject_id=ctx.autoproject_id,
+            autoproject_run_id=ctx.autoproject_run_id,
         )
 
     return await _run_spawn_arm(
@@ -817,6 +886,7 @@ async def _handle_agent_task_parallel_template(
     agent_names = [a.get("name", "Sub-Agent") for a in template_agents]
 
     async def _runner(usage: dict) -> str:
+        autoproject_context = await _load_spawn_autoproject_context(ctx)
         return await _run_parallel_sub_agents_template(
             app=ctx.app,
             provider=ctx.provider,
@@ -834,6 +904,9 @@ async def _handle_agent_task_parallel_template(
             parent_tool_id=call.tool_id,
             nested_enabled=ctx.nested_subagents,
             workspace_notice_flags=ctx.workspace_notice_flags,
+            autoproject_context=autoproject_context,
+            autoproject_id=ctx.autoproject_id,
+            autoproject_run_id=ctx.autoproject_run_id,
         )
 
     return await _run_spawn_arm(
@@ -979,7 +1052,9 @@ async def _handle_return_to_caller(
         _RunStatus.AWAITING_RETURN,
     )
 
-    await _publish_request_count(ctx.user["id"])
+    # Imported here: chat.realtime imports this package.
+    from chat.realtime.bus import publish_request_count_changed
+    await publish_request_count_changed(ctx.user["id"])
 
     raise SuspendForActionRequest(
         handle_id=wait_handle_id,
@@ -1054,6 +1129,170 @@ async def _handle_routine_completed(
     if isinstance(summary, str) and summary.strip():
         result["summary"] = summary.strip()
     return json.dumps(result)
+
+
+def _not_in_autoproject_run_result(tool_name: str) -> str:
+    """The refusal for an AutoProject-run tool called outside a run of an
+    AutoProject (``ctx.autoproject_run_id`` is None). The run is resolved
+    server-side from the calling conversation, never from arguments."""
+    return json.dumps({
+        "error": (
+            f"{tool_name} is only available inside AutoProject "
+            "runs."
+        ),
+    })
+
+
+async def _handle_complete_autoproject_run(
+    ctx: RunContext, call: ToolCall, turn: TurnState,
+) -> str:
+    """Finish the calling AutoProject run (``complete_autoproject_run``).
+
+    The run is the calling conversation's own (``ctx.autoproject_id`` /
+    ``ctx.autoproject_run_id``, never ids from the arguments); the work is
+    ``chat.autoprojects.runs.complete_autoproject_run``. An accepted call
+    appends the closing tool_result and ends the loop through the
+    :class:`FinishAutoProjectRun` sentinel, with no further model call. A refusal (validation, a
+    ``brief_conflict``, a finished run) is the tool result and the run
+    continues so the model can retry.
+
+    Registered under both the top-level name and the ``tool_call``-riding
+    key (:data:`COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY`); in the latter
+    form the tool's own arguments sit under ``arguments``. Sub-agents and
+    scripts never reach this arm: shared dispatch refuses the name
+    (``_dispatch_tool_call_inner``).
+    """
+    if ctx.autoproject_run_id is None or ctx.autoproject_id is None:
+        return _not_in_autoproject_run_result("complete_autoproject_run")
+    args = call.args
+    if call.key == COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY:
+        inner = args.get("arguments")
+        args = inner if isinstance(inner, dict) else {}
+
+    from chat.autoprojects.runs import complete_autoproject_run
+
+    try:
+        outcome = await complete_autoproject_run(
+            autoproject_id=ctx.autoproject_id,
+            run_id=ctx.autoproject_run_id,
+            args=args,
+        )
+    except Exception:
+        # A store hiccup must not kill the run: the model can call again.
+        logger.exception(
+            "complete_autoproject_run failed (conversation=%s, run=%s)",
+            ctx.conversation_id, ctx.autoproject_run_id,
+        )
+        return json.dumps({
+            "error": (
+                "complete_autoproject_run failed because of a server error; the "
+                "run's log entry was not saved. Try the call again."
+            ),
+            "code": "complete_autoproject_run_failed",
+        })
+    if not outcome.ended:
+        return outcome.result
+
+    await _emit_durable(ctx, {
+        "type": "tool_result",
+        "tool_id": call.tool_id,
+        "tool_output": outcome.result,
+    }, durable_extra={"role": "assistant"})
+    raise FinishAutoProjectRun(tool_id=call.tool_id)
+
+
+async def _handle_ask_autoproject_question(
+    ctx: RunContext, call: ToolCall, turn: TurnState,
+) -> str:
+    """Ask the user a question on the AutoProject page and suspend
+    (``ask_autoproject_question``).
+
+    See chat/autoprojects/questions.py. The run is the calling conversation's
+    own (``ctx.autoproject_id`` / ``ctx.autoproject_run_id``, never ids from
+    the arguments). The arm validates the arguments, checks the run is still
+    active, opens a pending ``autoproject_question`` wait handle, records the
+    durable ``autoproject_question`` transcript message and raises
+    :class:`SuspendForAutoProjectQuestion`; the resume bucket closes the
+    tool_use with the answer. A refusal
+    (validation, a finished run, a store failure) is the tool result
+    ``{error, code, ...}`` and the run continues.
+
+    The run's status is NOT set here: the AutoProject run driver
+    (``drive_autoproject_run``) sets ``waiting``, marks the AutoProject unread
+    and publishes when the turn ends on the dangling tool_use.
+
+    Registered under both the top-level name and the ``tool_call``-riding
+    key (:data:`ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY`); in the latter
+    form the tool's own arguments sit under ``arguments``. Sub-agents and
+    scripts never reach this arm: shared dispatch refuses the name
+    (``_dispatch_tool_call_inner``).
+    """
+    if ctx.autoproject_run_id is None or ctx.autoproject_id is None:
+        return _not_in_autoproject_run_result("ask_autoproject_question")
+    args = call.args
+    if call.key == ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY:
+        inner = args.get("arguments")
+        args = inner if isinstance(inner, dict) else {}
+
+    # Lazy like the complete_autoproject_run arm: the chat.autoprojects modules stay off
+    # this module's import graph (chat.autoprojects.events imports chat.realtime,
+    # whose package init imports the socket module, which imports this
+    # package).
+    from chat.autoprojects import questions
+    from chat.autoprojects.constants import AUTOPROJECT_RUN_ACTIVE_STATUSES
+    from db import autoproject_store
+    from db.autoproject_store import (
+        AutoProjectRunFinishedError,
+        AutoProjectRunNotFoundError,
+        AutoProjectStoreError,
+        AutoProjectValidationError,
+    )
+
+    def _store_error(exc: AutoProjectStoreError) -> str:
+        return json.dumps({"error": exc.message, "code": exc.code, **exc.details})
+
+    try:
+        question, options = questions.validate_question(
+            args.get("question"), args.get("options"),
+        )
+    except AutoProjectValidationError as exc:
+        return _store_error(exc)
+
+    # Provider-native id, like request_service_connection: the resume
+    # bucket matches rows against the dangling tool_use's own id.
+    tool_id = call.raw_tool_id or call.tool_id
+    try:
+        run = await autoproject_store.get_run(ctx.autoproject_run_id)
+        if run is None or run["autoproject_id"] != ctx.autoproject_id:
+            return _store_error(AutoProjectRunNotFoundError(ctx.autoproject_run_id))
+        if run["status"] not in AUTOPROJECT_RUN_ACTIVE_STATUSES:
+            return _store_error(AutoProjectRunFinishedError(ctx.autoproject_run_id, run["status"]))
+        handle = await questions.post_question(
+            user_id=ctx.user["id"],
+            conversation_id=ctx.conversation_id,
+            run_id=ctx.autoproject_run_id,
+            tool_id=tool_id,
+            question=question,
+            options=options,
+        )
+    except Exception:
+        # A store hiccup must not kill the run: the model can call again.
+        logger.exception(
+            "ask_autoproject_question failed (conversation=%s, run=%s)",
+            ctx.conversation_id, ctx.autoproject_run_id,
+        )
+        return json.dumps({
+            "error": (
+                "ask_autoproject_question failed because of a server error; the "
+                "question was not posted. Try the call again."
+            ),
+            "code": "ask_autoproject_question_failed",
+        })
+
+    await _emit_durable(ctx, questions.make_question_message(handle))
+    raise SuspendForAutoProjectQuestion(
+        handle_id=handle["id"], tool_id=tool_id, run_id=ctx.autoproject_run_id,
+    )
 
 
 async def _enrich_params_for_preview(
@@ -1304,7 +1543,9 @@ async def _handle_create_action_request(
         tool_id=call.raw_tool_id,
     )
 
-    await _publish_request_count(ctx.user["id"])
+    # Imported here: chat.realtime imports this package.
+    from chat.realtime.bus import publish_request_count_changed
+    await publish_request_count_changed(ctx.user["id"])
 
     # Suspend the agent loop on the linked wait-handle row. The resume
     # bucket on the next run closes the dangling create_action_request
@@ -1419,6 +1660,10 @@ TURN_TOOL_HANDLERS: dict[str, TurnToolHandler] = {
     "return_final_response": _handle_return_final_response,
     ROUTINE_COMPLETED_KEY: _handle_routine_completed,
     ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY: _handle_routine_completed,
+    COMPLETE_AUTOPROJECT_RUN_KEY: _handle_complete_autoproject_run,
+    COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY: _handle_complete_autoproject_run,
+    ASK_AUTOPROJECT_QUESTION_KEY: _handle_ask_autoproject_question,
+    ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY: _handle_ask_autoproject_question,
     "create_action_request": _handle_create_action_request,
     WAIT_FOR_HANDLES_KEY: _handle_wait_for_handles,
     REQUEST_SERVICE_CONNECTION_KEY: _handle_request_service_connection,

@@ -26,7 +26,7 @@ The server independently rejects unacknowledged sends, so the block cannot be by
 2. FE seeds `conversationStore.setExpensiveResume` -> `ChatPanel` renders `ExpensiveResumeWarning`, `Composer` disables input (`expensiveResumeBlocked` prop)
 3. User picks: Duplicate Workspace (`POST /conversations/{id}/duplicate-workspace`, navigate to the fresh chat), Create Project from Chat (`ConvertToProjectModal` -> `POST /projects/from-conversation`), Compact this chat (`POST /conversations/{id}/compact`, then the warning clears), or Continue anyway (`conversationStore.acknowledgeExpensiveResume`).
 4. Acknowledged sends carry `expensive_resume_acknowledged: true` on the `send_message` envelope; the server gate in `_handle_send_message` re-checks and lets the turn through
-5. A compaction refusal is a 409 whose message the card shows. `conversation_busy` means a wait handle is pending, a model run is in progress (`conversation_run_active()` in `chat/compaction.py`; its docstring lists the runs it sees), or a run changed the history while the summary was being written. The other codes are `CompactionError`'s, raised in `compact_conversation()`.
+5. A compaction refusal is a 409 whose message the card shows. `conversation_busy` means a wait handle is pending, a model run is in progress (`conversation_run_active()` in `chat/compaction.py`; its docstring lists the runs it sees), or a run changed the history while the summary was being written. An AutoProject run is refused with `autoproject_run_conversation`: it has one user message, so there is nothing older to summarize, and its send path skips this warning ([AutoProjects -- Start](autoprojects.md#start)). The other codes are `CompactionError`'s, raised in `compact_conversation()`.
 
 ## Design Decisions
 

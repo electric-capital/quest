@@ -23,9 +23,20 @@
  * clears the dot on every other client. An unfocused window acknowledges
  * when it regains focus (`acknowledgeViewed`, wired to the focus events by
  * hooks/useConversationUnread.ts).
+ *
+ * AutoProjects follow the same rules with their own pair of seqs (unread
+ * while `unread_seq > read_seq`), kept in separate maps so an AutoProject id can
+ * never be read as a conversation id. AutoProject seqs come from list rows, the
+ * AutoProject detail and the read response only: there is no AutoProject unread event;
+ * `autoproject_list_changed` / `autoproject_changed` make the AutoProject hooks refetch, and
+ * they merge the refetched rows and detail here (hooks/useAutoProjects.ts,
+ * hooks/useAutoProject.ts). The viewed AutoProject (its newest update on screen, reported
+ * by hooks/useAutoProjectUnread.ts) is acknowledged by `acknowledgeViewed` exactly
+ * like the viewed conversation, through POST /autoprojects/{id}/read.
  */
 
 import { markConversationRead } from '../api/client';
+import { markAutoProjectRead } from '../api/autoprojectsApi';
 import type { UnreadConversationRef } from '../api/types';
 
 interface UnreadSeqs {
@@ -55,6 +66,10 @@ class UnreadStore {
   private projectIds = new Map<string, string>();
   private listeners = new Set<Listener>();
   private viewedId: string | null = null;
+  // AutoProjects: the same three pieces of state, keyed by AutoProject id.
+  private autoprojectSeqs = new Map<string, UnreadSeqs>();
+  private autoprojectPendingAcks = new Map<string, number>();
+  private viewedAutoProjectId: string | null = null;
   // False under admin impersonation: the admin looking at a conversation
   // is not its owner reading it (the server refuses the request as well).
   private acknowledging = true;
@@ -117,14 +132,14 @@ class UnreadStore {
     this.seqs.set(id, next);
     // Before notifying: when this is the conversation on screen, listeners
     // never observe it as unread.
-    if (id === this.viewedId) this.acknowledgeViewed();
+    if (id === this.viewedId) this.acknowledgeViewedConversation();
     this.emit();
   }
 
   /** The main view now shows this conversation (loaded). */
   setViewed(id: string): void {
     this.viewedId = id;
-    this.acknowledgeViewed();
+    this.acknowledgeViewedConversation();
   }
 
   /** The main view no longer shows this conversation. */
@@ -139,10 +154,58 @@ class UnreadStore {
   }
 
   /**
-   * Acknowledge the viewed conversation if it is unread and the window is
-   * focused. Called whenever any of the three can have changed.
+   * Whether the AutoProject is unread, given the seqs on the caller's own copy of
+   * its row or detail.
+   */
+  isAutoProjectUnread(id: string, rowUnreadSeq: unknown = 0, rowReadSeq: unknown = 0): boolean {
+    const known = this.autoprojectSeqs.get(id);
+    const unreadSeq = Math.max(toSeq(rowUnreadSeq), known?.unreadSeq ?? 0);
+    const readSeq = Math.max(
+      toSeq(rowReadSeq),
+      known?.readSeq ?? 0,
+      this.autoprojectPendingAcks.get(id) ?? 0,
+    );
+    return unreadSeq > readSeq;
+  }
+
+  /** Fold in an AutoProject's seqs reported by the server (row, detail, read response). */
+  mergeAutoProject(id: string, unreadSeq: unknown, readSeq: unknown): void {
+    const current = this.autoprojectSeqs.get(id);
+    const next = {
+      unreadSeq: Math.max(current?.unreadSeq ?? 0, toSeq(unreadSeq)),
+      readSeq: Math.max(current?.readSeq ?? 0, toSeq(readSeq)),
+    };
+    if (current && current.unreadSeq === next.unreadSeq && current.readSeq === next.readSeq) {
+      return;
+    }
+    this.autoprojectSeqs.set(id, next);
+    // Before notifying, as for conversations.
+    if (id === this.viewedAutoProjectId) this.acknowledgeViewedAutoProject();
+    this.emit();
+  }
+
+  /** The main view now shows this AutoProject's page (loaded). */
+  setViewedAutoProject(id: string): void {
+    this.viewedAutoProjectId = id;
+    this.acknowledgeViewedAutoProject();
+  }
+
+  /** The main view no longer shows this AutoProject's page. */
+  clearViewedAutoProject(id: string): void {
+    if (this.viewedAutoProjectId === id) this.viewedAutoProjectId = null;
+  }
+
+  /**
+   * Acknowledge the viewed conversation and the viewed AutoProject, each if it is
+   * unread and the window is focused. Called whenever any of the three can
+   * have changed.
    */
   acknowledgeViewed(): void {
+    this.acknowledgeViewedConversation();
+    this.acknowledgeViewedAutoProject();
+  }
+
+  private acknowledgeViewedConversation(): void {
     const id = this.viewedId;
     if (!id || !this.acknowledging || !isWindowFocused()) return;
     const known = this.seqs.get(id);
@@ -162,6 +225,32 @@ class UnreadStore {
       });
   }
 
+  private acknowledgeViewedAutoProject(): void {
+    const id = this.viewedAutoProjectId;
+    if (!id || !this.acknowledging || !isWindowFocused()) return;
+    const known = this.autoprojectSeqs.get(id);
+    if (!known || !this.isAutoProjectUnread(id)) return;
+    const seq = known.unreadSeq;
+    this.autoprojectPendingAcks.set(id, seq);
+    this.emit();
+    markAutoProjectRead(id, seq)
+      .then((result) => {
+        this.mergeAutoProject(id, result.unread_seq, result.read_seq);
+        this.settleAutoProjectAck(id, seq);
+      })
+      .catch(() => {
+        // Unacknowledged: the dot comes back, and the next focus change or
+        // refetch of this AutoProject retries.
+        this.settleAutoProjectAck(id, seq);
+      });
+  }
+
+  private settleAutoProjectAck(id: string, seq: number): void {
+    if (this.autoprojectPendingAcks.get(id) !== seq) return;
+    this.autoprojectPendingAcks.delete(id);
+    this.emit();
+  }
+
   private settleAck(id: string, seq: number): void {
     if (this.pendingAcks.get(id) !== seq) return;
     this.pendingAcks.delete(id);
@@ -178,6 +267,9 @@ class UnreadStore {
     this.pendingAcks.clear();
     this.projectIds.clear();
     this.viewedId = null;
+    this.autoprojectSeqs.clear();
+    this.autoprojectPendingAcks.clear();
+    this.viewedAutoProjectId = null;
     this.acknowledging = true;
     this.emit();
   }

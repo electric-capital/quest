@@ -686,7 +686,7 @@ class TestSkillBuilderConnections:
 
         ctx = SimpleNamespace(
             user={**_user(TWO_ROWS), "api_key": "k"},
-            conversation_id=None, project_id=None,
+            conversation_id=None, project_id=None, is_autoproject_run=False,
         )
         with patch.object(td, "_get_connected_services", return_value={"multiconn": True}):
             out = _run(td._tool_load_skills(ctx, {"skill_ids": ["system:multiconn"]}))

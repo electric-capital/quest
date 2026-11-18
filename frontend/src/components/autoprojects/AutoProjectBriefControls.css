@@ -1,0 +1,411 @@
+/* Shared controls of the AutoProject page and its detail panel
+ * (AutoProjectBriefControls.tsx and the editors and History that use them):
+ * quiet outline buttons, notes, counters, textareas, the discard row, the
+ * brief's markdown and the merge box after a conflict. The brief History
+ * list, version view and word diff are in AutoProjectBriefHistory.css,
+ * AutoProjectPage.css lays out the page, AutoProjectDetailPanel.css the
+ * panel.
+ *
+ * Colours come from the theme tokens only, so both schemes work without
+ * scheme blocks: error text uses --diff-removed-text (the theme's red) and
+ * the near-cap counter --diff-changed-text (its amber). */
+
+/* --- Buttons ---------------------------------------------------------- */
+
+/* Outline buttons, the doc History look. */
+.autoproject-ctl-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.autoproject-ctl-button:hover:not(:disabled) {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.autoproject-ctl-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.autoproject-ctl-button:focus:not(:focus-visible),
+.autoproject-ctl-link-button:focus:not(:focus-visible),
+.autoproject-ctl-note-dismiss:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.autoproject-ctl-button svg {
+  flex-shrink: 0;
+}
+
+/* "Show changes" while on. */
+.autoproject-ctl-button[aria-pressed='true'],
+.autoproject-ctl-button[aria-pressed='true']:hover {
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.autoproject-ctl-button--primary,
+.autoproject-ctl-button--primary:hover:not(:disabled) {
+  border-color: transparent;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.autoproject-ctl-button--primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+/* Borderless (History's "All versions"). */
+.autoproject-ctl-button--plain {
+  padding-left: 0.2rem;
+  border-color: transparent;
+}
+
+/* An inline text action inside a note ("Show the new version", "Undo"). */
+.autoproject-ctl-link-button {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.autoproject-ctl-link-button:hover {
+  text-decoration: underline;
+}
+
+/* --- Text ------------------------------------------------------------- */
+
+.autoproject-ctl-muted {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.autoproject-ctl-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.autoproject-ctl-error {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--diff-removed-text);
+  overflow-wrap: anywhere;
+}
+
+/* Neutral notes (changed underneath, replaced draft, History notices). */
+.autoproject-ctl-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin: 0 0 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* A note with a dismiss button: text and button side by side. */
+.autoproject-ctl-note:has(.autoproject-ctl-note-dismiss) {
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.autoproject-ctl-note-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.autoproject-ctl-note-dismiss:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.autoproject-ctl-badge {
+  flex-shrink: 0;
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  border-radius: 999px;
+  color: var(--accent-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  vertical-align: middle;
+}
+
+.autoproject-ctl-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* A brief (AutoProjectBriefMarkdown): the chat markdown look without the bubble
+   chrome (as DocHistory's .doc-history-markdown), at the chat's reading
+   size in the main column and a step smaller in the detail panel (History's
+   version view). */
+.autoproject-ctl-markdown.message-content {
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.autoproject-detail-panel .autoproject-ctl-markdown.message-content {
+  font-size: 0.875rem;
+}
+
+.autoproject-ctl-markdown > :first-child {
+  margin-top: 0;
+}
+
+.autoproject-ctl-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+/* Headings stay modest: a brief is mostly "## Section" blocks, which at
+   the chat's heading sizes would shout over the page's own headings. */
+.autoproject-ctl-markdown h1 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+.autoproject-ctl-markdown h2 {
+  margin: 1.25rem 0 0.45rem;
+  font-size: 1.0625rem;
+  line-height: 1.35;
+}
+
+.autoproject-ctl-markdown h3,
+.autoproject-ctl-markdown h4,
+.autoproject-ctl-markdown h5,
+.autoproject-ctl-markdown h6 {
+  margin: 1rem 0 0.35rem;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.autoproject-ctl-markdown .katex-display,
+.autoproject-ctl-markdown table {
+  display: block;
+  overflow-x: auto;
+}
+
+/* --- Editors ------------------------------------------------------------ */
+
+.autoproject-ctl-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.autoproject-ctl-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 8rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.autoproject-ctl-textarea--mono {
+  min-height: 14rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.autoproject-ctl-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.autoproject-ctl-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.autoproject-ctl-textarea[aria-invalid='true'] {
+  border-color: var(--diff-removed-strong);
+}
+
+.autoproject-ctl-counter-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: -0.125rem;
+}
+
+.autoproject-ctl-over-cap {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--diff-removed-text);
+}
+
+.autoproject-ctl-counter {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.autoproject-ctl-counter--near {
+  color: var(--diff-changed-text);
+}
+
+.autoproject-ctl-counter--over {
+  color: var(--diff-removed-text);
+  font-weight: 600;
+}
+
+.autoproject-ctl-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* "Discard your changes?" (AutoProjectDiscardConfirm), in place of Cancel / Save. */
+.autoproject-ctl-discard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 0.75rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--hover);
+}
+
+.autoproject-ctl-discard-text {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.autoproject-ctl-discard-confirm {
+  color: var(--diff-removed-text);
+}
+
+.autoproject-ctl-discard-confirm:hover:not(:disabled) {
+  color: var(--diff-removed-text);
+}
+
+/* The newer brief shown above the draft after a conflict. */
+.autoproject-brief-merge {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem;
+  border: 1px solid var(--diff-changed-strong);
+  border-radius: 8px;
+  background-color: var(--diff-changed-bg);
+}
+
+.autoproject-brief-merge-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.autoproject-brief-merge-text {
+  max-height: 14rem;
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.autoproject-brief-merge-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.autoproject-brief-merge-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+  .autoproject-ctl-button {
+    min-height: 2rem;
+  }
+
+  /* 16px: iOS zooms into smaller inputs on focus. */
+  .autoproject-ctl-textarea,
+  .autoproject-ctl-textarea--mono {
+    font-size: 1rem;
+  }
+}

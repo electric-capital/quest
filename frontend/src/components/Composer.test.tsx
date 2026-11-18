@@ -2,6 +2,10 @@
 // card while the new chat's model was resolved before any model existed. The
 // chat must move to a model the new provider serves, or its first message
 // fails on a Vertex model this install cannot reach.
+//
+// Refocus when a run ends: the input takes the focus back only when nothing
+// else holds it (the page body, or already inside the composer), so an input
+// elsewhere on the page (the AutoProject brief editor, a title rename) keeps it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AppModelInfo } from '../api/types';
@@ -126,5 +130,47 @@ describe('Composer provider setup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await waitFor(() => expect(mocks.refreshAppConfig).toHaveBeenCalled());
     expect(screen.getByTestId('model').textContent).toBe('claude-opus-4-8');
+  });
+});
+
+describe('Composer refocus when streaming ends', () => {
+  beforeEach(() => {
+    setModelCatalog([model('claude-opus-4-8', 'anthropic', 1)]);
+    mocks.available = ['claude-opus-4-8'];
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function Page({ streaming }: { streaming: boolean }) {
+    return (
+      <ConversationModelsProvider>
+        <input aria-label="Brief editor" />
+        <Composer conversationId="c1" onSend={() => {}} isFirstMessage={false} isStreaming={streaming} />
+      </ConversationModelsProvider>
+    );
+  }
+
+  function composerInput(container: HTMLElement): HTMLTextAreaElement {
+    return container.querySelector('.composer textarea') as HTMLTextAreaElement;
+  }
+
+  it('focuses the input when the focus was on the page body', () => {
+    const { container, rerender } = render(<Page streaming />);
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    rerender(<Page streaming={false} />);
+    expect(document.activeElement).toBe(composerInput(container));
+  });
+
+  it('keeps the focus in another input on the page', () => {
+    const { container, rerender } = render(<Page streaming />);
+    const other = screen.getByRole('textbox', { name: 'Brief editor' });
+    other.focus();
+    rerender(<Page streaming={false} />);
+    expect(document.activeElement).toBe(other);
+    expect(document.activeElement).not.toBe(composerInput(container));
   });
 });

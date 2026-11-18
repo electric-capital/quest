@@ -158,3 +158,19 @@ class Bus:
 
 # Module-level singleton. Imported by routes, the flush callback, and tests.
 bus = Bus()
+
+
+async def publish_request_count_changed(user_id: int) -> None:
+    """Best-effort: publish the user's per-status action-request counts as
+    ``request_count_changed`` so the inbox badges update without a poll.
+    Never raises."""
+    # Imported here: this module is imported by the store layer's callers
+    # everywhere, and must not pull the database in at import time.
+    from chat.realtime import events as realtime_events
+    from db.action_request_store import count_action_requests_by_status
+
+    try:
+        counts = await count_action_requests_by_status(user_id)
+        bus.publish_to_user(user_id, realtime_events.make_request_count_changed(counts))
+    except Exception:
+        logger.debug("[realtime-bus] publish request_count_changed failed", exc_info=True)

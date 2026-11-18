@@ -68,6 +68,9 @@ CHATS_DIR: Path = DATA_DIR / "chats"
 PROJECTS_DIR: Path = DATA_DIR / "projects"
 DOCS_DIR: Path = DATA_DIR / "docs"
 TABLES_DIR: Path = DATA_DIR / "tables"
+# AutoProjects: one dir per AutoProject holding its shared ``workspace``; resolved
+# only through ``ChatStorage.get_autoproject_dir`` / ``get_autoproject_workspace_root``.
+AUTOPROJECTS_DIR: Path = DATA_DIR / "autoprojects"
 SECRET_KEY_FILE: Path = DATA_DIR / "secret_key"
 LOG_DIR: Path = DATA_DIR / "logs"
 SERVICE_CREDENTIALS_DIR: Path = DATA_DIR / "service_credentials"

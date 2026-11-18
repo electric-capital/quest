@@ -379,25 +379,75 @@ def test_run_resume_cancel_marks_interrupted(monkeypatch):
     asyncio.run(scenario())
 
 
+def _stub_stop_dependencies(monkeypatch, socket_mod, *, owner_id=1):
+    """Stub what ``_handle_stop`` reaches besides the run registries: the
+    ownership lookup (``conv-stop`` belongs to ``owner_id``), the wait-handle
+    cancel and the AutoProject-run stop. Returns the client events, the
+    cancelled-handle calls and the AutoProject-stop calls."""
+    import db.conversation_store as conversation_store
+    from chat.autoprojects import runs as autoproject_runs
+
+    acked, cancelled, stopped = [], [], []
+
+    async def fake_send_to_client(conn, event):
+        acked.append(event)
+
+    async def fake_cancel_handles(user_id, conversation_id):
+        cancelled.append((user_id, conversation_id))
+
+    async def fake_get_meta(user_id, conversation_id):
+        if conversation_id == "conv-stop" and user_id == owner_id:
+            return {"id": conversation_id, "user_id": user_id}
+        return None
+
+    async def fake_stop_autoproject_run(user_id, conversation_id):
+        stopped.append((user_id, conversation_id))
+
+    monkeypatch.setattr(socket_mod, "_send_to_client", fake_send_to_client)
+    monkeypatch.setattr(
+        socket_mod, "cancel_pending_wait_handles_for_conversation", fake_cancel_handles,
+    )
+    monkeypatch.setattr(conversation_store, "get_conversation_meta", fake_get_meta)
+    monkeypatch.setattr(autoproject_runs, "stop_autoproject_run", fake_stop_autoproject_run)
+    return acked, cancelled, stopped
+
+
 def test_handle_stop_cancels_active_resume(monkeypatch):
     from chat.wait_handles import resume as resume_mod
     from chat.realtime import socket as socket_mod
 
     async def scenario():
-        acked = []
+        acked, cancelled, stopped = _stub_stop_dependencies(monkeypatch, socket_mod)
 
-        async def fake_send_to_client(conn, event):
-            acked.append(event)
-
-        async def fake_cancel_handles(user_id, conversation_id):
-            return None
-
-        monkeypatch.setattr(
-            socket_mod, "_send_to_client", fake_send_to_client,
+        resume_task = asyncio.create_task(asyncio.Event().wait())
+        monkeypatch.setitem(
+            resume_mod._active_resumes, "conv-stop", resume_task,
         )
-        monkeypatch.setattr(
-            socket_mod, "cancel_pending_wait_handles_for_conversation",
-            fake_cancel_handles,
+
+        conn = SimpleNamespace(user_id=1)
+        await socket_mod._handle_stop(conn, {"conversation_id": "conv-stop"})
+        await asyncio.wait_for(
+            asyncio.gather(resume_task, return_exceptions=True), timeout=5,
+        )
+
+        assert resume_task.cancelled()
+        assert cancelled == [(1, "conv-stop")]
+        assert stopped == [(1, "conv-stop")]
+        assert acked and acked[-1]["type"] == "stop_acknowledged"
+
+    asyncio.run(scenario())
+
+
+def test_handle_stop_ignores_another_users_conversation(monkeypatch):
+    """The run registries are keyed by conversation id alone: a stop for a
+    conversation the caller does not own cancels nothing and is ignored
+    silently."""
+    from chat.wait_handles import resume as resume_mod
+    from chat.realtime import socket as socket_mod
+
+    async def scenario():
+        acked, cancelled, stopped = _stub_stop_dependencies(
+            monkeypatch, socket_mod, owner_id=2,
         )
 
         resume_task = asyncio.create_task(asyncio.Event().wait())
@@ -407,10 +457,12 @@ def test_handle_stop_cancels_active_resume(monkeypatch):
 
         conn = SimpleNamespace(user_id=1)
         await socket_mod._handle_stop(conn, {"conversation_id": "conv-stop"})
-        await asyncio.gather(resume_task, return_exceptions=True)
+        await asyncio.sleep(0)
 
-        assert resume_task.cancelled()
-        assert acked and acked[-1]["type"] == "stop_acknowledged"
+        assert not resume_task.done()
+        assert (acked, cancelled, stopped) == ([], [], [])
+        resume_task.cancel()
+        await asyncio.gather(resume_task, return_exceptions=True)
 
     asyncio.run(scenario())
 

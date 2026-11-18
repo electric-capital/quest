@@ -1,10 +1,12 @@
 """REST API endpoints for file browser functionality.
 
-Two workspaces are browsable: a conversation's own workspace
-(/conversations/{id}/files..., every conversation incl. project ones)
-and a project's shared workspace (/projects/{id}/files...). Both route
-sets share the root-parameterised handlers below; the copy routes move
-entries between a project conversation's workspace and its project's.
+Three workspaces are browsable: a conversation's own workspace
+(/conversations/{id}/files..., every conversation incl. project ones and
+AutoProject runs), a project's shared workspace (/projects/{id}/files...) and an
+AutoProject's workspace (/autoprojects/{id}/files..., gated by the AutoProjects feature
+gate). All three route sets share the root-parameterised handlers below;
+the copy routes move entries between a project conversation's workspace
+and its project's, and between an AutoProject run's workspace and its AutoProject's.
 """
 
 import asyncio
@@ -13,6 +15,7 @@ import logging
 import os
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -28,6 +31,7 @@ from chat.conversation_access import (
     resolve_owned_workspace,
 )
 from chat.auth import get_current_user_cookie_or_apikey_checked
+from chat.autoprojects.http import resolve_autoproject_workspace_for_route
 from chat.file_storage import (
     list_workspace_files,
     save_uploaded_file,
@@ -95,15 +99,17 @@ def _publish_file_list_changed(
     scope: str,
     conversation_id: Optional[str],
     project_id: Optional[str],
+    autoproject_id: Optional[str] = None,
 ) -> None:
     """Best-effort: publish ``file_list_changed`` so file browsers in any
     tab silent-refresh.
 
     ``scope`` is the workspace that changed, set explicitly by each route:
     ``"conversation"`` for the conversation routes (project conversations
-    included -- they write to their own conversation workspace) and
-    ``"project"`` for the project routes, whose events reach every sibling
-    conversation's tab via the ``scope === "project"`` filter on the FE.
+    and AutoProject runs included -- they write to their own conversation
+    workspace), ``"project"`` for the project routes, whose events reach
+    every sibling conversation's tab via the ``scope === "project"`` filter
+    on the FE, and ``"autoproject"`` for the AutoProject routes (``autoproject_id`` required).
     """
     try:
         bus.publish_to_user(
@@ -112,13 +118,16 @@ def _publish_file_list_changed(
                 conversation_id=conversation_id,
                 project_id=project_id,
                 scope=scope,
+                autoproject_id=autoproject_id,
             ),
         )
     except Exception:
         logger.debug(
             "[file_routes] publish file_list_changed failed "
-            "(user_id=%s, scope=%s, conversation_id=%s, project_id=%s)",
-            user_id, scope, conversation_id, project_id, exc_info=True,
+            "(user_id=%s, scope=%s, conversation_id=%s, project_id=%s, "
+            "autoproject_id=%s)",
+            user_id, scope, conversation_id, project_id, autoproject_id,
+            exc_info=True,
         )
 
 
@@ -142,9 +151,10 @@ def _file_errors():
 
 # ---------------------------------------------------------------------------
 # Root-parameterised handlers. ``root`` is a browsable workspace root from
-# ``resolve_owned_workspace`` (conversation workspace) or
-# ``resolve_owned_project_workspace`` (shared project workspace); the route
-# wrappers below own authentication, ownership and the realtime event.
+# ``resolve_owned_workspace`` (conversation workspace),
+# ``resolve_owned_project_workspace`` (shared project workspace) or
+# ``resolve_autoproject_workspace_for_route`` (AutoProject workspace); the route wrappers
+# below own authentication, ownership and the realtime event.
 # ---------------------------------------------------------------------------
 
 
@@ -728,13 +738,14 @@ async def save_file_to_drive(
 
 
 # ---------------------------------------------------------------------------
-# Copy / move between a project conversation's workspace and its project's
-# workspace (devplan 00009 section 7.3). Events: both scopes.
+# Copy / move between a conversation's workspace and the shared workspace it
+# belongs to: a project conversation and its project (devplan 00009 section
+# 7.3), an AutoProject run and its AutoProject. Events: both scopes.
 # ---------------------------------------------------------------------------
 
 
 class CopyEntryRequest(BaseModel):
-    """Request body for the copy-to-project / copy-from-project routes."""
+    """Request body for the copy-to-/copy-from-project and -autoproject routes."""
     path: str  # source path in the source space
     dest: Optional[str] = None  # destination path; default = ``path``
     overwrite: bool = False
@@ -747,36 +758,88 @@ _COPY_ERROR_STATUS = {
     "destination_exists": 409,
 }
 
+# The shared spaces a conversation workspace copies to and from.
+_SHARED_PROJECT = "project"
+_SHARED_AUTOPROJECT = "autoproject"
+
+
+@dataclass(frozen=True)
+class _SharedSpace:
+    """The shared workspace on the other side of a copy.
+
+    ``scope`` is the ``file_list_changed`` scope of that workspace; the
+    ids are those its events carry (``project_id`` also rides on the
+    conversation-scope event, as for every project conversation write).
+    """
+    scope: str
+    root: Path
+    project_id: Optional[str] = None
+    autoproject_id: Optional[str] = None
+
+
+async def _resolve_shared_space(user: dict, meta: dict, shared: str) -> _SharedSpace:
+    """The shared workspace of the owned conversation ``meta``.
+
+    Project: 400 ``not_a_project_conversation`` for a conversation outside
+    a project, then 404 unless the caller owns the project. AutoProject: 400
+    ``not_an_autoproject_run_conversation`` for a conversation that is not an AutoProject
+    run, then 403 ``autoprojects_disabled`` while the gate is closed and 404
+    ``autoproject_not_found`` (``resolve_autoproject_workspace_for_route``).
+    """
+    if shared == _SHARED_PROJECT:
+        project_id = meta.get("project_id")
+        if not project_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "not_a_project_conversation",
+                    "message": "This conversation is not part of a project",
+                },
+            )
+        _project, root = await resolve_owned_project_workspace(user["id"], project_id)
+        return _SharedSpace(scope="project", root=root, project_id=project_id)
+
+    autoproject_id = meta.get("autoproject_id")
+    if not autoproject_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "not_an_autoproject_run_conversation",
+                "message": "This conversation is not an AutoProject run",
+            },
+        )
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    # An AutoProject run is never in a project: its events carry project_id None.
+    return _SharedSpace(scope="autoproject", root=root, autoproject_id=autoproject_id)
+
 
 async def _copy_between_spaces(
-    user: dict, conversation_id: str, body: CopyEntryRequest, *, to_project: bool,
+    user: dict,
+    conversation_id: str,
+    body: CopyEntryRequest,
+    *,
+    shared: str,
+    into_shared: bool,
 ) -> dict:
-    """Shared body of the two copy routes.
+    """Shared body of the copy routes: between the conversation workspace
+    and its ``shared`` space (``"project"`` or ``"autoproject"``), into the shared
+    space when ``into_shared``.
 
-    400 ``not_a_project_conversation`` for a standalone conversation;
+    Refusals before the copy: see ``_resolve_shared_space``.
     ``copy_entry`` refusals map to 404 ``not_found``, 409
     ``destination_exists`` and 400 for the rest; an I/O failure while
     copying is 500 ``copy_failed`` (both spaces are still announced as
     changed, since part of a merge may have been written). A move whose
     copy completed but whose source removal failed returns 200 with
-    ``moved: false``. Scratch roots
-    (``is_scratch_source``) are refused as a copy-to-project source only:
-    copying into the conversation workspace promotes nothing.
+    ``moved: false``. Scratch roots (``is_scratch_source``) are refused as
+    a source into the shared space only: copying into the conversation
+    workspace promotes nothing.
     """
     user_id = user["id"]
     meta, conversation_root = await resolve_owned_workspace(user_id, conversation_id)
-    project_id = meta.get("project_id")
-    if not project_id:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "not_a_project_conversation",
-                "message": "This conversation is not part of a project",
-            },
-        )
-    _project, project_root = await resolve_owned_project_workspace(user_id, project_id)
+    space = await _resolve_shared_space(user, meta, shared)
 
-    if to_project and is_scratch_source(body.path):
+    if into_shared and is_scratch_source(body.path):
         raise HTTPException(
             status_code=400,
             detail={
@@ -784,15 +847,24 @@ async def _copy_between_spaces(
                 "message": (
                     ".responses/, .subagent_responses/ and pasted/ hold "
                     "conversation scratch files and cannot be copied to "
-                    "the project"
+                    f"the {shared}"
                 ),
             },
         )
 
+    def publish_both() -> None:
+        _publish_file_list_changed(
+            user_id, "conversation", conversation_id, space.project_id,
+        )
+        _publish_file_list_changed(
+            user_id, space.scope, conversation_id, space.project_id,
+            autoproject_id=space.autoproject_id,
+        )
+
     dest = body.dest if body.dest and body.dest.strip("/ ") else body.path
     src_root, dst_root = (
-        (conversation_root, project_root) if to_project
-        else (project_root, conversation_root)
+        (conversation_root, space.root) if into_shared
+        else (space.root, conversation_root)
     )
     try:
         result = await asyncio.to_thread(
@@ -808,11 +880,11 @@ async def _copy_between_spaces(
         )
     except OSError as e:
         logger.warning(
-            "copy %s project failed (conversation=%s, path=%r): %s",
-            "to" if to_project else "from", conversation_id, body.path, e,
+            "copy %s %s failed (conversation=%s, path=%r): %s",
+            "to" if into_shared else "from", shared, conversation_id,
+            body.path, e,
         )
-        _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
-        _publish_file_list_changed(user_id, "project", conversation_id, project_id)
+        publish_both()
         raise HTTPException(
             status_code=500,
             detail={
@@ -821,8 +893,7 @@ async def _copy_between_spaces(
             },
         )
 
-    _publish_file_list_changed(user_id, "conversation", conversation_id, project_id)
-    _publish_file_list_changed(user_id, "project", conversation_id, project_id)
+    publish_both()
     return result
 
 
@@ -834,7 +905,9 @@ async def copy_to_project(
 ):
     """Copy (or move) an entry from the conversation workspace into the
     project workspace. See ``chat.file_storage.copy_entry`` for the rules."""
-    return await _copy_between_spaces(user, conversation_id, body, to_project=True)
+    return await _copy_between_spaces(
+        user, conversation_id, body, shared=_SHARED_PROJECT, into_shared=True,
+    )
 
 
 @router.post("/conversations/{conversation_id}/files/copy-from-project")
@@ -845,7 +918,35 @@ async def copy_from_project(
 ):
     """Copy (or move) an entry from the project workspace into the
     conversation workspace. See ``chat.file_storage.copy_entry``."""
-    return await _copy_between_spaces(user, conversation_id, body, to_project=False)
+    return await _copy_between_spaces(
+        user, conversation_id, body, shared=_SHARED_PROJECT, into_shared=False,
+    )
+
+
+@router.post("/conversations/{conversation_id}/files/copy-to-autoproject")
+async def copy_to_autoproject(
+    conversation_id: str,
+    body: CopyEntryRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Copy (or move) an entry from an AutoProject run's conversation workspace into
+    its AutoProject's workspace. See ``chat.file_storage.copy_entry``."""
+    return await _copy_between_spaces(
+        user, conversation_id, body, shared=_SHARED_AUTOPROJECT, into_shared=True,
+    )
+
+
+@router.post("/conversations/{conversation_id}/files/copy-from-autoproject")
+async def copy_from_autoproject(
+    conversation_id: str,
+    body: CopyEntryRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Copy (or move) an entry from the AutoProject workspace into the AutoProject run's
+    conversation workspace. See ``chat.file_storage.copy_entry``."""
+    return await _copy_between_spaces(
+        user, conversation_id, body, shared=_SHARED_AUTOPROJECT, into_shared=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -974,4 +1075,140 @@ async def save_project_file_to_drive(
 ):
     """Save a project-workspace markdown file to Google Drive as a Doc."""
     _project, root = await resolve_owned_project_workspace(user["id"], project_id)
+    return await _save_to_drive(root, body, user)
+
+
+# ---------------------------------------------------------------------------
+# AutoProject workspace routes: the workspace shared by every run of an AutoProject.
+# Each resolves the root through ``resolve_autoproject_workspace_for_route``: 403
+# ``autoprojects_disabled`` while the gate is closed, 404 ``autoproject_not_found`` (same
+# body for a missing and a foreign AutoProject); archived AutoProjects stay browsable.
+# Events: scope "autoproject" with the AutoProject id and no conversation.
+# ---------------------------------------------------------------------------
+
+
+def _publish_autoproject_file_list_changed(user_id: int, autoproject_id: str) -> None:
+    """``file_list_changed`` for a write through the AutoProject file routes."""
+    _publish_file_list_changed(user_id, "autoproject", None, None, autoproject_id=autoproject_id)
+
+
+@router.get("/autoprojects/{autoproject_id}/files")
+async def list_autoproject_workspace_files(
+    autoproject_id: str,
+    path: str = Query(default="", description="Relative path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """List a directory of the AutoProject workspace (empty for an AutoProject that never
+    wrote a file)."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    return await _list(root, path)
+
+
+@router.post("/autoprojects/{autoproject_id}/files/upload")
+async def upload_autoproject_files(
+    autoproject_id: str,
+    files: List[UploadFile] = File(...),
+    paths: Optional[List[str]] = Form(None),
+    path: str = Query(default="", description="Destination path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Upload files into the AutoProject workspace: ``{uploadedFiles, errors}``."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    result = await _upload(root, files, paths, path)
+    if result["uploadedFiles"]:
+        _publish_autoproject_file_list_changed(user["id"], autoproject_id)
+    return result
+
+
+@router.get("/autoprojects/{autoproject_id}/files/content")
+async def read_autoproject_file_content(
+    autoproject_id: str,
+    path: str = Query(..., description="File path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Read the text content of an AutoProject-workspace file."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    return await _read_content(root, path)
+
+
+@router.get("/autoprojects/{autoproject_id}/files/download")
+async def download_autoproject_file(
+    autoproject_id: str,
+    path: str = Query(..., description="File path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Download an AutoProject-workspace file (raster images inline)."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    return _download(root, path)
+
+
+@router.get("/autoprojects/{autoproject_id}/files/download-sanitized")
+async def download_sanitized_autoproject_file(
+    autoproject_id: str,
+    path: str = Query(..., description="Image path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Download a metadata-stripped copy of an AutoProject-workspace image."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    return await _download_sanitized(root, path)
+
+
+@router.get("/autoprojects/{autoproject_id}/files/download-folder")
+async def download_autoproject_folder_as_zip(
+    autoproject_id: str,
+    path: str = Query(..., description="Folder path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Download an AutoProject-workspace folder as a zip archive."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    return await _download_folder(root, path)
+
+
+@router.get("/autoprojects/{autoproject_id}/files/info")
+async def autoproject_file_info(
+    autoproject_id: str,
+    path: str = Query(..., description="File or folder path within the AutoProject workspace"),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """``{name, type, fileCount}`` for an AutoProject-workspace entry."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    return await _info(root, path)
+
+
+@router.delete("/autoprojects/{autoproject_id}/files")
+async def delete_autoproject_file(
+    autoproject_id: str,
+    path: str = Query(
+        ..., description="File or folder path within the AutoProject workspace to delete",
+    ),
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Delete an AutoProject-workspace file or folder: ``{name, type, deletedCount}``."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    result = await _delete(root, path)
+    _publish_autoproject_file_list_changed(user["id"], autoproject_id)
+    return result
+
+
+@router.post("/autoprojects/{autoproject_id}/files/create-folder")
+async def create_autoproject_folder(
+    autoproject_id: str,
+    body: CreateFolderRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Create an empty folder in the AutoProject workspace: ``{name, path}``."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
+    result = _create_folder(root, body)
+    _publish_autoproject_file_list_changed(user["id"], autoproject_id)
+    return result
+
+
+@router.post("/autoprojects/{autoproject_id}/files/save-to-drive")
+async def save_autoproject_file_to_drive(
+    autoproject_id: str,
+    body: SaveToDriveRequest,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Save an AutoProject-workspace markdown file to Google Drive as a Doc."""
+    _autoproject, root = await resolve_autoproject_workspace_for_route(user, autoproject_id)
     return await _save_to_drive(root, body, user)

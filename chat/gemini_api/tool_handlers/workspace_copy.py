@@ -1,23 +1,26 @@
 """``copy_file``: copy a file or folder between (or within) file spaces.
 
 ``src`` and ``dest`` are both scheme-qualified (``chat://`` / ``proj://``,
-see ``file_paths``); every direction is allowed, same-space copies
-included (devplan 00009, revised 2026-10-08: scheme-qualified file
-tools). The copy runs ``chat.file_storage.copy_entry`` in a worker thread
--- the same engine and error codes as the ``/files/copy-to-project`` /
+or ``chat://`` / ``autoproject://`` in a run of an AutoProject, see
+``file_paths``); every direction is allowed, same-space copies included
+(devplan 00009, revised 2026-10-08: scheme-qualified file tools). The copy
+runs ``chat.file_storage.copy_entry`` in a worker thread -- the same engine
+and error codes as the ``/files/copy-to-project`` /
 ``/files/copy-from-project`` routes in ``chat/file_routes.py`` -- never
 moves, and publishes ``file_list_changed`` for the destination space only
 (a copy never changes its source).
 
 Every refusal comes back as JSON ``{"error": <message>, "code": <code>}``
 (never raised): ``invalid_path`` (unparseable ``src`` / ``dest``),
-``no_project`` (``proj://`` outside a project), ``invalid_project`` (the
-project id does not resolve), ``forbidden_source`` (a ``.responses/``,
-``.subagent_responses/`` or ``pasted/`` source copied from ``chat://`` into
-``proj://``),
-``copy_failed`` (I/O error), or one of the ``CopyEntryError`` codes
-(``invalid_path``, ``not_found``, ``not_a_regular_file``,
-``destination_exists``, ``invalid_destination``).
+``no_project`` (``proj://`` outside a project, or in an AutoProject run),
+``invalid_project`` (the project id does not resolve), ``no_autoproject``
+(``autoproject://`` outside an AutoProject run), ``invalid_autoproject``
+(the AutoProject id does not resolve), ``forbidden_source`` (a
+``.responses/``, ``.subagent_responses/`` or ``pasted/`` source copied
+from ``chat://`` into ``proj://`` or ``autoproject://``), ``copy_failed``
+(I/O error), or one of the ``CopyEntryError`` codes (``invalid_path``,
+``not_found``, ``not_a_regular_file``, ``destination_exists``,
+``invalid_destination``).
 """
 
 import asyncio
@@ -25,20 +28,27 @@ import json
 import logging
 
 from chat.file_storage import CopyEntryError, copy_entry, is_scratch_source
-from chat.gemini_api.tool_handlers._common import _publish_file_list_changed
 from chat.gemini_api.tool_handlers.file_paths import (
     SPACE_CHAT,
     SPACE_PROJECT,
+    SPACE_AUTOPROJECT,
     SpacePathError,
+    conversation_spaces,
     format_space_path,
     parse_space_path,
 )
-from chat.gemini_api.tool_handlers.workspace import resolve_space_root
+from chat.gemini_api.tool_handlers.workspace import (
+    _publish_space_changed,
+    resolve_space_root,
+)
 
 logger = logging.getLogger(__name__)
 
-_SCOPES = {SPACE_CHAT: "conversation", SPACE_PROJECT: "project"}
-_SPACE_LABELS = {SPACE_CHAT: "conversation workspace", SPACE_PROJECT: "project workspace"}
+_SPACE_LABELS = {
+    SPACE_CHAT: "conversation workspace",
+    SPACE_PROJECT: "project workspace",
+    SPACE_AUTOPROJECT: "AutoProject workspace",
+}
 
 
 def _error(code: str, message: str) -> str:
@@ -53,8 +63,12 @@ async def _handle_copy_file(
     dest,
     overwrite: bool = False,
     include_hidden: bool = False,
+    *,
+    autoproject_id: str | None = None,
 ) -> str:
-    """Copy ``src`` to ``dest`` (both ``chat://`` / ``proj://`` paths).
+    """Copy ``src`` to ``dest`` (both ``chat://`` / ``proj://`` paths, or
+    ``chat://`` / ``autoproject://`` in an AutoProject run: ``autoproject_id`` is the
+    conversation's AutoProject then).
 
     Rules (``copy_entry``): a file or a folder; symlink / special-file
     sources refused, symlinks and special files inside a folder skipped,
@@ -63,37 +77,52 @@ async def _handle_copy_file(
     (then a file replaces a file and a folder merges); a destination equal
     to or inside the source is ``invalid_destination``. Conversation
     scratch roots are refused as a source for a ``chat://`` -> ``proj://``
-    copy (checked after the roots resolve, so a standalone conversation
-    gets ``no_project`` first).
+    or ``chat://`` -> ``autoproject://`` copy (checked after the roots resolve, so
+    a standalone conversation gets ``no_project`` first).
     """
+    spaces = conversation_spaces(autoproject_id)
     try:
-        src_space, src_rel = parse_space_path(src, allow_root=False)
+        src_space, src_rel = parse_space_path(
+            src, allow_root=False, spaces=spaces,
+        )
     except SpacePathError as exc:
         return _error(exc.code, f"src: {exc.message}")
     try:
-        dst_space, dst_rel = parse_space_path(dest, allow_root=False)
+        dst_space, dst_rel = parse_space_path(
+            dest, allow_root=False, spaces=spaces,
+        )
     except SpacePathError as exc:
         return _error(exc.code, f"dest: {exc.message}")
 
-    src_root, err = await resolve_space_root(src_space, conversation_id, project_id)
+    src_root, err = await resolve_space_root(
+        src_space, conversation_id, project_id, autoproject_id,
+    )
     if err is not None:
         return err
-    dst_root, err = await resolve_space_root(dst_space, conversation_id, project_id)
+    dst_root, err = await resolve_space_root(
+        dst_space, conversation_id, project_id, autoproject_id,
+    )
     if err is not None:
         return err
 
-    # Conversation scratch roots are never promoted into the project; a
-    # project's own folders of those names copy like any other.
+    # Conversation scratch roots are never promoted into a shared (project
+    # or AutoProject) workspace; that workspace's own folders of those names copy
+    # like any other.
     if (
-        src_space == SPACE_CHAT and dst_space == SPACE_PROJECT
+        src_space == SPACE_CHAT and dst_space != SPACE_CHAT
         and is_scratch_source(src_rel)
     ):
         return _error(
             "forbidden_source",
             ".responses/, .subagent_responses/ and pasted/ hold conversation "
-            "scratch files and cannot be copied to the project workspace",
+            "scratch files and cannot be copied to the "
+            f"{_SPACE_LABELS[dst_space]}",
         )
-    dest_scope = _SCOPES[dst_space]
+
+    def _publish() -> None:
+        _publish_space_changed(
+            user_id, dst_space, conversation_id, project_id, autoproject_id,
+        )
 
     try:
         result = await asyncio.to_thread(
@@ -113,10 +142,10 @@ async def _handle_copy_file(
             conversation_id, src, dest, e,
         )
         # Part of a folder merge may have been written.
-        _publish_file_list_changed(user_id, dest_scope, conversation_id, project_id)
+        _publish()
         return _error("copy_failed", f"The copy failed: {e.strerror or e}")
 
-    _publish_file_list_changed(user_id, dest_scope, conversation_id, project_id)
+    _publish()
     shown = format_space_path(dst_space, result.get("path", "").lstrip("/"))
     is_folder = result.get("type") == "folder"
     message = (

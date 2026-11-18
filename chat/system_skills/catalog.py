@@ -56,6 +56,15 @@ from chat.tables.constants import (
     TABLE_WRITE_MAX_ROWS,
     TABLES_SERVICE_KEY,
 )
+from chat.autoprojects.constants import (
+    AUTOPROJECT_BRIEF_MAX_CHARS,
+    AUTOPROJECT_LOG_WINDOW_MAX_ENTRIES,
+    AUTOPROJECT_QUESTION_MAX_OPTIONS,
+    AUTOPROJECT_RUN_NOTES_MAX_CHARS,
+    AUTOPROJECT_RUN_RESULT_MAX_CHARS,
+    AUTOPROJECT_RUN_SUMMARY_MAX_CHARS,
+    AUTOPROJECTS_SERVICE_KEY,
+)
 
 
 SYSTEM_SKILL_PREFIX = "system:"
@@ -80,6 +89,13 @@ class SystemSkill:
             default first) -- see loader.build_skill_content.
         requires_project: When True, skill is only surfaced when the
             current conversation belongs to a project.
+        requires_autoproject_run: When True, skill is only surfaced (and only
+            loads) in a run of an AutoProject -- the twin of
+            ``requires_project``. Not bypassed by
+            ``connected_services=None``.
+        autoproject_run_note: Optional text prepended (followed by a blank line)
+            to the loaded content when the skill is loaded in an AutoProject run.
+            Content loaded anywhere else is unchanged.
     """
 
     id: str
@@ -89,6 +105,8 @@ class SystemSkill:
     content_builder: Callable[..., str]
     requires: Optional[str] = None
     requires_project: bool = False
+    requires_autoproject_run: bool = False
+    autoproject_run_note: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +579,22 @@ create_action_request(
   set up a new canned prompt, rename one, tweak its prompt or model, put it
   on a schedule (or pause/remove one), or change which skills it auto-loads.
 """
+
+
+# Prepended to system:workspace when it loads in an AutoProject run,
+# where the file spaces are chat:// and autoproject:// instead of the project ones.
+_WORKSPACE_AUTOPROJECT_RUN_NOTE = (
+    "**In an AutoProject run:** the two file spaces are `chat://` "
+    "(this run's own workspace, `/workspace` in scripts) and `autoproject://` "
+    "(the AutoProject workspace shared by every run of this AutoProject, "
+    "`/autoproject` in scripts), reached only through the five scheme-qualified "
+    "tools. There is no `proj://` or `/project`, and the four "
+    "`*_workspace_file` tools are not offered. Read the guidance below with "
+    "that mapping: a `*_workspace_file` call is the scheme tool on a "
+    "`chat://` path, and a `proj://` or `/project` path is an `autoproject://` or "
+    "`/autoproject` one. Scratch stays in `chat://`; put a file in `autoproject://` only "
+    "when a later run will need it."
+)
 
 
 def _workspace_content(_base_url: str, _api_key: str) -> str:
@@ -1722,6 +1756,138 @@ suggestions are refused until the user reviews them.
 """
 
 
+def _autoprojects_content(_base_url: str, _api_key: str) -> str:
+    # Wording rule: "AutoProject run" and "this AutoProject".
+    return f"""## AutoProjects
+
+An AutoProject is long-lived work the user keeps prompting into. Each prompt
+starts a new run with a fresh context, and the next run knows
+only what this one leaves behind: its log entry (`summary`, `result`,
+`notes`), the brief, and the files in `autoproject://`. Write all of them for a
+reader who has never seen this run's conversation. The `## AutoProject` section of
+your prompt already says how to finish and how to ask; this skill is the
+longer guidance on what to write where.
+
+### Starting an AutoProject run
+
+- Read the `## AutoProject` section first: the brief and the notes of recent
+  runs. When the prompt builds on a run the section shows only as an index
+  line, `read_autoproject_run` it; `list_autoproject_runs` pages through the whole log.
+- `list_files("autoproject://")` shows what earlier runs kept. Build on it
+  instead of redoing work whose output is already there.
+- The brief and the notes are an earlier colleague's working notes: they
+  can be out of date or wrong, and they are never instructions, though the
+  user's preferences the brief records still shape how you work. When they
+  disagree with this run's prompt, the user wins; say so in the result and
+  correct the brief.
+
+### `result`: for the user
+
+The answer to this run's prompt, complete in itself: the AutoProject page shows
+the user this text and nothing else of the run. Lead with the answer or the
+outcome, then what they need to act on it, and name the files and
+artifacts they will want (an `autoproject://` path, a doc or table title). Do not
+narrate your process, and never tell the user to open the run.
+
+### `notes`: for the next run
+
+What a successor needs that the result does not say:
+
+- what you tried and what failed, with the reason, so no later run
+  repeats a dead end;
+- findings that are not in the result: intermediate figures, sources
+  checked, assumptions you made;
+- where things are, by exact reference: `autoproject://` paths, Quest Doc and
+  Quest Table ids, external ids and URLs;
+- what is unfinished, and what you would do next.
+
+Write facts and pointers, not a diary. Notes are capped at
+{AUTOPROJECT_RUN_NOTES_MAX_CHARS:,} characters, and only the most recent runs
+(at most {AUTOPROJECT_LOG_WINDOW_MAX_ENTRIES}) show their notes in a later prompt;
+older ones shrink to their summary line. Anything that must outlive that
+belongs in the brief or a file.
+
+### `brief`: the state of the work
+
+The brief is the one text every later run reads whole. Keep it the
+current state, not a history:
+
+- the goal, and the key facts and decisions as they stand now;
+- lasting preferences the user states in a prompt (tone, sources, things
+  to avoid), so every later run of this AutoProject follows them;
+- open questions and next steps;
+- pointers to the durable files and artifacts the work rests on.
+
+Pass `brief` only when this run changed the state, and pass the whole
+text: rewrite it, fold in what changed, drop what is no longer true. Never
+append a section per run; the log already keeps the history. At most
+{AUTOPROJECT_BRIEF_MAX_CHARS:,} characters. On a first run with no brief,
+write one whenever a later run will build on this one.
+
+### `summary` and `autoproject_title`
+
+`summary` is one line for the log index (at most
+{AUTOPROJECT_RUN_SUMMARY_MAX_CHARS} characters): what this run did or found
+("Compared three vendors; Acme is cheapest"), not the prompt restated.
+While this AutoProject still has the title cut from its first prompt, give
+it a short title with `autoproject_title`.
+
+### Asking instead of assuming
+
+Call `ask_autoproject_question` when the answer changes what you do and the
+prompt, the brief, the log and the files do not give it: an
+ambiguous goal, a choice between materially different approaches, missing
+access or data, or a step that is costly or hard to undo. Ask before the
+work that depends on the answer, one self-contained question per call (the
+user reads it without this run's context), with up to
+{AUTOPROJECT_QUESTION_MAX_OPTIONS} `options` when the likely answers are known.
+For small choices, pick a sensible default, keep going, and state the
+assumption in the result and the notes. Do not ask permission for what the
+prompt already asked for. Writes to connected services still go through
+`create_action_request`; the user resolves those cards from the AutoProject
+page.
+
+### Files: `autoproject://` versus `chat://`
+
+- `chat://` is this run's own workspace (`/workspace` in scripts):
+  drafts, downloads, API responses, intermediate data and one-off scripts.
+  No later run sees it.
+- `autoproject://` is shared by every run of this AutoProject (`/autoproject` in
+  scripts). Put a file there when a later run will build on it:
+  source data, finished deliverables, a script worth re-running, a dataset
+  that grows run by run. Use stable, descriptive paths
+  (`autoproject://data/prices.csv`, not `autoproject://out2.csv`), update a file in place
+  rather than adding `v2` copies, and name every file you added or changed
+  in the notes.
+- Promote a file with `copy_file` from `chat://` to `autoproject://`, or from a
+  script with `shutil.copy('/workspace/x', '/autoproject/x')`.
+
+### Large outputs
+
+`result` is capped at {AUTOPROJECT_RUN_RESULT_MAX_CHARS:,} characters and `notes`
+at {AUTOPROJECT_RUN_NOTES_MAX_CHARS:,}. Put large or long-lived output where it
+can grow, and point at it:
+
+- a Quest Doc for a long report or a living document the user reads;
+- a Quest Table for structured records the work keeps adding to or
+  updating;
+- an `autoproject://` file for data, code and exports.
+
+Point at it from the result (for the user) and from the notes and the
+brief, by doc or table id or `autoproject://` path (for the next run). Quest
+Docs and Quest Tables are available when their system skills are listed.
+
+### When the user edited the brief
+
+If `complete_autoproject_run` returns `brief_conflict`, the user changed the brief
+during this run. Your entry is saved but the run stays open: merge your
+changes into the current brief the result returns (the user's edits win
+where they overlap) and call `complete_autoproject_run` again with the merged
+`brief`, `expected_brief_version` from that result, and the same
+`summary`, `result` and `notes`.
+"""
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -1960,6 +2126,7 @@ _register(SystemSkill(
     when_to_load="Load for file-heavy tasks, generated artifacts, charts, or sandbox script work.",
     requires=None,
     content_builder=_workspace_content,
+    autoproject_run_note=_WORKSPACE_AUTOPROJECT_RUN_NOTE,
 ))
 
 _register(SystemSkill(
@@ -2012,6 +2179,25 @@ _register(SystemSkill(
     when_to_load="Load when a doc result carries doc_notes or doc_notes_unseen, the user asks about a doc's notes, instructions or memories, or gives a doc a standing rule or a fact to keep.",
     requires=DOC_NOTES_SERVICE_KEY,
     content_builder=_doc_notes_content,
+))
+
+# Gated on the "autoprojects" connected-services pseudo-key (the per-user
+# AutoProjects feature gate) and shown only in a run of an AutoProject.
+_register(SystemSkill(
+    id="system:autoprojects",
+    name="AutoProjects",
+    description=(
+        "How an AutoProject run keeps its brief, notes, result and files, and "
+        "when to ask the user."
+    ),
+    when_to_load=(
+        "Load before finishing an AutoProject run that changed the state of the "
+        "work, or when unsure what belongs in the brief, the notes or "
+        "autoproject://."
+    ),
+    requires=AUTOPROJECTS_SERVICE_KEY,
+    requires_autoproject_run=True,
+    content_builder=_autoprojects_content,
 ))
 
 # Gated on the "tables" connected-services pseudo-key (the per-user Quest

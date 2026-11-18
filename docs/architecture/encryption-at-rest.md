@@ -138,9 +138,12 @@ the column with native `DROP COLUMN` (see the batch-mode caveat in
   [doc notes](doc-notes.md) in the notes columns of `docs`, `doc_memories`
   and `doc_note_suggestions`: user content, not secrets, so they stay
   plaintext like conversation workspaces and chat histories -- see
-  [Quest Docs](quest-docs.md)) and Quest Tables
+  [Quest Docs](quest-docs.md)), Quest Tables
   (`<data_dir>/tables/<id>/` plus the `data_tables` / `data_table_shares`
-  rows, for the same reason -- see [Quest Tables](quest-tables.md)).
+  rows, for the same reason -- see [Quest Tables](quest-tables.md)) and
+  AutoProjects (`<data_dir>/autoprojects/<id>/` plus the `autoprojects`,
+  `autoproject_runs` and `autoproject_brief_versions` rows: the brief and
+  the log are user content -- see [AutoProjects](autoprojects.md)).
   `inference_api_keys` were already hashed.
 - **Password loss = data loss** for the encrypted values only; the key file
   is useless without it. Back up `encryption_key.json` with the database.

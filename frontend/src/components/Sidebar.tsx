@@ -1,15 +1,16 @@
 /**
- * Sidebar shell: brand bar, the two sliding panels (projects + docs +
- * standalone conversations, and the drilled project), the update banner, the
- * user bar and the modals. Owns the cross-list flows -- drilling in and out
- * of a project, creating chats, running routines, opening docs and tables,
- * project/routine CRUD follow-ups -- and delegates:
+ * Sidebar shell: brand bar, the two sliding panels (projects + AutoProjects + docs
+ * + tables + standalone conversations, and the drilled project), the update
+ * banner, the user bar and the modals. Owns the cross-list flows -- drilling
+ * in and out of a project, creating chats, running routines, opening AutoProjects,
+ * docs and tables, project/routine CRUD follow-ups -- and delegates:
  *
  * - data fetching / paging / polling / realtime refresh to
  *   hooks/useTopLevelConversations, useProjectConversations,
- *   useProjectRoutines, useDocs, useTables
+ *   useProjectRoutines, useAutoProjects, useDocs, useTables
  * - list derivation (filters, routine grouping, ordering) to
- *   utils/sidebarItems, utils/sidebarDocs and utils/allTablesGrouping
+ *   utils/sidebarItems, utils/sidebarAutoProjects, utils/sidebarDocs and
+ *   utils/allTablesGrouping
  * - section rendering to components/sidebar/*
  */
 
@@ -23,6 +24,7 @@ import {
 } from '../api/client';
 import { DOCS_FEATURE } from '../api/docsApi';
 import { TABLES_FEATURE } from '../api/tablesApi';
+import { AUTOPROJECTS_FEATURE } from '../api/autoprojectsApi';
 import type { Conversation, Routine } from '../api/types';
 import { useAppConfig } from '../contexts/AppConfigContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -47,10 +49,13 @@ import { SIDEBAR_DOC_LIMIT } from '../utils/sidebarDocs';
 import { useTables } from '../hooks/useTables';
 import { parseTablesRoute, tableViewerPath, tablesListPath } from '../utils/tablesRoute';
 import { SIDEBAR_TABLE_LIMIT } from '../utils/allTablesGrouping';
+import { useAutoProjects } from '../hooks/useAutoProjects';
+import { newAutoProjectPath, parseAutoProjectsRoute, autoprojectPath, autoprojectsListPath } from '../utils/autoprojectsRoute';
 import { SearchModal } from './SearchModal';
 import { QuestLogo } from './QuestLogo';
 import { RequestsBadge } from './sidebar/RequestsBadge';
 import { ProjectsSection } from './sidebar/ProjectsSection';
+import { AutoProjectsSection } from './sidebar/AutoProjectsSection';
 import { DocsSection } from './sidebar/DocsSection';
 import { TablesSection } from './sidebar/TablesSection';
 import { ConversationsSection } from './sidebar/ConversationsSection';
@@ -65,8 +70,9 @@ interface SidebarProps {
   onConversationSelect: (id: string, projectId?: string | null, opts?: { implicit?: boolean }) => void;
   onNewConversation: (id: string, projectId?: string | null) => void;
   // Called after the Sidebar navigates to a view that is not a conversation
-  // (a doc or table, the All Docs / All Tables list): the host closes its drawer on phone. The
-  // desktop layout passes nothing.
+  // (an AutoProject, doc or table, an AutoProjects list, the All Docs / All
+  // Tables list): the host closes its drawer on phone. The desktop layout
+  // passes nothing.
   onNavigateAway?: () => void;
 }
 
@@ -142,6 +148,16 @@ export const Sidebar = React.memo(function Sidebar({
   // The project id of the All Tables view showing (null = unfiltered), or
   // undefined when no All Tables view is showing.
   const tablesListProjectId = tablesRoute?.kind === 'list' ? tablesRoute.projectId : undefined;
+
+  // AutoProjects: the user's unarchived AutoProjects on the main panel only (AutoProjects
+  // are top-level, no drill-down block), while the `autoprojects` feature gate is
+  // open. The URL says which AutoProject / AutoProjects list is showing; an AutoProject page with
+  // a run open highlights its AutoProject's row too.
+  const autoprojectsEnabled = enabledFeatures.includes(AUTOPROJECTS_FEATURE);
+  const userAutoProjects = useAutoProjects({ enabled: autoprojectsEnabled });
+  const autoprojectsRoute = parseAutoProjectsRoute(location.pathname, location.search);
+  const activeAutoProjectId =
+    autoprojectsRoute?.kind === 'page' || autoprojectsRoute?.kind === 'run' ? autoprojectsRoute.autoprojectId : null;
 
   // Per-project conversation filters. Default to false (hide archived, hide
   // Slack conversations) on every page load; no persistence. Independent of
@@ -367,6 +383,15 @@ export const Sidebar = React.memo(function Sidebar({
     onNavigateAway?.();
   }
 
+  // AutoProjects views are URL routes too (/autoprojects, /autoprojects?archived=true,
+  // /autoprojects/new, /autoprojects/<id>), handled exactly like the docs ones above.
+  function handleOpenAutoProjectsPath(path: string) {
+    setError(null);
+    setShowRequestsView(false);
+    navigate(path);
+    onNavigateAway?.();
+  }
+
   // Deselect an archived conversation if it was the active one.
   function handleArchived(conversationId: string) {
     if (activeConversationId === conversationId) {
@@ -524,6 +549,21 @@ export const Sidebar = React.memo(function Sidebar({
                 onShowArchivedChange={setShowArchivedProjects}
                 onOpenProject={handleProjectDrillDown}
                 onCreateProject={() => setShowNewProjectModal(true)}
+              />
+            )}
+
+            {autoprojectsEnabled && (
+              <AutoProjectsSection
+                autoprojects={userAutoProjects.autoprojects}
+                loading={userAutoProjects.loading}
+                error={userAutoProjects.error}
+                activeAutoProjectId={activeAutoProjectId}
+                onOpenAutoProject={(id) => handleOpenAutoProjectsPath(autoprojectPath(id))}
+                onOpenAll={() => handleOpenAutoProjectsPath(autoprojectsListPath())}
+                onOpenArchived={() => handleOpenAutoProjectsPath(autoprojectsListPath({ archived: true }))}
+                onNewAutoProject={() => handleOpenAutoProjectsPath(newAutoProjectPath())}
+                headerActive={autoprojectsRoute?.kind === 'list' && !autoprojectsRoute.archived}
+                archivedActive={autoprojectsRoute?.kind === 'list' && autoprojectsRoute.archived}
               />
             )}
 

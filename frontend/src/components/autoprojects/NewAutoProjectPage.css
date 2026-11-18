@@ -1,0 +1,79 @@
+/* NewAutoProjectPage (/autoprojects/new) -- inside .docs-main (App.css), the
+ * scrolling column. Like the home screen (HomeComposer.css): a centred
+ * column with the heading, the explanatory line, the inline error, the
+ * upload strip and the shared composer, which keeps its ChatPanel.css
+ * styling (in-flow on phones too: only .chat-panel overlays it). */
+
+.autoproject-new-page {
+  flex: 1 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 1.5rem;
+  box-sizing: border-box;
+}
+
+.autoproject-new-page-inner {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.autoproject-new-page-title {
+  margin: 0 0 0.75rem;
+  font-size: 2.25rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--text);
+}
+
+.autoproject-new-page-note {
+  margin: 0 auto 1.5rem;
+  max-width: 34rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.autoproject-new-page-error {
+  margin: 0 0 0.75rem;
+}
+
+.autoproject-new-page-composer {
+  width: 100%;
+}
+
+/* The composer's floating bubble is the card here; drop the strip padding
+   around it so the bubble aligns with the column (as on the home screen). */
+.autoproject-new-page-composer .input-area.composer {
+  padding: 0;
+}
+
+@media (max-width: 768px) {
+  .autoproject-new-page {
+    align-items: flex-start;
+    padding: 2.5rem 16px 1.5rem;
+  }
+
+  .autoproject-new-page-title {
+    font-size: 1.75rem;
+  }
+
+  .autoproject-new-page-note {
+    margin-bottom: 1.25rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* Phones: the composer is a one-line pill until focused; give the
+   placeholder (a whole sentence here) room for two lines. */
+@media (max-width: 768px) {
+  .autoproject-new-page-composer .composer-input {
+    min-height: 3em;
+  }
+}

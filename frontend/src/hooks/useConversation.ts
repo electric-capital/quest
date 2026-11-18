@@ -8,13 +8,14 @@ import { conversationStore, type ConversationState } from '../store/conversation
 import { unreadStore } from '../store/unreadStore';
 import { webSocketManager } from '../services/WebSocketManager';
 import { persistentWebSocket, type PersistentEvent } from '../services/PersistentWebSocket';
+import { newClientSendId } from '../services/sendAck';
 import {
   fetchConversation,
   fetchConversationLoadedSkills,
   fetchConversationTail,
   ApiClientError,
 } from '../api/client';
-import type { MessageContent, SubAgentToolCallInfo, SubAgentFinishedInfo, ToolResultMessage, SubAgentToolUseMessage, SubAgentToolResultMessage, StatsMessage, ComposerAttachmentRef, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, PendingWaitInfo, ExpensiveResumeInfo, SubagentRunInfo } from '../api/types';
+import type { MessageContent, SubAgentToolCallInfo, SubAgentFinishedInfo, ToolResultMessage, SubAgentToolUseMessage, SubAgentToolResultMessage, StatsMessage, ComposerAttachmentRef, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, PendingWaitInfo, ExpensiveResumeInfo, SubagentRunInfo, ConversationOrigin } from '../api/types';
 
 /**
  * Reconstruct the subAgentToolCalls map from persisted tool_result messages.
@@ -174,7 +175,7 @@ interface UseConversationOptions {
   onLoadedSkills?: (conversationId: string, skillIds: string[]) => void;
   onModelLoaded?: (conversationId: string, model: string, thinkingEffort: string | null) => void;
   onProjectIdLoaded?: (conversationId: string, projectId: string) => void;
-  onOriginLoaded?: (conversationId: string, origin: 'web' | 'slack' | 'user_subagent' | 'inference_api') => void;
+  onOriginLoaded?: (conversationId: string, origin: ConversationOrigin) => void;
 }
 
 interface UseConversationResult {
@@ -192,7 +193,7 @@ interface UseConversationResult {
   subAgentReturned: Map<string, Map<string, SubAgentFinishedInfo>>;
   contextTokens: number | null;
   maxContextTokens: number | null;
-  origin: 'web' | 'slack' | 'user_subagent' | 'inference_api';
+  origin: ConversationOrigin;
   /** Caller identity + status of the cross-user subagent run, when
    *  origin === 'user_subagent'; null otherwise. Drives the read-only
    *  composer notice. */
@@ -200,6 +201,9 @@ interface UseConversationResult {
   slackChannelId: string | null;
   slackThreadTs: string | null;
   slackTeamId: string | null;
+  /** The AutoProject this conversation is a run of (its detail's `autoproject_id`);
+   *  null for any other conversation and until the detail loaded. */
+  autoprojectId: string | null;
   /** Raw model value from the conversation record. `null` means "no model
    *  set on the conversation" (server default applies at run time). Distinct
    *  from the in-context selected model which always falls back to a local
@@ -248,25 +252,16 @@ interface UseConversationResult {
 /**
  * Hook to subscribe to and interact with a specific conversation
  */
-/**
- * Random id for an outbound send. ``crypto.randomUUID`` is only defined in
- * secure contexts, and local instances are served over plain http on a raw
- * IP, so fall back to a time + random string there.
- */
-function newClientSendId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 export function useConversation(conversationId: string, options?: UseConversationOptions): UseConversationResult {
   const prevConversationIdRef = useRef<string | null>(null);
-  const [origin, setOrigin] = useState<'web' | 'slack' | 'user_subagent' | 'inference_api'>('web');
+  const [origin, setOrigin] = useState<ConversationOrigin>('web');
   const [subagentRun, setSubagentRun] = useState<SubagentRunInfo | null>(null);
   const [slackChannelId, setSlackChannelId] = useState<string | null>(null);
   const [slackThreadTs, setSlackThreadTs] = useState<string | null>(null);
   const [slackTeamId, setSlackTeamId] = useState<string | null>(null);
+  // Tagged with the conversation it was loaded for, so a switch never shows
+  // the previous conversation's AutoProject while the new detail loads.
+  const [loadedAutoProject, setLoadedAutoProject] = useState<{ conversationId: string; autoprojectId: string | null } | null>(null);
   const [conversationModel, setConversationModel] = useState<string | null>(null);
   const [conversationFlags, setConversationFlags] = useState<string[]>([]);
   // Header title unit state: hydrated from GET /conversations/{id}, then
@@ -301,6 +296,12 @@ export function useConversation(conversationId: string, options?: UseConversatio
     prevConversationIdRef.current = conversationId;
 
     if (!isNewConversation && (state.isLoaded || state.isLoading)) {
+      return;
+    }
+    // A load that failed leaves the conversation neither loaded nor loading;
+    // retrying from this effect would refetch in a tight loop (a missing or
+    // foreign conversation fails every time).
+    if (!isNewConversation && state.error) {
       return;
     }
 
@@ -399,11 +400,13 @@ export function useConversation(conversationId: string, options?: UseConversatio
         }
 
         // Track origin so the composer can be locked for Slack-driven,
-        // cross-user subagent, and inference API conversations.
-        const nextOrigin: 'web' | 'slack' | 'user_subagent' | 'inference_api' =
+        // cross-user subagent, inference API and AutoProject run
+        // conversations.
+        const nextOrigin: ConversationOrigin =
           response.origin === 'slack'
             || response.origin === 'user_subagent'
             || response.origin === 'inference_api'
+            || response.origin === 'autoproject'
             ? response.origin
             : 'web';
         setOrigin(nextOrigin);
@@ -411,6 +414,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
         setSlackChannelId(response.slack_channel_id ?? null);
         setSlackThreadTs(response.slack_thread_ts ?? null);
         setSlackTeamId(response.slack_team_id ?? null);
+        setLoadedAutoProject({ conversationId, autoprojectId: response.autoproject_id ?? null });
         if (options?.onOriginLoaded) {
           options.onOriginLoaded(conversationId, nextOrigin);
         }
@@ -793,6 +797,7 @@ export function useConversation(conversationId: string, options?: UseConversatio
     slackChannelId,
     slackThreadTs,
     slackTeamId,
+    autoprojectId: loadedAutoProject?.conversationId === conversationId ? loadedAutoProject.autoprojectId : null,
     conversationModel,
     conversationFlags,
     customName,

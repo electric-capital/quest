@@ -1,5 +1,6 @@
 /**
- * The one way to download a workspace file from a component: the hidden-data
+ * The one way to download a workspace file from a component (of any file
+ * space: a `FileTarget`, a bare string being a conversation id): the hidden-data
  * acknowledgement (contexts/DownloadWarningContext.tsx), then the fetch of
  * whichever copy the user chose -- the file as stored, or the server's
  * metadata-stripped rewrite of a raster image -- then the browser save.
@@ -9,16 +10,16 @@
  */
 
 import { useCallback } from 'react';
-import { downloadFile, saveBlobToDisk } from '../api/fileApi';
+import { downloadFile, saveBlobToDisk, type FileTarget } from '../api/fileApi';
 import { useDownloadWarning } from '../contexts/DownloadWarningContext';
 
-export function useWorkspaceDownload(): (conversationId: string, filePath: string) => Promise<boolean> {
+export function useWorkspaceDownload(): (target: FileTarget, filePath: string) => Promise<boolean> {
   const { confirmDownload } = useDownloadWarning();
-  return useCallback(async (conversationId: string, filePath: string) => {
+  return useCallback(async (target: FileTarget, filePath: string) => {
     const name = filePath.split('/').pop() || filePath;
     const decision = await confirmDownload({ name, kind: 'file' });
     if (decision === 'cancel') return false;
-    saveBlobToDisk(await downloadFile(conversationId, filePath, decision));
+    saveBlobToDisk(await downloadFile(target, filePath, decision));
     return true;
   }, [confirmDownload]);
 }

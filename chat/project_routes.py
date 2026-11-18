@@ -177,6 +177,16 @@ async def create_project_from_conversation(
                 ),
             },
         )
+    if meta.get("autoproject_id"):
+        # An AutoProject run never belongs to a project (it is always private;
+        # its record is the AutoProject, not the conversation).
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "autoproject_run_conversation",
+                "message": "AutoProject run conversations cannot be converted to projects",
+            },
+        )
 
     project = await _create_project_checked(user, body.name)
     ChatStorage.create_project_workspace(project["id"])

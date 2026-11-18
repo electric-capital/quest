@@ -743,8 +743,16 @@ async def delete_account(
     from db.project_store import list_projects, delete_all_user_projects
     from db.conversation_store import list_conversations_meta
     from chat.storage import ChatStorage
-    conversations_meta = await list_conversations_meta(user_id)
+    # AutoProject run conversations included: their rows cascade with the
+    # user too, and their directories must be swept like any other.
+    conversations_meta = await list_conversations_meta(
+        user_id, include_autoproject_runs=True,
+    )
     user_projects = await list_projects(user_id)
+    # The user's AutoProjects (archived included); the rows cascade with the
+    # user, their AUTOPROJECTS_DIR directories are swept below.
+    from db import autoproject_store
+    autoproject_ids = await autoproject_store.list_autoproject_ids_for_user(user_id)
     # Quest Docs the user owns, user and project docs alike. Collected
     # before ANY row delete: the project delete below already cascades the
     # project docs' rows, and delete_user() cascades the rest.
@@ -794,6 +802,26 @@ async def delete_account(
         from chat.tables import service as table_service
 
         await asyncio.to_thread(table_service.delete_table_dirs, table_ids)
+
+    # Each AutoProject's directory (the AutoProject workspace). Best-effort per id and
+    # never raises, so like the doc and table sweeps it runs before the
+    # unguarded rmtree loops below.
+    if autoproject_ids:
+        import asyncio
+
+        def _sweep_autoproject_dirs() -> None:
+            for autoproject_id in autoproject_ids:
+                try:
+                    autoproject_dir = ChatStorage.get_autoproject_dir(autoproject_id)
+                    if autoproject_dir.exists():
+                        shutil.rmtree(autoproject_dir)
+                except Exception:
+                    logger.exception(
+                        "Account delete: failed to remove AutoProject directory %s "
+                        "(user %s)", autoproject_id, user_id,
+                    )
+
+        await asyncio.to_thread(_sweep_autoproject_dirs)
 
     # Delete each conversation's filesystem directory individually
     for conv in conversations_meta:

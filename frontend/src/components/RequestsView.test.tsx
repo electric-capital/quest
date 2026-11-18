@@ -3,11 +3,12 @@
 // global's total_pending, a re-fetch for an event without one), and a doc
 // link in the Memories tab closes the inbox before it opens the doc. The
 // Other tab label counts open notifications (useOpenNotificationCount) and
-// its path shows the NotificationsInbox.
+// its path shows the NotificationsInbox. A request raised by an AutoProject
+// run links to the AutoProject while the AutoProjects gate is open.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import type { DocNoteInboxSuggestion } from '../api/types';
+import type { DocNoteInboxSuggestion, EnrichedActionRequest } from '../api/types';
 import { RequestsView } from './RequestsView';
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   fetchNotifications: vi.fn(),
   fetchNotificationsCount: vi.fn(),
   setShowRequestsView: vi.fn(),
+  auth: { enabledFeatures: [] as string[] },
   globalHandlers: new Set<(event: Record<string, unknown>) => void>(),
 }));
 
@@ -40,6 +42,10 @@ vi.mock('../services/PersistentWebSocket', () => ({
       return () => mocks.globalHandlers.delete(handler);
     },
   },
+}));
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => mocks.auth,
 }));
 
 vi.mock('../contexts/NavigationContext', () => ({
@@ -116,6 +122,7 @@ beforeEach(() => {
   mocks.fetchMemoryInboxPending.mockReset().mockResolvedValue({ suggestions: [], pending_count: 0 });
   mocks.fetchMemoryInboxResolved.mockReset().mockResolvedValue({ suggestions: [], next_cursor: null });
   mocks.setShowRequestsView.mockReset();
+  mocks.auth.enabledFeatures = [];
   mocks.globalHandlers.clear();
 });
 
@@ -181,5 +188,54 @@ describe('RequestsView', () => {
 
     emit({ type: 'notifications_changed', open_count: 0 });
     expect(otherTabCount()).toBeNull();
+  });
+
+  describe('a request raised by an AutoProject run', () => {
+    const runRequest = (status: 'open' | 'executed'): EnrichedActionRequest => ({
+      id: 41,
+      user_id: 1,
+      conversation_id: 'run-conv',
+      request_type: 'send_email',
+      params: {},
+      reasoning: '',
+      status,
+      result: null,
+      created_at: '2026-11-10T10:00:00',
+      resolved_at: null,
+      autoproject_id: 'ap1',
+      autoproject_title: 'Quarterly report',
+    });
+
+    function serveRequests(request: EnrichedActionRequest) {
+      mocks.fetchActionRequestsEnriched.mockResolvedValue({ action_requests: [request] });
+      mocks.fetchActionRequestCounts.mockResolvedValue({
+        counts: { open: 1, executed: 1, denied: 0, stopped: 0, all: 1 },
+      });
+    }
+
+    it.each([
+      ['open', '/autoprojects/ap1'],
+      ['executed', '/autoprojects/ap1/runs/run-conv'],
+    ] as const)('links an %s request to the AutoProject while the gate is open (%s)', async (status, path) => {
+      mocks.auth.enabledFeatures = ['autoprojects'];
+      serveRequests(runRequest(status));
+      renderView('/inbox');
+      if (status === 'executed') fireEvent.click(await screen.findByRole('button', { name: /Executed/ }));
+      const link = await screen.findByText('Go to AutoProject: Quarterly report');
+      expect(screen.queryByText('Go to conversation')).toBeNull();
+
+      fireEvent.click(link);
+      expect(mocks.setShowRequestsView).toHaveBeenCalledWith(false);
+      expect(screen.getByTestId('location').textContent).toBe(path);
+    });
+
+    it('falls back to the conversation link with the gate closed', async () => {
+      serveRequests(runRequest('open'));
+      renderView('/inbox');
+      const link = await screen.findByText('Go to conversation');
+      expect(screen.queryByText(/Go to AutoProject/)).toBeNull();
+      fireEvent.click(link);
+      expect(screen.getByTestId('location').textContent).toBe('/chats/run-conv');
+    });
   });
 });

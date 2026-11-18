@@ -86,12 +86,14 @@ def _connected(user):
 class TestConnectedServicesDocsKey:
     def test_pseudo_key_constant(self):
         from api.instructions import PSEUDO_SERVICE_KEYS
+        from chat.autoprojects.constants import AUTOPROJECTS_SERVICE_KEY
         from chat.browser_sessions import BROWSER_SERVICE_KEY
         from chat.project_db import PROJECT_DB_SERVICE_KEY
         assert PSEUDO_SERVICE_KEYS == frozenset({
             DOCS_SERVICE_KEY, DOC_NOTES_SERVICE_KEY, TABLES_SERVICE_KEY,
-            BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY,
+            BROWSER_SERVICE_KEY, PROJECT_DB_SERVICE_KEY, AUTOPROJECTS_SERVICE_KEY,
         })
+        assert AUTOPROJECTS_SERVICE_KEY == "autoprojects"
         assert DOCS_SERVICE_KEY == "docs"
         assert DOC_NOTES_SERVICE_KEY == "doc_notes"
         assert TABLES_SERVICE_KEY == "tables"
@@ -418,6 +420,7 @@ def account_env(tmp_path, monkeypatch):
 
     import chat.storage as storage_mod
     import db.action_request_store as action_request_store
+    import db.autoproject_store as autoproject_store
     import db.conversation_store as conversation_store
     import db.doc_note_suggestion_store as doc_note_suggestion_store
     import db.doc_store as doc_store
@@ -430,9 +433,9 @@ def account_env(tmp_path, monkeypatch):
 
     models.Base.metadata.create_all(sync_engine)
     for mod in (
-        action_request_store, conversation_store, doc_note_suggestion_store,
-        doc_store, memory_store, project_store, routine_store,
-        user_store, table_store,
+        action_request_store, autoproject_store, conversation_store,
+        doc_note_suggestion_store, doc_store, memory_store, project_store,
+        routine_store, user_store, table_store,
     ):
         monkeypatch.setattr(mod, "AsyncSessionLocal", session_local)
 

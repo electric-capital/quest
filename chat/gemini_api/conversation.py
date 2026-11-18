@@ -39,11 +39,15 @@ from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
     _WAIT_FOR_HANDLES_MAX_IDS,
     TURN_TOOL_HANDLERS,
+    ASK_AUTOPROJECT_QUESTION_KEY,
+    ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
     FinishInferenceResponse,
+    FinishAutoProjectRun,
     REQUEST_SERVICE_CONNECTION_KEY,
     SuspendForActionRequest,
     SuspendForServiceConnection,
     SuspendForSlackReply,
+    SuspendForAutoProjectQuestion,
     SuspendForWaitHandles,
     ToolCall,
     TurnState,
@@ -505,6 +509,7 @@ async def run_conversation_turn(
     flags: list[str] | None = None,
     attached_filenames: list[str] | None = None,
     thinking_effort: str | None = None,
+    autoproject_id: str | None = None,
 ) -> list[dict]:
     """Run an LLM conversation turn with streaming and tool execution.
 
@@ -541,6 +546,16 @@ async def run_conversation_turn(
             model menu, or None for the model's default. A level the model's
             spec does not list (``thinking_efforts``) is ignored, not an
             error -- the catalog may have changed since the pick was made.
+        autoproject_id: The conversation's ``conversations.autoproject_id``, set by the WS
+            send path and the wait-handle resume. Marks an AutoProject run: the
+            conversation's ``autoproject_runs`` row is resolved up front and both ids
+            reach every top-level tool call (``ToolContext.autoproject_id`` /
+            ``autoproject_run_id``). The run's AutoProject context (frozen on the run row
+            on its first turn, chat.autoprojects.context.load_run_autoproject_context)
+            becomes the system prompt's ``## AutoProject`` section, the
+            session gets ``AUTOPROJECT_RUN_TOOLS``, and ``flags`` are ignored.
+            An AutoProject run never belongs to a project. Raises RuntimeError when
+            the run row or the AutoProject is missing.
 
     Returns:
         List of structured message dicts for storage.
@@ -611,7 +626,10 @@ async def run_conversation_turn(
 
         # Resolve per-conversation flags. ``nested_subagents`` lets 1st-level
         # sub-agents spawn one tier of 2nd-level sub-agents (Haiku / Flash-Lite
-        # only). NULL/empty flags mean no opt-in behaviors are active.
+        # only). NULL/empty flags mean no opt-in behaviors are active. An
+        # AutoProject run takes no flags, whatever a caller passed.
+        if autoproject_id:
+            flags = None
         from chat.conversation_flags import (
             is_flag_enabled, FLAG_NESTED_SUBAGENTS, FLAG_USER_SUBAGENTS,
         )
@@ -651,6 +669,25 @@ async def run_conversation_turn(
                 )
             subagent_caller = await _get_user_by_id(subagent_run["caller_user_id"])
 
+        # AutoProject runs (conversations.autoproject_id set,
+        # origin="autoproject") are always private standalone conversations
+        # with one autoproject_runs row each; the run-scoped AutoProject tools
+        # act on that row.
+        autoproject_run = None
+        if autoproject_id:
+            if project_id:
+                raise RuntimeError(
+                    f"Conversation {conversation_id} is an AutoProject run and "
+                    "cannot belong to a project"
+                )
+            from db.autoproject_store import get_run_by_conversation
+            autoproject_run = await get_run_by_conversation(conversation_id)
+            if autoproject_run is None or autoproject_run["autoproject_id"] != autoproject_id:
+                raise RuntimeError(
+                    f"Conversation {conversation_id} has autoproject_id={autoproject_id} "
+                    "but no autoproject_runs row"
+                )
+
         # chat_history.json is read ONCE here; the workspace notice flags
         # (below) are derived from it.
         chat_history_data = await _read_chat_history(conversation_id)
@@ -663,6 +700,19 @@ async def run_conversation_turn(
             project_data = await get_project(user["id"], project_id)
             if project_data:
                 resolved_project_guide = project_data.get("guide", "")
+        # An AutoProject run has no project (checked above); in its place it gets
+        # its AutoProject context: the system prompt's ## AutoProject section. It is
+        # frozen on the run row on the first turn, so a resume or a restart
+        # rebuilds the identical prompt with the same brief_version.
+        run_autoproject_context = None
+        if autoproject_run is not None:
+            from chat.autoprojects.context import load_run_autoproject_context
+            run_autoproject_context = await load_run_autoproject_context(autoproject_run)
+            if run_autoproject_context is None:
+                raise RuntimeError(
+                    f"Conversation {conversation_id} is a run of AutoProject "
+                    f"{autoproject_id}, which no longer exists"
+                )
 
         # Public-project conversations run with an internet-enabled sandbox
         # and are cut off from every internal resource (skills, memories,
@@ -891,6 +941,11 @@ async def run_conversation_turn(
                 connected_accounts=connected_accounts,
                 memories_content=memories_content,
                 project_memories_content=project_memories_content,
+                # AutoProject runs only reach this branch: they have no project,
+                # so they are never public.
+                autoproject_context=(
+                    run_autoproject_context.text if run_autoproject_context else ""
+                ),
             )
         ChatStorage.set_system_prompt(conversation_id, system_prompt)
         # Always load saved SDK history from disk so it's available as a
@@ -937,6 +992,11 @@ async def run_conversation_turn(
         elif is_public:
             from chat.llm.tool_schemas import PUBLIC_TOOLS
             session_tools = PUBLIC_TOOLS
+        elif autoproject_run is not None:
+            # AutoProject run: the top-level tier plus
+            # complete_autoproject_run and ask_autoproject_question.
+            from chat.llm.tool_schemas import AUTOPROJECT_RUN_TOOLS
+            session_tools = AUTOPROJECT_RUN_TOOLS
         elif routine_id:
             # Routine conversation: the top-level tier plus
             # routine_completed, which the run drivers wait for.
@@ -992,6 +1052,8 @@ async def run_conversation_turn(
             structured_messages=structured_messages,
             usage_acc=usage_acc,
             workspace_notice_flags=notice_flags,
+            autoproject_id=autoproject_id,
+            autoproject_run_id=autoproject_run["id"] if autoproject_run else None,
         )
 
         wrapped_message = _wrap_message_with_metadata(
@@ -1016,7 +1078,9 @@ async def run_conversation_turn(
         # Resolve each dangling tool_use against the wait-handle table by
         # tool_id. Rows with kind="slack_reply" indicate a
         # send_slack_reply_and_get_response suspend; kind="action_request"
-        # indicates a create_action_request suspend.
+        # a create_action_request suspend; kind="service_connection" a
+        # request_service_connection suspend; kind="autoproject_question" an
+        # ask_autoproject_question suspend.
         wait_handle_by_tool_id: dict[str, dict] = {}
         if pending_tool_uses_with_args:
             for tool_id, _tname, _args in pending_tool_uses_with_args:
@@ -1142,6 +1206,30 @@ async def run_conversation_turn(
                         })
                     else:
                         result_str = json.dumps(response)
+                    tool_results_for_resume.append({
+                        "name": tool_name,
+                        "result": result_str,
+                        "tool_id": tool_id,
+                        "extra_parts": [],
+                    })
+                elif row is not None and row.get("kind") == "autoproject_question":
+                    # ask_autoproject_question suspends (an AutoProject run of an
+                    # AutoProject): close with the user's answer from
+                    # chat.autoprojects.service.answer_question. Any other terminal
+                    # status (a Stop, a completion cancelling open handles)
+                    # reads as cancelled.
+                    response = row.get("response") or {}
+                    if row.get("status") == ToolWaitHandleStatus.PENDING:
+                        result_str = json.dumps({
+                            "status": "still_waiting",
+                            "note": "The user has not answered the question yet.",
+                        })
+                    elif row.get("status") == ToolWaitHandleStatus.ACCEPTED:
+                        result_str = json.dumps({
+                            "answer": response.get("answer", ""),
+                        })
+                    else:
+                        result_str = json.dumps({"status": "cancelled"})
                     tool_results_for_resume.append({
                         "name": tool_name,
                         "result": result_str,
@@ -1358,17 +1446,21 @@ async def run_conversation_turn(
             # Execute each function call and collect responses
             tool_results = []
             turn_state = TurnState()
-            # create_action_request suspends collected across this batch.
-            # A model may emit several create_action_request calls in ONE
-            # turn (parallel tool calls); each opens its own card + wait
-            # handle, and the loop keeps dispatching the rest of the batch
-            # instead of unwinding on the first suspend (which would leave
-            # the later tool_uses undispatched and closed with the
-            # "interrupted" marker on resume). The batch-wide suspend is
-            # raised after the loop; the resume gate in
-            # chat/wait_handles/resume.py holds the continuation until
-            # every card is resolved.
-            batch_suspends: list[SuspendForActionRequest] = []
+            # Card suspends collected across this batch (create_action_request,
+            # request_service_connection, ask_autoproject_question). A model may
+            # emit several of them in ONE turn (parallel tool calls); each
+            # opens its own card + wait handle, and the loop keeps
+            # dispatching the rest of the batch instead of unwinding on the
+            # first suspend (which would leave the later tool_uses
+            # undispatched and closed with the "interrupted" marker on
+            # resume). The batch-wide suspend is raised after the loop; the
+            # resume gate in chat/wait_handles/resume.py holds the
+            # continuation until every card is resolved.
+            batch_suspends: list[
+                SuspendForActionRequest
+                | SuspendForServiceConnection
+                | SuspendForAutoProjectQuestion
+            ] = []
             for fc_event in function_calls:
                 tool_call_count += 1
                 tool_id = fc_event.tool_id or f"{fc_event.tool_name}_{uuid.uuid4().hex[:8]}"
@@ -1451,20 +1543,23 @@ async def run_conversation_turn(
                         )
                     except (
                         SuspendForActionRequest, SuspendForServiceConnection,
+                        SuspendForAutoProjectQuestion,
                     ) as suspend_exc:
                         if registry_key not in (
                             "create_action_request",
                             REQUEST_SERVICE_CONNECTION_KEY,
+                            ASK_AUTOPROJECT_QUESTION_KEY,
+                            ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
                         ):
                             # return_to_caller keeps its immediate unwind:
                             # a subagent run has exactly one return.
                             raise
                         # Card + wait handle are already durable (the arm
-                        # emitted the action_request / connect_request
-                        # event before raising). No tool_result for this
-                        # call -- the resume bucket closes it with the
-                        # row's verdict. Keep dispatching the rest of the
-                        # batch.
+                        # emitted the action_request / connect_request /
+                        # autoproject_question event before raising). No
+                        # tool_result for this call -- the resume bucket
+                        # closes it with the row's verdict. Keep
+                        # dispatching the rest of the batch.
                         batch_suspends.append(suspend_exc)
                         continue
                     _log_large_tool_result(
@@ -1483,6 +1578,8 @@ async def run_conversation_turn(
                         # Routine runs keep run_kind "top_level" but may not
                         # suggest doc notes (the suggest_doc_note backstop).
                         is_routine=bool(ctx.routine_id),
+                        autoproject_id=ctx.autoproject_id,
+                        autoproject_run_id=ctx.autoproject_run_id,
                     )
 
                     # Emit conversation_updated event when the name was set
@@ -1612,6 +1709,20 @@ async def run_conversation_turn(
             exc.service, exc.sibling_handle_ids, user["email"],
         )
         return structured_messages
+    except SuspendForAutoProjectQuestion as exc:
+        # Same shape as SuspendForServiceConnection: the dangling
+        # ask_autoproject_question tool_use is on disk and the resume bucket closes
+        # it once chat.autoprojects.service.answer_question writes the
+        # autoproject_question wait-handle row (or a Stop cancels it). The AutoProject run
+        # driver sets the run ``waiting``.
+        logger.info(
+            "[wait-suspend] Conversation %s suspended on autoproject_question "
+            "(tool_id=%s, handle_id=%s, run_id=%s, "
+            "sibling_handle_ids=%s, user=%s)",
+            conversation_id, exc.tool_id, exc.handle_id,
+            exc.run_id, exc.sibling_handle_ids, user["email"],
+        )
+        return structured_messages
     except FinishInferenceResponse as exc:
         # One-shot inference API run delivered its final answer. This is a
         # successful completion, not a suspend: the tool_use/tool_result
@@ -1622,6 +1733,30 @@ async def run_conversation_turn(
             "return_final_response (tool_id=%s, user=%s)",
             conversation_id, exc.tool_id, user["email"],
         )
+        return structured_messages
+    except FinishAutoProjectRun as exc:
+        # A run of an AutoProject was completed by complete_autoproject_run
+        # (the run row is already ``completed`` and the closing tool_result
+        # is in structured_messages). The run ends here with no further
+        # model call; unlike an inference finish it keeps the turn's stats
+        # (the run view's cost line) and the turn-end SDK history save.
+        # Tool calls after complete_autoproject_run in the same batch are never
+        # dispatched.
+        logger.info(
+            "[autoproject-run] Conversation %s finished via complete_autoproject_run "
+            "(tool_id=%s, user=%s)",
+            conversation_id, exc.tool_id, user["email"],
+        )
+        stats = usage_acc.build_stats(
+            duration_ms=int((time.time() - start_time) * 1000),
+            tool_calls=tool_call_count,
+            turns=turn_count,
+            provider_name=provider_name,
+            model=model,
+        )
+        await _emit_durable(ctx, {"type": "stats", "stats": stats})
+        # Same rule as the turn-end save: after the last await.
+        _save_sdk_history(conversation_id, chat, provider)
         return structured_messages
     except Exception as exc:
         logger.exception("Error in run_conversation_turn (user=%s, conversation=%s)", user["email"], conversation_id)

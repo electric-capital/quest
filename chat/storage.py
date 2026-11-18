@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, List, Dict, Optional, TypeVar
 
-from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR
+from config.paths import CHATS_DIR, DOCS_DIR, PROJECTS_DIR, TABLES_DIR, AUTOPROJECTS_DIR
 
 if TYPE_CHECKING:
     from chat.docs.notes import NotesSeen
@@ -293,14 +293,15 @@ async def run_to_completion(awaitable: Awaitable[_T]) -> _T:
 
 
 class InvalidStorageIdError(ValueError):
-    """A conversation, project, doc or table id cannot be turned into an on-disk path.
+    """A conversation, project, doc, table or AutoProject id cannot be turned into an on-disk path.
 
     Raised by the central path resolvers on ``ChatStorage`` for ids that are
     not a single canonical path segment (empty, ``.``, ``..``, containing a
     separator, absolute) or whose resolved directory would not live under
-    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` (e.g. a
-    planted symlink). Subclasses ``ValueError`` so callers that already treat
-    a bad id as a cache miss or a 4xx keep working.
+    ``CHATS_DIR`` / ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` /
+    ``AUTOPROJECTS_DIR`` (e.g. a planted symlink). Subclasses ``ValueError``
+    so callers that already treat a bad id as a cache miss or a 4xx keep
+    working.
     """
 
 
@@ -363,11 +364,12 @@ class ChatStorage:
     Ownership is authoritative in the conversations SQLite table.
 
     ``get_conversation_dir`` / ``get_project_dir`` / ``get_doc_dir`` /
-    ``get_table_dir`` (and the helpers built on them) are the ONLY places that
-    turn an id into a filesystem path. They validate the id and
-    containment-check the result, so every caller is safe by construction;
-    production code must not join ``CHATS_DIR`` / ``PROJECTS_DIR`` /
-    ``DOCS_DIR`` / ``TABLES_DIR`` with an id itself. Ownership is
+    ``get_table_dir`` / ``get_autoproject_dir`` (and the helpers built on
+    them) are the ONLY places that turn an id into a filesystem path. They
+    validate the id and containment-check the result, so every caller is safe
+    by construction; production code must not join ``CHATS_DIR`` /
+    ``PROJECTS_DIR`` / ``DOCS_DIR`` / ``TABLES_DIR`` / ``AUTOPROJECTS_DIR``
+    with an id itself. Ownership is
     deliberately NOT checked here -- schedulers, migrations and cross-user subagents resolve
     paths without a "current user"; HTTP routes go through
     ``chat.conversation_access`` which adds the DB ownership lookup.
@@ -472,6 +474,39 @@ class ChatStorage:
         """
         _validate_id_segment(table_id, "table")
         return _resolve_contained_dir(TABLES_DIR, table_id)
+
+    @staticmethod
+    def get_autoproject_dir(autoproject_id: str) -> Path:
+        """Return ``AUTOPROJECTS_DIR / autoproject_id`` for a canonical, contained id.
+
+        The sole id-to-path resolver for AutoProjects; the AutoProject workspace
+        lives under it (:meth:`get_autoproject_workspace_root`). The directory is
+        NOT created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside AUTOPROJECTS_DIR.
+        """
+        _validate_id_segment(autoproject_id, "autoproject")
+        return _resolve_contained_dir(AUTOPROJECTS_DIR, autoproject_id)
+
+    @staticmethod
+    def get_autoproject_workspace_root(autoproject_id: str) -> Path:
+        """Return the AutoProject workspace root ``AUTOPROJECTS_DIR / id / "workspace"``.
+
+        The browsable root shared by every run of the AutoProject
+        (``autoproject://`` for the file tools, ``/autoproject`` in the
+        sandbox). Inherits the canonical-id and containment checks of
+        :meth:`get_autoproject_dir` and additionally refuses a ``workspace``
+        entry that resolves outside this AutoProject's own dir (a planted
+        symlink, incl. one into another AutoProject). The directory is NOT
+        created here.
+
+        Raises:
+            InvalidStorageIdError: non-canonical id or path outside the
+            AutoProject dir.
+        """
+        autoproject_dir = ChatStorage.get_autoproject_dir(autoproject_id)
+        return _check_contained(autoproject_dir, autoproject_dir / "workspace")
 
     @staticmethod
     def _get_chat_history_file(conversation_id: str) -> Path:
@@ -674,6 +709,64 @@ class ChatStorage:
         await db_create_conversation(
             user_id, conversation_id, created_at_dt,
             model=model, origin="inference_api",
+        )
+
+        return conversation_id
+
+    @staticmethod
+    async def create_autoproject_run_conversation(
+        user_id: int,
+        autoproject_id: str,
+        *,
+        model: Optional[str] = None,
+    ) -> str:
+        """Create the conversation for one run of an AutoProject (origin="autoproject").
+
+        Mirrors create_inference_api_conversation(): ``chat_history.json``
+        and the row both carry ``origin="autoproject"`` and ``autoproject_id``. The row
+        never has a ``project_id`` (an AutoProject run is private and never belongs
+        to a project), takes no unread state of its own (unread lives on the
+        AutoProject) and stays out of the Conversations sidebar and search
+        (``list_conversations_meta(include_autoproject_runs=False)``).
+
+        No access checks happen here: the AutoProject service checks the feature
+        gate, ownership, the archive flag and the one-active-run rule before
+        calling this. The ``autoproject_runs`` row is allocated later, when the
+        run's single user message arrives.
+
+        Args:
+            user_id: The AutoProject owner's integer ID.
+            autoproject_id: The AutoProject this run belongs to.
+            model: Optional LLM model ID to set on the conversation.
+
+        Returns:
+            conversation_id: UUID string for the new conversation.
+        """
+        from chat.autoprojects.constants import AUTOPROJECT_CONVERSATION_ORIGIN
+        from db.conversation_store import create_conversation as db_create_conversation
+
+        conversation_id = str(uuid.uuid4())
+        conversation_dir = ChatStorage._get_conversation_dir(conversation_id)
+        conversation_dir.mkdir(parents=True, exist_ok=True)
+
+        created_at_str = utc_timestamp()
+
+        chat_data = {
+            "id": conversation_id,
+            "user_id": user_id,
+            "created_at": created_at_str,
+            "origin": AUTOPROJECT_CONVERSATION_ORIGIN,
+            "autoproject_id": autoproject_id,
+            "messages": [],
+        }
+
+        chat_file = ChatStorage._get_chat_history_file(conversation_id)
+        write_json_atomic(chat_file, chat_data)
+
+        created_at_dt = _parse_datetime(created_at_str)
+        await db_create_conversation(
+            user_id, conversation_id, created_at_dt,
+            model=model, origin=AUTOPROJECT_CONVERSATION_ORIGIN, autoproject_id=autoproject_id,
         )
 
         return conversation_id
@@ -1092,6 +1185,29 @@ class ChatStorage:
                 and msg.get("wait_handle_id") == wait_handle_id
             ),
             {"status": status},
+        )
+
+    @staticmethod
+    def update_autoproject_question_message(
+        conversation_id: str,
+        wait_handle_id: str,
+        fields: Dict,
+    ) -> None:
+        """Merge *fields* into the persisted ``autoproject_question`` entry in place.
+
+        Answering an AutoProject run's question (``answered`` plus the
+        ``answer``) or cancelling it (``cancelled``) writes the outcome into
+        the entry keyed by its ``wait_handle_id``, so the run view shows the
+        same state the AutoProject page shows (chat/autoprojects/questions.py).
+        Best-effort like :meth:`update_connect_request_message`.
+        """
+        ChatStorage._rewrite_message_in_place(
+            conversation_id,
+            lambda msg: (
+                msg.get("type") == "autoproject_question"
+                and msg.get("wait_handle_id") == wait_handle_id
+            ),
+            fields,
         )
 
     @staticmethod
@@ -1893,7 +2009,9 @@ class ChatStorage:
             include_routines: Whether to scan conversations a routine
                 created (``routine_id`` set). Off by default so a routine
                 that runs daily does not fill the results with
-                near-identical hits.
+                near-identical hits. AutoProject run conversations are
+                never scanned (``list_conversations_meta`` default): a run
+                is read on its AutoProject's page.
 
         Returns:
             Dict with 'results', 'total_matches', and 'query' keys.
@@ -2194,3 +2312,21 @@ class ChatStorage:
             })
 
         return conversations
+
+
+async def read_conversation_with_retry(conversation_id: str) -> Optional[dict]:
+    """Read and parse a conversation's chat_history.json in a worker thread.
+
+    A failed threaded read (e.g. a parse error from catching a concurrent
+    writer mid-write) is retried once synchronously on the event loop; a
+    genuinely unreadable file raises from there. None when the
+    conversation has no transcript.
+    """
+    try:
+        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
+    except Exception:
+        logger.debug(
+            "Threaded chat_history.json read failed for %s; retrying on the loop",
+            conversation_id, exc_info=True,
+        )
+        return ChatStorage.get_conversation(conversation_id)

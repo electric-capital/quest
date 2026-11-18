@@ -19,6 +19,9 @@ import {
 } from '../api/client';
 import type { EnrichedActionRequest, ActionRequestCountsResponse } from '../api/types';
 import { useNavigationState } from '../contexts/NavigationContext';
+import { useAuth } from '../contexts/AuthContext';
+import { AUTOPROJECTS_FEATURE } from '../api/autoprojectsApi';
+import { autoprojectRunPath, autoprojectPath } from '../utils/autoprojectsRoute';
 import {
   totalPendingSuggestions,
   usePendingSuggestionCounts,
@@ -85,6 +88,8 @@ function formatTimestamp(isoTimestamp: string): string {
 
 export function RequestsView() {
   const { setShowRequestsView } = useNavigationState();
+  const { enabledFeatures } = useAuth();
+  const autoprojectsEnabled = enabledFeatures.includes(AUTOPROJECTS_FEATURE);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -367,6 +372,18 @@ export function RequestsView() {
     }
   };
 
+  // A request an AutoProject run proposed (AutoProjects gate open): an open one is
+  // answered on the AutoProject's page, which shows the run's open cards; a
+  // resolved one opens its run's transcript.
+  const handleGoToAutoProject = (autoprojectId: string, request: EnrichedActionRequest) => {
+    setShowRequestsView(false);
+    navigate(
+      request.status === 'open'
+        ? autoprojectPath(autoprojectId)
+        : autoprojectRunPath(autoprojectId, request.conversation_id),
+    );
+  };
+
   const handleBannerClick = async () => {
     if (bannerLoading) return;
     setBannerLoading(true);
@@ -554,13 +571,22 @@ export function RequestsView() {
                   </div>
                 )}
 
-                {/* Conversation link */}
-                <span
-                  className="request-conversation-link"
-                  onClick={() => handleGoToConversation(request.conversation_id, request.project_id)}
-                >
-                  Go to conversation
-                </span>
+                {/* Conversation link (the AutoProject, for an AutoProject run's request) */}
+                {request.autoproject_id && autoprojectsEnabled ? (
+                  <span
+                    className="request-conversation-link"
+                    onClick={() => handleGoToAutoProject(request.autoproject_id!, request)}
+                  >
+                    {`Go to AutoProject: ${request.autoproject_title || 'Untitled AutoProject'}`}
+                  </span>
+                ) : (
+                  <span
+                    className="request-conversation-link"
+                    onClick={() => handleGoToConversation(request.conversation_id, request.project_id)}
+                  >
+                    Go to conversation
+                  </span>
+                )}
 
                 {/* Reasoning */}
                 {request.reasoning && (

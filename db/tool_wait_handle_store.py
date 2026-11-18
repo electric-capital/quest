@@ -13,6 +13,7 @@ caller's earlier read.
 """
 
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -245,6 +246,64 @@ async def list_pending_for_conversation(
         result = await db.execute(stmt)
         rows = result.scalars().all()
         return [_row_to_dict(r) for r in rows]
+
+
+async def list_pending_for_conversations(
+    conversation_ids: Iterable[str],
+    *,
+    kinds: Optional[Iterable[str]] = None,
+) -> list[dict]:
+    """List the PENDING handles in ``conversation_ids``, oldest first,
+    optionally only those whose ``kind`` is in ``kinds``.
+
+    One query per 500 conversations, so a page of an AutoProject's runs (its
+    open approval and connect cards) and an AutoProject delete (which of its
+    run conversations have anything to cancel) cost one query however many
+    runs there are. No ownership check: callers pass conversation ids they
+    have already scoped to the user.
+    """
+    ids = list(dict.fromkeys(cid for cid in conversation_ids if cid))
+    if not ids:
+        return []
+    kind_list = None if kinds is None else list(dict.fromkeys(kinds))
+    if kind_list is not None and not kind_list:
+        return []
+    rows: list[ToolWaitHandle] = []
+    async with AsyncSessionLocal() as db:
+        for i in range(0, len(ids), 500):
+            stmt = select(ToolWaitHandle).where(
+                ToolWaitHandle.conversation_id.in_(ids[i:i + 500]),
+                ToolWaitHandle.status == ToolWaitHandleStatus.PENDING,
+            )
+            if kind_list is not None:
+                stmt = stmt.where(ToolWaitHandle.kind.in_(kind_list))
+            rows.extend((await db.execute(stmt)).scalars().all())
+    rows.sort(key=lambda r: (r.created_at or datetime.min, r.id))
+    return [_row_to_dict(r) for r in rows]
+
+
+async def list_handles_for_conversations(
+    conversation_ids: list[str], *, kind: str,
+) -> list[dict]:
+    """List every handle of ``kind`` (any status) in ``conversation_ids``,
+    oldest first.
+
+    One query for a whole page of conversations (the AutoProject page
+    reads the questions of a page of runs this way). No ownership check:
+    callers pass conversation ids they have already scoped to the user.
+    """
+    if not conversation_ids:
+        return []
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ToolWaitHandle)
+            .where(
+                ToolWaitHandle.conversation_id.in_(list(dict.fromkeys(conversation_ids))),
+                ToolWaitHandle.kind == kind,
+            )
+            .order_by(ToolWaitHandle.created_at, ToolWaitHandle.id)
+        )
+        return [_row_to_dict(r) for r in result.scalars().all()]
 
 
 async def resolve_handle(

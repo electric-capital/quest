@@ -78,3 +78,9 @@ class RunContext:
     # start and handed to sub-agent spawns for their prompts. Empty for a
     # standalone conversation. Treat as read-only.
     workspace_notice_flags: dict[str, bool] = field(default_factory=dict)
+
+    # AutoProject run linkage (conversations.autoproject_id set, origin="autoproject"):
+    # the AutoProject id and the conversation's autoproject_runs row id. None for every
+    # other conversation.
+    autoproject_id: str | None = None
+    autoproject_run_id: str | None = None

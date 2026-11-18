@@ -17,7 +17,8 @@ Only tools that make sense outside the agent loop are exposed:
   file tools are pointless here too). The scheme-qualified file tools
   (``list_files``, ``read_file``, ``write_file``, ``edit_file``,
   ``copy_file``) are left out for the same reason: a project conversation's
-  scripts have the project workspace mounted at ``/project`` and copy with
+  scripts have the project workspace mounted at ``/project``, and an AutoProject
+  run's scripts have the AutoProject workspace mounted at ``/autoproject``; they copy with
   ``shutil``.
 * No provider-part tools (``get_workspace_file`` returns provider-specific
   attachment parts that have no HTTP representation).
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 # allow-list (not a deny-list) so newly registered tools stay script-invisible
 # until deliberately added. The workspace and scheme-qualified file tools are
 # deliberately absent: scripts read and write /workspace (and /project in a
-# project conversation) directly.
+# project conversation, /autoproject in a run of an AutoProject) directly.
 SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     # The Slack tools (reads + send_slack_dm_to_self -- the bridge is the
     # script path to them; the old /api/slack-simple/dm-self HTTP route is
@@ -88,6 +89,14 @@ SCRIPT_TOOL_CALL_ALLOWLIST: frozenset[str] = frozenset({
     "list_tables",
     "get_table",
     "query_rows",
+    # AutoProject run log reads: scoped to the AutoProject of the AutoProject
+    # run that launched the container (the lease's autoproject_id, passed to
+    # dispatch below); outside an AutoProject run they refuse with
+    # not_autoproject_run. The two run-scoped loop tools
+    # (complete_autoproject_run, ask_autoproject_question) are never reachable
+    # from a script.
+    "list_autoproject_runs",
+    "read_autoproject_run",
 })
 
 
@@ -128,9 +137,12 @@ async def script_tool_call_endpoint(
     The lease carries the launching conversation's project and public
     flag, which are passed to dispatch so the Quest Docs / Tables access
     rule scopes the script like that conversation (a script in a project
-    conversation reads the project's docs and tables, read-only). The
-    conversation id itself is not passed: a script has no conversation of
-    its own to attribute reads to (``doc_reads.json`` stays untouched).
+    conversation reads the project's docs and tables, read-only). It also
+    carries the launching AutoProject run's ``autoproject_id`` / ``autoproject_run_id`` (None
+    outside a run of an AutoProject), so ``list_autoproject_runs`` /
+    ``read_autoproject_run`` read that run's AutoProject log. The conversation id itself
+    is not passed: a script has no conversation of its own to attribute
+    reads to (``doc_reads.json`` stays untouched).
 
     A container launched from an inference API or cross-user subagent run holds a lease with
     ``block_mutating_tools`` set: the mutating dynamic tools are refused
@@ -193,6 +205,8 @@ async def script_tool_call_endpoint(
         project_id=lease.project_id if lease is not None else None,
         is_public=lease.is_public if lease is not None else False,
         is_script=True,
+        autoproject_id=lease.autoproject_id if lease is not None else None,
+        autoproject_run_id=lease.autoproject_run_id if lease is not None else None,
     )
     if extra_parts:
         # Allow-listed tools never produce provider parts; log if one appears

@@ -31,6 +31,67 @@ function extractPythonScript(
 }
 
 /**
+ * The tool's own arguments: `tool_input` itself, or its `arguments` when the
+ * call rode the `tool_call` meta tool.
+ */
+function innerToolArgs(toolName: string, toolInput: Record<string, unknown>): Record<string, unknown> {
+  if (toolName !== 'tool_call') return toolInput;
+  const args = toolInput.arguments;
+  return args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {};
+}
+
+/**
+ * The text fields of an AutoProject run's log entry (complete_autoproject_run),
+ * in reading order.
+ */
+const AUTOPROJECT_ENTRY_FIELDS: Array<[key: string, label: string]> = [
+  ['autoproject_title', 'AutoProject title'],
+  ['summary', 'Summary'],
+  ['result', 'Result'],
+  ['notes', 'Handoff notes'],
+  ['brief', 'Brief'],
+];
+
+/**
+ * For complete_autoproject_run calls (direct or through tool_call), the entry's
+ * text fields as labelled blocks, since a markdown result or brief reads
+ * badly as an escaped JSON string; any other argument (e.g.
+ * expected_brief_version) stays in `otherParams`. Null for every other tool.
+ */
+function extractAutoProjectEntryFields(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): { fields: Array<{ label: string; text: string }>; otherParams: Record<string, unknown> } | null {
+  const effectiveName = toolName === 'tool_call' ? toolInput.tool_name : toolName;
+  if (effectiveName !== 'complete_autoproject_run') return null;
+  const otherParams = { ...innerToolArgs(toolName, toolInput) };
+  const fields: Array<{ label: string; text: string }> = [];
+  for (const [key, label] of AUTOPROJECT_ENTRY_FIELDS) {
+    const value = otherParams[key];
+    if (typeof value !== 'string') continue;
+    fields.push({ label, text: value });
+    delete otherParams[key];
+  }
+  return fields.length > 0 ? { fields, otherParams } : null;
+}
+
+/**
+ * Header label of an AutoProject run's own loop tools (complete_autoproject_run,
+ * ask_autoproject_question; see chat/gemini_api/turn_tools.py), which read better
+ * as steps of the run than as tool names. Null for every other tool.
+ */
+function autoprojectLoopToolLabel(toolName: string, toolResult?: ToolResultMessageType): string | null {
+  if (toolName === 'ask_autoproject_question') return 'Asked a question';
+  if (toolName !== 'complete_autoproject_run') return null;
+  if (!toolResult) return 'Finishing the update';
+  // An accepted call returns {status: "completed", ...}; a refusal (a
+  // validation error, brief_conflict) leaves the run open for a retry.
+  const parsed = tryParseJsonContainer(toolResult.tool_output);
+  const accepted = parsed !== null && !Array.isArray(parsed) && parsed.status === 'completed';
+  return accepted ? 'Finished the update' : 'Tried to finish the update';
+}
+
+/**
  * Renders a tool's Input section content: run_python scripts as a
  * syntax-highlighted Python block (remaining params, e.g. args/timeout,
  * as JSON underneath), everything else as pretty-printed JSON. The script
@@ -40,6 +101,24 @@ function ToolInputContent({ toolName, toolInput }: { toolName: string; toolInput
   const extracted = extractPythonScript(toolName, toolInput);
   const codeAndMath = useCodeAndMath(extracted !== null);
   if (!extracted) {
+    const entry = extractAutoProjectEntryFields(toolName, toolInput);
+    if (entry) {
+      return (
+        <>
+          {entry.fields.map(({ label, text }) => (
+            <div key={label} className="tool-text-field">
+              <div className="tool-text-field-label">{label}</div>
+              <pre className="tool-section-content">{text}</pre>
+            </div>
+          ))}
+          {Object.keys(entry.otherParams).length > 0 && (
+            <div className="tool-script-params">
+              <JsonView value={entry.otherParams} />
+            </div>
+          )}
+        </>
+      );
+    }
     return <JsonView value={toolInput} />;
   }
 
@@ -396,6 +475,14 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
   let displayName: string;
   let displayIntent: string;
 
+  // An AutoProject run's ask_autoproject_question suspends the run; its result goes back
+  // to the model on resume but is never written to the transcript, so the
+  // call would read "running..." forever. The autoproject_question card that
+  // follows it shows whether the question is pending, answered or cancelled.
+  const isAutoProjectQuestionCall = (toolUse.tool_name === 'tool_call'
+    ? toolUse.tool_input.tool_name
+    : toolUse.tool_name) === 'ask_autoproject_question';
+
   if (isAgentTask) {
     displayName = (toolUse.tool_input.name as string) || 'Sub-Agent';
     displayIntent = (toolUse.tool_input.description as string) || '';
@@ -431,9 +518,14 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
       }
     }
 
+    const autoprojectLabel = autoprojectLoopToolLabel(effectiveToolName, toolResult);
+
     if (waitReason) {
       displayName = `Waiting for: ${waitReason}`;
       displayIntent = '';
+    } else if (autoprojectLabel && !toolUse.intent_message) {
+      displayName = autoprojectLabel;
+      displayIntent = effectiveToolName;
     } else if (toolUse.intent_message) {
       // Show intent_message as primary if available; fall back to tool name
       displayName = toolUse.intent_message;
@@ -577,7 +669,7 @@ export function ToolUseMessage({ toolUse, toolResult, childToolCalls, subAgentRe
               {toolResult && (
                 <span className="tool-status completed">completed</span>
               )}
-              {!toolResult && (
+              {!toolResult && !isAutoProjectQuestionCall && (
                 <span className="tool-status running">running...</span>
               )}
             </>

@@ -47,6 +47,7 @@ from sqlalchemy.orm import sessionmaker
 
 SESSION_LOCAL_MODULES = (
     "db.action_request_store",
+    "db.autoproject_store",
     "db.conversation_store",
     "db.doc_memory_store",
     "db.doc_note_suggestion_store",

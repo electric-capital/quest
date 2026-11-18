@@ -156,6 +156,8 @@ The dangling tool_use stays open on disk until the user's next message: that sen
 
 In short, Stop is what the user clicks when they do not want the action AND have nothing further to say right now: nothing runs, the model does not get another turn, and the next message the user sends is what the model sees next. To reject with an explanation and let the model react immediately, use Revise instead.
 
+In an AutoProject run Stop also ends the run as `stopped` (`stop_autoproject_run()`), since a run takes no next message; and every open card of a run is closed as `stopped` (`result.reason` `autoproject_run_finished` / `autoproject_run_deleted`, `stop_open_action_requests_for_conversations()`) once the run finishes or is deleted, because `action_requests` has no link to the run and an approval would otherwise execute with no run behind it ([AutoProjects -- Stop, Failure and Settling](autoprojects.md#stop-failure-and-settling)).
+
 `subagent_return` cards keep a hard Deny instead (the target user cannot type into the read-only subagent conversation, so "wait for the next message" has no meaning there); `action: "stop"` on such a card is treated as that deny. A dangling sibling tool_use that has no row but did run (a regular tool dispatched in the same batch) is closed with its persisted `tool_output` replayed from `chat_history.json` via `_load_persisted_tool_results()`.
 
 The model then continues on the same turn, reading the verdict directly off the tool's return value -- no follow-up `wait_for_handles` is needed. The multi-step accept-then-create pattern (e.g., create a Drive folder, then upload files bound to the new `folder_id`) collapses to two sequential `create_action_request` calls. The `system:action_requests` system skill in `chat/system_skills/catalog.py` documents the verdict shape and the multi-step pattern with worked examples.
@@ -367,7 +369,7 @@ In addition to inline action request rendering within chat conversations, the fr
 
 ### Data Access Layer
 
-`db/action_request_store.py` provides additional functions for the Requests view: efficient count queries (with optional status filter and grouped-by-status counts) and an enriched listing (`list_action_requests_enriched(user_id, status=None)`) that batch-loads conversation, routine, and project data, with an optional `status` filter applied at the DB level (an `ActionRequestStatus` value from `db/models.py`; `None` returns all statuses) via the composite `ix_action_requests_user_status_created` index. See `db/action_request_store.py` for the full function signatures.
+`db/action_request_store.py` provides additional functions for the Requests view: efficient count queries (with optional status filter and grouped-by-status counts) and an enriched listing (`list_action_requests_enriched(user_id, status=None)`) that batch-loads conversation, routine, project and AutoProject data (an AutoProject run's row carries `autoproject_id` / `autoproject_title`), with an optional `status` filter applied at the DB level (an `ActionRequestStatus` value from `db/models.py`; `None` returns all statuses) via the composite `ix_action_requests_user_status_created` index. See `db/action_request_store.py` for the full function signatures.
 
 ### API Endpoints
 
@@ -382,7 +384,7 @@ The count and enriched listing endpoints are in `chat/action_request_routes.py`.
   - After a row's status is mutated locally by Approve / Revise, a render-time `requests.filter((r) => r.status === filter)` re-applies the tab predicate so the row vanishes immediately from non-All tabs without a refetch (the server-filtered slice no longer matches it); Stop additionally re-fetches the list because it also stops the clicked row's open siblings in the same conversation.
 - Empty state distinguishes "no requests at all" (`serverCounts.all === 0`) from "no requests for this filter" so a user on a quieter tab is not told they have zero requests when other tabs are populated. The banner-click reload also passes the current tab's `status` so the "N new requests" indicator respects the active filter.
 - Generic preview field rendering via loop over `preview_fields` from the API response
-- Routine and project context display (routine name, project name) from enriched data
+- Routine and project context display (routine name, project name) from enriched data; an AutoProject run's request links to the AutoProject page instead of the conversation while the gate is open ([AutoProjects Frontend](autoprojects-frontend.md#shared-components))
 - Live updates: subscribes to `request_count_changed` events on the persistent WebSocket via `persistentWebSocket.onGlobalEvent()` for cross-tab immediate count refresh. The local `onRequestCountChange()` bus from `frontend/src/services/requestEvents.ts` is kept as a same-tab optimisation so a click in this view updates the badge without a server round-trip. An initial `fetchActionRequestCounts()` runs once on mount.
 - Non-disruptive "N new requests" banner: when the server-reported total exceeds the count at last full load, a banner appears above the request list. Clicking the banner reloads the current tab's slice and scrolls to the top. The banner avoids disrupting the user's current scroll position or in-progress approve/revise/stop actions
 
@@ -409,19 +411,19 @@ It also collapses the multi-step accept-then-create pattern (create a company, t
 The principal awkward case is scheduled routines: a routine that issues an action request now parks inside the call until the user approves it (up to `_WAIT_FOR_HANDLES_MAX_TIMEOUT` in `chat/gemini_api/turn_tools.py`, the wait-handle cap). See [Routine Scheduling](scheduling.md) for the routine implication; the `system:action_requests` skill steers routines toward `send_slack_dm_to_self`-style write paths instead.
 
 **Why a handler registry pattern?**
-The registry pattern makes it straightforward to add new action request types. Each handler is a self-contained class that knows how to execute its specific action. Adding a new type requires only subclassing `ActionRequestHandler`, implementing `execute()`, and registering the instance -- no changes to the routing or resolution logic.
+Each handler is a self-contained class; adding a type means subclassing `ActionRequestHandler`, implementing `execute()` and registering it, with no change to routing or resolution.
 
 **Why keep requests open on execution failure?**
-Transient failures (API timeouts, rate limits, temporary service outages) should not permanently mark a request as failed. Keeping it open lets the user retry without the agent needing to re-propose the action.
+A transient failure (timeout, rate limit, outage) should not permanently fail a request; keeping it open lets the user retry without a new proposal.
 
 **Why a dedicated Requests pane in addition to inline chat rendering?**
-Inline action request rendering works well when the user is already in the conversation where the request was created, but it requires navigating to each conversation individually to find pending requests. The Requests single-pane view aggregates all requests across conversations in one place, making it easy to review and act on pending requests without context switching. The enriched data (routine name, project name) provides additional context that is not available inline.
+Inline cards need the user to visit each conversation to find pending requests; the pane aggregates them across conversations, with the enriched routine, project and AutoProject context the inline card lacks.
 
 **Why a separate count endpoint instead of deriving count from the list?**
-The badge fetches `GET /app/api/action-requests/counts` on mount. A COUNT query is significantly cheaper than fetching and serializing full action request objects, and the dedicated `count_action_requests()` function runs an efficient `SELECT COUNT(*)` query, avoiding unnecessary data transfer and serialization overhead for a simple badge number.
+The badge fetches `GET /app/api/action-requests/counts` on mount; a `SELECT COUNT(*)` is far cheaper than fetching and serializing full request objects for a number.
 
 **Why server-side preview rendering instead of client-side?**
-Server-side `render_preview()` methods (including external name resolution) keep type-specific rendering in one place, and the frontend is a generic loop over `{key, value}` preview fields.
+Server-side `render_preview()` methods keep type-specific rendering in one place; the frontend loops over `{key, value}` preview fields.
 
 A new request type needs no frontend change unless it introduces a structured field type. Server-side rendering also enables richer previews (e.g., resolving upstream entity names) without exposing those APIs to the frontend.
 

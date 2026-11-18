@@ -15,6 +15,10 @@ from chat.gemini_api.constants import MAX_AGENT_TASKS_PER_TURN
 from chat.gemini_api.run_context import RunContext
 from chat.gemini_api.turn_tools import (
     _PUBLIC_BLOCKED_LOOP_TOOLS,
+    ASK_AUTOPROJECT_QUESTION_KEY,
+    ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
+    COMPLETE_AUTOPROJECT_RUN_KEY,
+    COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY,
     REQUEST_SERVICE_CONNECTION_KEY,
     ROUTINE_COMPLETED_VIA_TOOL_CALL_KEY,
     TURN_TOOL_HANDLERS,
@@ -107,6 +111,11 @@ class TestRegistryRouting:
             "create_action_request",
             WAIT_FOR_HANDLES_KEY,
             REQUEST_SERVICE_CONNECTION_KEY,
+            # The AutoProject run's loop tools, under both spellings.
+            COMPLETE_AUTOPROJECT_RUN_KEY,
+            COMPLETE_AUTOPROJECT_RUN_VIA_TOOL_CALL_KEY,
+            ASK_AUTOPROJECT_QUESTION_KEY,
+            ASK_AUTOPROJECT_QUESTION_VIA_TOOL_CALL_KEY,
         }
 
     def test_plain_names_key_to_themselves(self):

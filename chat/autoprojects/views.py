@@ -1,0 +1,324 @@
+"""What the AutoProject routes return: the list row, the AutoProject detail, the
+brief state and versions, and the AutoProject page's pages of runs.
+
+Every builder takes rows the caller has already scoped to the user (the
+route guard ``require_autoproject_for_route`` or the service did the gate and
+ownership checks) and shapes them for the frontend. Store-internal fields
+(``user_id``, ``next_run_seq``, a run's frozen ``context_brief_version``)
+never leave this module.
+
+Brief authorship: every brief version row carries a ``source`` (``ui``,
+``run:<run_id>``, ``restore:<n>``); views add ``run_seq``, the seq of that
+run while it still exists, so the UI can say "Updated by run N" or "Edited
+by you" without a second call.
+
+A run's view hides the pending entry of an ACTIVE run (``summary``,
+``result``, ``notes`` saved by a ``complete_autoproject_run`` that hit a brief
+conflict, chat/autoprojects/runs.py) and carries its questions (one query per
+page, chat/autoprojects/questions.py) and its open approval and connect cards as
+the transcript rows the conversation detail holds, so the AutoProject page
+renders them with the same components as a chat.
+
+Does not import ``chat.realtime``; route modules may import it at module
+top.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Optional
+
+from chat.autoprojects.constants import AUTOPROJECT_RUN_ACTIVE_STATUSES
+from chat.autoprojects.questions import list_run_questions
+from chat.storage import read_conversation_with_retry
+from db import autoproject_store, tool_wait_handle_store
+from db.models import ToolWaitHandleKind
+from db.autoproject_store import BriefVersionNotFoundError
+
+logger = logging.getLogger(__name__)
+
+# The wait-handle kinds whose cards the AutoProject page shows inline (the question
+# kind has its own ``questions`` list).
+_OPEN_REQUEST_HANDLE_KINDS = (
+    ToolWaitHandleKind.ACTION_REQUEST.value,
+    ToolWaitHandleKind.SERVICE_CONNECTION.value,
+)
+# The transcript message types of those cards (``ActionRequestMessage`` and
+# ``ConnectRequestMessage`` in the frontend).
+_OPEN_REQUEST_MESSAGE_TYPES = frozenset({"action_request", "connect_request"})
+
+
+# ---------------------------------------------------------------------------
+# Brief authorship
+# ---------------------------------------------------------------------------
+
+
+def source_run_id(source: Optional[str]) -> Optional[str]:
+    """The run id of a ``run:<run_id>`` brief source, else None."""
+    if isinstance(source, str) and source.startswith("run:"):
+        return source[len("run:"):] or None
+    return None
+
+
+async def _brief_authorship(
+    autoproject_id: str, brief_version: int,
+) -> tuple[Optional[str], Optional[int]]:
+    """``(brief_source, brief_run_seq)`` of the AutoProject's current brief version:
+    both None for version 0 or a pruned row; the seq None unless the source
+    is a run that still exists."""
+    if not brief_version:
+        return None, None
+    source = await autoproject_store.get_brief_version_source(autoproject_id, brief_version)
+    run_id = source_run_id(source)
+    if run_id is None:
+        return source, None
+    seqs = await autoproject_store.get_run_seqs(autoproject_id, [run_id])
+    return source, seqs.get(run_id)
+
+
+# ---------------------------------------------------------------------------
+# AutoProjects
+# ---------------------------------------------------------------------------
+
+
+def autoproject_list_row(autoproject: dict) -> dict:
+    """A ``GET /autoprojects`` row from an ``autoproject_store.list_autoprojects`` row:
+    ``{id, title, archived, last_activity_at, active_run, unread, event_seq,
+    unread_seq, read_seq}``."""
+    return {
+        "id": autoproject["id"],
+        "title": autoproject["title"],
+        "archived": autoproject["archived"],
+        "last_activity_at": autoproject["last_activity_at"],
+        "active_run": autoproject.get("active_run"),
+        "unread": autoproject["unread"],
+        "event_seq": autoproject["event_seq"],
+        "unread_seq": autoproject["unread_seq"],
+        "read_seq": autoproject["read_seq"],
+    }
+
+
+async def build_autoproject_detail(autoproject: dict) -> dict:
+    """The AutoProject detail from an AutoProject dict (``GET /autoprojects/{id}`` and every
+    route that returns the AutoProject).
+
+    Shape::
+
+        {id, title, title_is_default, archived, brief, brief_version,
+         brief_updated_at, brief_source, brief_run_seq,
+         model, thinking_effort, run_count, active_run: {id, seq, status}
+         | None, event_seq, unread_seq, read_seq, unread, created_at,
+         updated_at, last_activity_at}
+    """
+    autoproject_id = autoproject["id"]
+    active = await autoproject_store.get_active_run(autoproject_id)
+    run_count = await autoproject_store.count_runs(autoproject_id)
+    brief_source, brief_run_seq = await _brief_authorship(
+        autoproject_id, autoproject["brief_version"],
+    )
+    return {
+        "id": autoproject_id,
+        "title": autoproject["title"],
+        "title_is_default": autoproject["title_is_default"],
+        "archived": autoproject["archived"],
+        "brief": autoproject["brief"],
+        "brief_version": autoproject["brief_version"],
+        "brief_updated_at": autoproject["brief_updated_at"],
+        "brief_source": brief_source,
+        "brief_run_seq": brief_run_seq,
+        "model": autoproject["model"],
+        "thinking_effort": autoproject["thinking_effort"],
+        "run_count": run_count,
+        "active_run": autoproject_store.active_run_summary(active),
+        "event_seq": autoproject["event_seq"],
+        "unread_seq": autoproject["unread_seq"],
+        "read_seq": autoproject["read_seq"],
+        "unread": autoproject["unread"],
+        "created_at": autoproject["created_at"],
+        "updated_at": autoproject["updated_at"],
+        "last_activity_at": autoproject["last_activity_at"],
+    }
+
+
+def read_state(autoproject: dict) -> dict:
+    """``{event_seq, unread_seq, read_seq, unread}`` of an AutoProject dict (the
+    read acknowledgement's response)."""
+    return {
+        "event_seq": autoproject["event_seq"],
+        "unread_seq": autoproject["unread_seq"],
+        "read_seq": autoproject["read_seq"],
+        "unread": autoproject["unread"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Brief
+# ---------------------------------------------------------------------------
+
+
+async def build_brief_state(autoproject_id: str, state: dict) -> dict:
+    """The brief state from a store ``{brief, brief_version,
+    brief_updated_at}``: ``{brief, brief_version, brief_updated_at,
+    brief_source, brief_run_seq}``."""
+    brief_source, brief_run_seq = await _brief_authorship(autoproject_id, state["brief_version"])
+    return {
+        "brief": state["brief"],
+        "brief_version": state["brief_version"],
+        "brief_updated_at": state["brief_updated_at"],
+        "brief_source": brief_source,
+        "brief_run_seq": brief_run_seq,
+    }
+
+
+async def build_brief_versions(autoproject_id: str) -> list[dict]:
+    """The stored versions newest first: ``[{version, source, run_seq,
+    created_at, excerpt}]``, the run seqs resolved in one query."""
+    versions = await autoproject_store.list_brief_versions(autoproject_id)
+    seqs = await autoproject_store.get_run_seqs(
+        autoproject_id, [rid for v in versions if (rid := source_run_id(v["source"]))],
+    )
+    return [
+        {
+            "version": v["version"],
+            "source": v["source"],
+            "run_seq": seqs.get(source_run_id(v["source"]) or ""),
+            "created_at": v["created_at"],
+            "excerpt": v["excerpt"],
+        }
+        for v in versions
+    ]
+
+
+async def build_brief_version(autoproject_id: str, version: int) -> dict:
+    """One stored version: ``{version, source, run_seq, created_at,
+    content}``.
+
+    Raises:
+        BriefVersionNotFoundError: never written, or pruned.
+    """
+    row = await autoproject_store.get_brief_version(autoproject_id, version)
+    if row is None:
+        raise BriefVersionNotFoundError(version)
+    run_id = source_run_id(row["source"])
+    run_seq = None
+    if run_id is not None:
+        run_seq = (await autoproject_store.get_run_seqs(autoproject_id, [run_id])).get(run_id)
+    return {
+        "version": row["version"],
+        "source": row["source"],
+        "run_seq": run_seq,
+        "created_at": row["created_at"],
+        "content": row["content"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Run pages
+# ---------------------------------------------------------------------------
+
+
+def _run_view(run: dict, questions: list[dict], open_requests: list[dict]) -> dict:
+    active = run["status"] in AUTOPROJECT_RUN_ACTIVE_STATUSES
+    return {
+        "id": run["id"],
+        "seq": run["seq"],
+        "conversation_id": run["conversation_id"],
+        "prompt": run["prompt"],
+        "status": run["status"],
+        # An active run's entry is a pending one (a brief conflict being
+        # merged): not the run's answer yet.
+        "summary": None if active else run["summary"],
+        "result": None if active else run.get("result"),
+        "notes": None if active else run["notes"],
+        "handoff_missing": run["handoff_missing"],
+        "error": run["error"],
+        "model": run["model"],
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "questions": questions,
+        "open_requests": open_requests,
+    }
+
+
+async def _read_transcript_messages(conversation_id: str) -> list:
+    """The transcript's messages (``read_conversation_with_retry``); a
+    missing or unreadable transcript reads as no messages."""
+    try:
+        conversation = await read_conversation_with_retry(conversation_id)
+    except Exception:
+        logger.warning(
+            "[autoprojects] reading the transcript of %s failed", conversation_id,
+            exc_info=True,
+        )
+        return []
+    return (conversation or {}).get("messages") or []
+
+
+async def list_open_requests(runs: list[dict]) -> dict[str, list[dict]]:
+    """The open approval and connect cards of a page of runs, keyed by run
+    id (every run present; ``[]`` for a finished run or one with none).
+
+    Only active runs are looked at: one query for the pending
+    ``action_request`` / ``service_connection`` handles of their
+    conversations, then a transcript read only for the conversations that
+    have any, keeping the card rows whose ``wait_handle_id`` is pending, in
+    transcript order.
+    """
+    by_run: dict[str, list[dict]] = {run["id"]: [] for run in runs}
+    run_by_conversation = {
+        run["conversation_id"]: run["id"]
+        for run in runs
+        if run["status"] in AUTOPROJECT_RUN_ACTIVE_STATUSES
+    }
+    if not run_by_conversation:
+        return by_run
+    handles = await tool_wait_handle_store.list_pending_for_conversations(
+        list(run_by_conversation), kinds=_OPEN_REQUEST_HANDLE_KINDS,
+    )
+    pending: dict[str, set[str]] = {}
+    for handle in handles:
+        pending.setdefault(handle["conversation_id"], set()).add(handle["id"])
+    if not pending:
+        return by_run
+    conversation_ids = list(pending)
+    transcripts = await asyncio.gather(
+        *(_read_transcript_messages(cid) for cid in conversation_ids)
+    )
+    for conversation_id, messages in zip(conversation_ids, transcripts):
+        handle_ids = pending[conversation_id]
+        by_run[run_by_conversation[conversation_id]] = [
+            m for m in messages
+            if isinstance(m, dict)
+            and m.get("type") in _OPEN_REQUEST_MESSAGE_TYPES
+            and m.get("wait_handle_id") in handle_ids
+        ]
+    return by_run
+
+
+async def build_runs_page(
+    autoproject_id: str, *, before_seq: Optional[int] = None, limit: int = 20,
+) -> dict:
+    """One page of runs (``GET /autoprojects/{id}/runs``): ``{"runs": [run
+    view, ...], "next_before_seq": int | None}``, newest first.
+
+    Run view::
+
+        {id, seq, conversation_id, prompt, status, summary, result, notes,
+         handoff_missing, error, model, started_at, finished_at,
+         questions: [question_view, ...],          # oldest first
+         open_requests: [transcript card row, ...]}
+    """
+    page = await autoproject_store.list_runs_page(
+        autoproject_id, before_seq=before_seq, limit=limit,
+    )
+    runs = page["runs"]
+    questions = await list_run_questions(runs)
+    open_requests = await list_open_requests(runs)
+    return {
+        "runs": [
+            _run_view(run, questions.get(run["id"], []), open_requests.get(run["id"], []))
+            for run in runs
+        ],
+        "next_before_seq": page["next_before_seq"],
+    }

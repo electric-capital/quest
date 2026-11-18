@@ -10,12 +10,14 @@ skill tools and documents everything it offers in full.
 import pytest
 
 from chat.gemini_api.system_prompt import (
+    AUTOPROJECT_RUN_EXCLUDED_TOOLS,
     _build_dynamic_tools_section,
     get_public_project_system_prompt,
     get_sub_agent_system_prompt,
     get_system_prompt,
 )
 from chat.llm.tool_schemas import (
+    AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
     CORE_TOOL_CALL_TOOLS,
     PROJECT_HIDDEN_WORKSPACE_TOOLS,
     PROJECT_ONLY_TOOL_CALL_TOOLS,
@@ -136,10 +138,19 @@ class TestSkillContent:
 
 
 class TestPrompts:
-    @pytest.mark.parametrize("has_project", [False, True])
-    def test_top_level_offers_every_tool_in_its_tier(self, has_project):
-        prompt = get_system_prompt("k", connected_services=None, has_project=has_project)
-        hidden = PROJECT_HIDDEN_WORKSPACE_TOOLS if has_project else PROJECT_ONLY_TOOL_CALL_TOOLS
+    @pytest.mark.parametrize("space", ["standalone", "project", "autoproject_run"])
+    def test_top_level_offers_every_tool_in_its_tier(self, space):
+        prompt = get_system_prompt(
+            "k", connected_services=None, has_project=space == "project",
+            autoproject_context="## AutoProject\n\nctx" if space == "autoproject_run" else "",
+        )
+        hidden = {
+            # The AutoProject run reads exist only inside an AutoProject run.
+            "standalone": PROJECT_ONLY_TOOL_CALL_TOOLS | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
+            "project": PROJECT_HIDDEN_WORKSPACE_TOOLS | AUTOPROJECT_ONLY_TOOL_CALL_TOOLS,
+            # A run's name is never shown: the AutoProject title stands in.
+            "autoproject_run": AUTOPROJECT_RUN_EXCLUDED_TOOLS | {"set_conversation_name"},
+        }[space]
         for name, spec in TOOL_CALL_REGISTRY.items():
             if name in hidden:
                 assert not tool_offered(prompt, name), name

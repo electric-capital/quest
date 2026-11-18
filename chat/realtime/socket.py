@@ -132,6 +132,32 @@ def get_active_send_run(conversation_id: str) -> Optional[asyncio.Task]:
     return None
 
 
+def cancel_conversation_runs(conversation_id: str) -> list[asyncio.Task]:
+    """Cancel every in-flight model run of a conversation: the WS send run
+    and the headless wait-handle resume (the continuation after an
+    approval, a connect card or an AutoProject question).
+
+    Returns the asyncio tasks it cancelled, so a caller about to delete the
+    conversation can await them (a cancelled turn still flushes its
+    transcript on the way out). Wait handles are not touched: the caller
+    cancels those. Used by the WS ``stop`` op and the AutoProject deletes.
+    """
+    cancelled: list[asyncio.Task] = []
+    task = _active_send_runs.get(conversation_id)
+    if task is not None and not task.done():
+        task.cancel()
+        cancelled.append(task)
+    try:
+        from chat.wait_handles import resume as wait_resume
+        resume_task = wait_resume.get_active_resume(conversation_id)
+    except Exception:
+        resume_task = None
+    if resume_task is not None:
+        resume_task.cancel()
+        cancelled.append(resume_task)
+    return cancelled
+
+
 def is_run_active(conversation_id: str) -> bool:
     """True while a model run is streaming on this conversation.
 
@@ -613,6 +639,10 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
 
     project_id = meta.get("project_id")
     routine_id = meta.get("routine_id")
+    # An AutoProject run conversation: its single message starts the run
+    # through the AutoProject service below, and the prompt is stored verbatim
+    # (no ``%%flags`` parsing; AutoProject runs get no conversation flags).
+    autoproject_id = meta.get("autoproject_id")
 
     # First-message flag parsing. A brand-new conversation has
     # last_message_seq == 0 (the user message has not been appended yet), which
@@ -629,7 +659,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # without a magic line these two are identical.
     original_message = user_message
     model_message = user_message
-    if is_first_message:
+    if is_first_message and not autoproject_id:
         from chat.conversation_flags import parse_flags_line
         recognized, stripped_message = parse_flags_line(user_message)
         if recognized or stripped_message != user_message:
@@ -687,7 +717,10 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # Reject attachments-during-resume: a pasted-image send into a
     # conversation with a dangling tool_use would need to be folded into
     # the synthesized tool_results, which is delicate and out of scope.
-    if attachments:
+    # An AutoProject run takes one message only, so neither this check nor the
+    # expensive-resume gate below applies to it: a second message must be
+    # refused as ``autoproject_run_single_message`` by ``start_run``.
+    if attachments and not autoproject_id:
         try:
             from chat.gemini_api.history import _load_sdk_history
             from chat.llm.config import get_provider_for_model, get_provider_instance
@@ -732,6 +765,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # internal failure, so this gate can never block a healthy send.
     if (
         not is_first_message
+        and not autoproject_id
         and data.get("expensive_resume_acknowledged") is not True
     ):
         from chat.expensive_resume import check_expensive_resume
@@ -749,8 +783,10 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
     # message only; on a later message they are ignored (the setter is idempotent
     # and would no-op anyway, but ignoring early avoids confusion). Both paths are
     # rarely used together, but a defensive union keeps either one working.
+    # An AutoProject run takes no flags from either path (``parsed_flags`` is empty
+    # for one, since the magic line is not parsed).
     merged_flags: list[str] = list(parsed_flags)
-    if is_first_message:
+    if is_first_message and not autoproject_id:
         seen_merged = set(merged_flags)
         for name in oob_flags:
             if name not in seen_merged:
@@ -781,6 +817,53 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             # Non-fatal: fall through and run with the in-memory merged_flags so
             # the turn still honors the requested behavior.
 
+    # AutoProject run: the AutoProject service allocates the run row (the feature
+    # gate, one message per run conversation, one active run per AutoProject, the
+    # archive flag and the model rule) BEFORE the append, so a refused send
+    # leaves nothing in the transcript. Every early return between here and
+    # the run's asyncio task creation fails the allocated run (``_fail_autoproject_run``).
+    autoproject_run: Optional[dict] = None
+    if autoproject_id:
+        from chat.autoprojects import service as autoproject_service
+        from db.autoproject_store import AutoProjectStoreError
+        try:
+            started = await autoproject_service.start_run(
+                conn.user, meta,
+                prompt=user_message,
+                model=selected_model,
+                thinking_effort=thinking_effort,
+            )
+        except AutoProjectStoreError as exc:
+            rejection: dict[str, Any] = {
+                "type": "send_message_rejected",
+                "conversation_id": conv_id,
+                "reason": exc.code,
+                "message": exc.message,
+            }
+            if "active_run" in exc.details:
+                rejection["active_run"] = exc.details["active_run"]
+            await _send_to_client(conn, rejection)
+            return
+        except Exception:
+            logger.exception(
+                "[realtime] AutoProject run start failed (conversation=%s, autoproject=%s)",
+                conv_id, autoproject_id,
+            )
+            await _send_to_client(conn, {
+                "type": "send_message_rejected",
+                "conversation_id": conv_id,
+                "reason": "autoproject_run_start_failed",
+            })
+            return
+        autoproject_run = started.run
+        selected_model = started.model
+        thinking_effort = started.thinking_effort
+
+    async def _fail_autoproject_run(error: str) -> None:
+        if autoproject_run is not None:
+            from chat.autoprojects.service import fail_unstarted_run
+            await fail_unstarted_run(autoproject_run["id"], error)
+
     # Persist the user message before kicking the run so the new bubble
     # is visible to all subscribers via ``message_appended``.
     user_timestamp = utc_timestamp()
@@ -800,6 +883,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             "[realtime] append user message failed (conversation=%s)",
             conv_id,
         )
+        await _fail_autoproject_run("the message could not be saved")
         await _send_to_client(conn, {
             "type": "error",
             "code": CLOSE_INTERNAL,
@@ -842,12 +926,14 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             "[realtime] fresh user re-load failed (user_id=%s)",
             conn.user_id, exc_info=True,
         )
+        await _fail_autoproject_run("the user could not be loaded")
         await _close_auth_revoked(conn)
         return
     else:
         if fresh_user is None:
             # User row is gone (deleted). Reject the send rather than
             # silently running with a stale dict.
+            await _fail_autoproject_run("the user no longer exists")
             await _send_to_client(conn, {
                 "type": "send_message_rejected",
                 "conversation_id": conv_id,
@@ -859,6 +945,7 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
         conn.user = fresh_user
 
     if not check_user_allowed(fresh_user.get("email", "")):
+        await _fail_autoproject_run("the user is no longer allowed to sign in")
         await _close_auth_revoked(conn)
         return
 
@@ -879,8 +966,9 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             attachments=attachments or None,
             # Effective flags for this run: existing row flags win (set on a
             # prior first message), else the flags just merged off this message
-            # (magic ``%%flags`` line + out-of-band composer selection).
-            flags=(meta.get("flags") or merged_flags) or None,
+            # (magic ``%%flags`` line + out-of-band composer selection). An
+            # AutoProject run has none.
+            flags=None if autoproject_id else ((meta.get("flags") or merged_flags) or None),
             attached_filenames=attached_filenames or None,
             # The first message of a routine conversation is the routine
             # prompt auto-sent by the one-click run (ChatPanel's
@@ -889,6 +977,8 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
             # routine_completed. Later messages are the user's own
             # follow-ups and run as ordinary turns.
             routine_run=bool(routine_id) and is_first_message,
+            autoproject_id=autoproject_id,
+            autoproject_run=autoproject_run,
         )
     )
     _active_send_runs[conv_id] = task
@@ -904,7 +994,8 @@ async def _handle_send_message(conn: _Connection, data: dict) -> None:
 
 async def _handle_stop(conn: _Connection, data: dict) -> None:
     """Cancel an in-flight run for the conversation if any, plus pending
-    wait handles. Mirrors the per-turn ``stop`` semantics verbatim.
+    wait handles. Mirrors the per-turn ``stop`` semantics verbatim. An
+    AutoProject run is also marked ``stopped`` (``chat.autoprojects.runs.stop_autoproject_run``).
     """
     conv_id = data.get("conversation_id")
     if not isinstance(conv_id, str) or not conv_id:
@@ -916,24 +1007,28 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
         })
         return
 
-    # Cancel the task only if this user owns it. Cross-user cancellation
-    # is impossible because the lock is keyed by conversation_id and the
-    # ownership check on subscribe / send already gates user access.
-    task = _active_send_runs.get(conv_id)
-    if task is not None and not task.done():
-        task.cancel()
-
-    # A headless wait-handle resume (the continuation after an
+    # Cancel the run only if this user owns the conversation: the run
+    # registries are keyed by conversation_id alone, so without this check
+    # any user could cancel any conversation's turn. A conversation that is
+    # not theirs (or missing) is ignored silently, as subscribe would
+    # refuse it. A headless wait-handle resume (the continuation after an
     # action-request Approve / Revise / Deny) is a stoppable run too: the
-    # FE shows the same stop button while it streams, so stop must cancel
-    # it the same way it cancels a send run.
+    # FE shows the same stop button while it streams, so stop cancels it
+    # the same way it cancels a send run.
+    from db.conversation_store import get_conversation_meta
     try:
-        from chat.wait_handles import resume as wait_resume
-        resume_task = wait_resume.get_active_resume(conv_id)
+        meta = await get_conversation_meta(conn.user_id, conv_id)
     except Exception:
-        resume_task = None
-    if resume_task is not None:
-        resume_task.cancel()
+        logger.exception(
+            "[realtime] conversation_meta lookup for stop failed (conversation=%s)",
+            conv_id,
+        )
+        meta = None
+    if meta is None:
+        logger.warning("[realtime] stop ignored: the conversation is not the user's")
+        return
+
+    cancel_conversation_runs(conv_id)
 
     try:
         await cancel_pending_wait_handles_for_conversation(
@@ -944,6 +1039,15 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
             "[realtime] cancel_pending_wait_handles failed "
             "(conversation=%s, user_id=%s)", conv_id, conn.user_id,
         )
+
+    # An AutoProject run ends as ``stopped``, also when it is ``waiting``
+    # with no live turn to cancel. No-op for any other conversation (one
+    # indexed lookup); idempotent with the cancelled driver's own write.
+    try:
+        from chat.autoprojects.runs import stop_autoproject_run
+        await stop_autoproject_run(conn.user_id, conv_id)
+    except Exception:
+        logger.exception("[realtime] stop_autoproject_run failed")
 
     await _send_to_client(conn, {
         "type": "stop_acknowledged",
@@ -967,6 +1071,8 @@ async def _run_send_message(
     attached_filenames: Optional[list[str]] = None,
     routine_run: bool = False,
     thinking_effort: Optional[str] = None,
+    autoproject_id: Optional[str] = None,
+    autoproject_run: Optional[dict] = None,
 ) -> None:
     """Background task that drives ``run_conversation_turn`` for a persistent-WS
     send. Kept symmetrical with ``_handle_api_mode`` so the regression
@@ -981,6 +1087,15 @@ async def _run_send_message(
     ``routine_completed`` call gets one follow-up turn, exactly like a
     scheduled run. ``send_message_finished`` is published only after the
     whole run, so the composer stays locked across the nudge turn.
+
+    ``autoproject_id`` / ``autoproject_run`` mark an AutoProject run (its single message,
+    the run row already allocated by ``chat.autoprojects.service.start_run``):
+    the turn is driven through ``chat.autoprojects.runs.drive_autoproject_run``, which
+    sets the run's status (completed, waiting, failed, stopped), nudging
+    once when the run ends without ``complete_autoproject_run``; it re-raises a
+    cancellation or a failure after recording it, so the handlers below
+    run unchanged. ``run_conversation_turn`` resolves the run row from
+    ``autoproject_id``.
     """
     user_id = user["id"]
     shared_messages: list[dict] = []
@@ -1032,6 +1147,7 @@ async def _run_send_message(
             flags=flags,
             attached_filenames=attached_filenames if first_turn else None,
             thinking_effort=thinking_effort,
+            autoproject_id=autoproject_id,
         )
 
     try:
@@ -1043,6 +1159,17 @@ async def _run_send_message(
                 messages_out=shared_messages,
                 on_event=on_event,
                 conversation_id=conversation_id,
+                log_prefix="[realtime]",
+            )
+        elif autoproject_run is not None:
+            # Imported here: chat.autoprojects.events imports this package.
+            from chat.autoprojects.runs import drive_autoproject_run
+            await drive_autoproject_run(
+                run_turn,
+                run=autoproject_run,
+                prompt=user_message,
+                messages_out=shared_messages,
+                on_event=on_event,
                 log_prefix="[realtime]",
             )
         else:

@@ -1,16 +1,19 @@
 /**
  * API client for workspace file management.
  *
- * Two file spaces share one route set (chat/file_routes.py): a
+ * Three file spaces share one route set (chat/file_routes.py): a
  * conversation's workspace (`/conversations/{cid}/files...`, the "Chat
- * Files" card, and every inline-image / attachment path in chat) and a
+ * Files" card, and every inline-image / attachment path in chat), a
  * project's shared workspace (`/projects/{pid}/files...`, the "Project
- * Files" card). Every function takes a `FileTarget`: a `FileSource`, or a
- * bare string meaning a conversation id -- the historical signature the
- * many conversation-space callers (Composer, HomeComposer, MarkdownImage,
- * previews) keep using. The `*Project*` twins are thin wrappers over a
- * project source. `copyFileToProject` / `copyFileFromProject` move entries
- * between the two spaces of a project conversation.
+ * Files" card) and an AutoProject's workspace, shared by every run of the
+ * AutoProject (`/autoprojects/{id}/files...`, the "AutoProject files" card). Every function
+ * takes a `FileTarget`: a `FileSource`, or a bare string meaning a
+ * conversation id -- the historical signature the many conversation-space
+ * callers (Composer, HomeComposer, MarkdownImage, previews) keep using. The
+ * `*Project*` twins are thin wrappers over a project source.
+ * `copyFileToProject` / `copyFileFromProject` move entries between the two
+ * spaces of a project conversation, `copyFileToAutoProject` / `copyFileFromAutoProject`
+ * between an AutoProject run's workspace and its AutoProject's.
  */
 
 import { API_BASE_URL } from './config';
@@ -137,17 +140,25 @@ function xhrUpload(
 }
 
 /**
- * Which file space a call addresses: a conversation's own workspace or a
- * project's shared workspace.
+ * Which file space a call addresses: a conversation's own workspace, a
+ * project's shared workspace, or an AutoProject's workspace (shared by its runs).
  */
 export type FileSource =
   | { kind: 'conversation'; id: string }
-  | { kind: 'project'; id: string };
+  | { kind: 'project'; id: string }
+  | { kind: 'autoproject'; id: string };
+
+/**
+ * A space a conversation workspace copies to and from (the copy routes): a
+ * project conversation's project, or an AutoProject run's AutoProject.
+ */
+export type SharedFileSource = Exclude<FileSource, { kind: 'conversation' }>;
 
 /**
  * A `FileSource`, or a bare conversation id. The bare-string form exists
  * only so the legacy conversation-space callers keep working unchanged; new
- * code should pass a `FileSource` (`conversationSource()` / `projectSource()`).
+ * code should pass a `FileSource` (`conversationSource()` / `projectSource()` /
+ * `autoprojectSource()`).
  */
 export type FileTarget = FileSource | string;
 
@@ -155,18 +166,32 @@ export function conversationSource(conversationId: string): FileSource {
   return { kind: 'conversation', id: conversationId };
 }
 
-export function projectSource(projectId: string): FileSource {
+export function projectSource(projectId: string): SharedFileSource {
   return { kind: 'project', id: projectId };
+}
+
+export function autoprojectSource(autoprojectId: string): SharedFileSource {
+  return { kind: 'autoproject', id: autoprojectId };
 }
 
 function toSource(target: FileTarget): FileSource {
   return typeof target === 'string' ? conversationSource(target) : target;
 }
 
-/** Stable per-space key (`conversation:<id>` / `project:<id>`) for UI state maps. */
+/**
+ * Stable per-space key (`conversation:<id>` / `project:<id>` /
+ * `autoproject:<id>`) for UI state maps.
+ */
 export function fileSourceKey(source: FileSource): string {
   return `${source.kind}:${source.id}`;
 }
+
+/** URL segment of each space's file routes. */
+const ROUTE_SEGMENT: Record<FileSource['kind'], string> = {
+  conversation: 'conversations',
+  project: 'projects',
+  autoproject: 'autoprojects',
+};
 
 /**
  * Root-relative base path of a space's file routes, e.g.
@@ -174,7 +199,7 @@ export function fileSourceKey(source: FileSource): string {
  */
 export function fileRoutesBase(target: FileTarget): string {
   const source = toSource(target);
-  const segment = source.kind === 'project' ? 'projects' : 'conversations';
+  const segment = ROUTE_SEGMENT[source.kind];
   return `${API_BASE_URL}/${segment}/${encodeURIComponent(source.id)}/files`;
 }
 
@@ -496,8 +521,10 @@ export function saveProjectFileToDrive(
 }
 
 // ---------------------------------------------------------------------------
-// Copy / move between a project conversation's workspace and its project's
-// workspace (POST /conversations/{cid}/files/copy-to-project|copy-from-project).
+// Copy / move between a conversation's workspace and the shared space it
+// belongs to: a project conversation and its project
+// (POST /conversations/{cid}/files/copy-to-project|copy-from-project), an
+// AutoProject run and its AutoProject (.../copy-to-autoproject|copy-from-autoproject).
 // ---------------------------------------------------------------------------
 
 export interface CopyEntryOptions {
@@ -521,9 +548,11 @@ export function isDestinationExistsError(err: unknown): err is FileApiError {
   return err instanceof FileApiError && err.statusCode === 409 && err.errorCode === DESTINATION_EXISTS;
 }
 
+type CopyDirection = 'copy-to-project' | 'copy-from-project' | 'copy-to-autoproject' | 'copy-from-autoproject';
+
 async function copyBetweenSpaces(
   conversationId: string,
-  direction: 'copy-to-project' | 'copy-from-project',
+  direction: CopyDirection,
   options: CopyEntryOptions,
 ): Promise<CopyEntryResponse> {
   const body: Record<string, unknown> = { path: options.path };
@@ -554,4 +583,21 @@ export function copyFileToProject(conversationId: string, options: CopyEntryOpti
 /** The reverse of `copyFileToProject`: project workspace -> conversation workspace. */
 export function copyFileFromProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
   return copyBetweenSpaces(conversationId, 'copy-from-project', options);
+}
+
+/**
+ * Copy (or move) an entry from an AutoProject run's conversation workspace into its
+ * AutoProject's workspace; the same contract as `copyFileToProject`, plus 400
+ * `not_an_autoproject_run_conversation` and the AutoProject gate (403 `autoprojects_disabled`).
+ */
+export function copyFileToAutoProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
+  return copyBetweenSpaces(conversationId, 'copy-to-autoproject', options);
+}
+
+/**
+ * The reverse of `copyFileToAutoProject`: AutoProject workspace -> the run's
+ * conversation workspace.
+ */
+export function copyFileFromAutoProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
+  return copyBetweenSpaces(conversationId, 'copy-from-autoproject', options);
 }

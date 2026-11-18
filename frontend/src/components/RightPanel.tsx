@@ -32,7 +32,9 @@
  * user drags it, derives its shares from the two-card key so an existing
  * Tables height carries over. The two file cards without Tables use
  * ``quest_project_files_split_<pid>`` (Chat Files' percentage), derived
- * from the three-card shares until dragged.
+ * from the three-card shares until dragged. (An AutoProject run's files live on
+ * the AutoProject page instead: its Chat Files in the run panel, the AutoProject's files
+ * in the page's main column.)
  */
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -267,7 +269,7 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
   );
 
   // Copy / Move between the two file cards: actions only in a project conversation.
-  const copy = useWorkspaceCopy(conversationId, conversationId ? projectId : null);
+  const copy = useWorkspaceCopy(conversationId, conversationId ? projectFilesSource : null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
@@ -442,7 +444,7 @@ export function RightPanel({ conversationId, projectId: urlProjectId }: RightPan
       node: (
         <FileBrowser
           source={projectFilesSource}
-          rowActions={copy.projectRowActions}
+          rowActions={copy.sharedRowActions}
           notice={copy.notices.project}
           onDismissNotice={() => copy.dismissNotice('project')}
         />

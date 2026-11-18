@@ -11,6 +11,7 @@ from pydantic import BaseModel, field_validator
 from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.action_request_types import get_handler, get_preview_for_request
 from chat.realtime import bus, events as realtime_events
+from chat.realtime.bus import publish_request_count_changed
 from chat.storage import ChatStorage
 from chat.wait_handles import resume as wait_resume
 from db import conversation_store, tool_wait_handle_store
@@ -245,22 +246,6 @@ async def _resolve_linked_wait_handle(
         logger.warning(
             "[action_request] Failed to resolve wait handle for action "
             "request %d", request_id, exc_info=True,
-        )
-
-
-async def _publish_request_count_changed(user_id: int) -> None:
-    """Best-effort: refresh the per-status counts and publish to the user's
-    persistent-WS channel so badges update without a 30s poll."""
-    try:
-        counts = await count_action_requests_by_status(user_id)
-        bus.publish_to_user(
-            user_id,
-            realtime_events.make_request_count_changed(counts),
-        )
-    except Exception:
-        logger.debug(
-            "[action_request] publish request_count_changed failed "
-            "(user_id=%s)", user_id, exc_info=True,
         )
 
 
@@ -523,7 +508,12 @@ async def _resolve_locked(
         await _stop_sibling_action_requests(
             request, user, req["conversation_id"], request_id,
         )
-        await _publish_request_count_changed(user_id)
+        # An AutoProject run has no "next message" to wait for (one message
+        # per run), so Stop on its card ends the run as ``stopped``. No-op
+        # for any other conversation; never raises.
+        from chat.autoprojects.runs import stop_autoproject_run
+        await stop_autoproject_run(user_id, req["conversation_id"])
+        await publish_request_count_changed(user_id)
         return await _enrich_with_preview(updated, user)
 
     if action == "deny":
@@ -612,7 +602,7 @@ async def _resolve_locked(
                 "for denied request %d", request_id, exc_info=True,
             )
 
-        await _publish_request_count_changed(user_id)
+        await publish_request_count_changed(user_id)
         return await _enrich_with_preview(updated, user)
 
     handler = get_handler(req["request_type"])
@@ -702,5 +692,5 @@ async def _resolve_locked(
             "result": result,
         },
     )
-    await _publish_request_count_changed(user_id)
+    await publish_request_count_changed(user_id)
     return await _enrich_with_preview(updated, user)

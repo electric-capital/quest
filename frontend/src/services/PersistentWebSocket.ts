@@ -3,7 +3,7 @@
  *
  * One singleton socket per browser session. Carries:
  *  - per-user globals (request_count_changed, conversation_list_changed,
- *    wait_handle_resolved)
+ *    wait_handle_resolved, autoproject_list_changed, autoproject_changed, ...)
  *  - per-conversation events (Phase 2: message_appended; Phase 3:
  *    text_delta, tool_started, sub_agent_*)
  *
@@ -12,6 +12,13 @@
  * the unauth flow instead of looping. The per-conversation last_seq map is
  * persisted to sessionStorage so a tab reload reconnects with a usable
  * subscribe seq (Phase 2 wires this in).
+ *
+ * A reconnect re-subscribes every conversation, and the server answers each
+ * with an up_to_date / catchup / resync, so conversation views recover by
+ * themselves. Per-user globals have no such catch-up: whatever was published
+ * while no socket was open is lost. `onReconnect` handlers fire on every open
+ * that follows an earlier successful open (after the re-subscribes are sent),
+ * so views fed by globals (AutoProject, AutoProject list, file listing) re-fetch then.
  */
 import { endpoints } from '../api/config';
 
@@ -48,6 +55,7 @@ export type PersistentEvent = Record<string, unknown> & { type?: string };
 
 type GlobalHandler = (event: PersistentEvent) => void;
 type ConversationHandler = (event: PersistentEvent) => void;
+type ReconnectHandler = () => void;
 
 class PersistentWebSocketClient {
   private ws: WebSocket | null = null;
@@ -55,11 +63,17 @@ class PersistentWebSocketClient {
   private reconnectTimer: number | null = null;
   private isOpen = false;
   private isClosing = false;
+  // Set by the first successful open; every later open is a reconnect.
+  private hasOpened = false;
 
   private globalHandlers: Set<GlobalHandler> = new Set();
+  private reconnectHandlers: Set<ReconnectHandler> = new Set();
   private conversationHandlers: Map<string, Set<ConversationHandler>> = new Map();
 
-  private subscribed: Set<string> = new Set();
+  // Holders per subscribed conversation: every `subscribe` adds one, every
+  // `unsubscribe` takes one away, and the wire `unsubscribe` goes out only
+  // when the last holder leaves.
+  private subscribed: Map<string, number> = new Map();
   private lastSeqByConversation: Map<string, number> = new Map();
   private subscriptionRefreshTimers: Map<string, number> = new Map();
 
@@ -155,9 +169,14 @@ class PersistentWebSocketClient {
       this.startHeartbeat();
       // Re-subscribe to all known conversations with their last-known seq
       // so the server can decide between up_to_date / catchup / resync.
-      for (const conversationId of this.subscribed) {
+      for (const conversationId of this.subscribed.keys()) {
         this.sendSubscribe(conversationId);
       }
+      // Globals published while no socket was open are lost: tell the views
+      // that live on them to re-fetch.
+      const isReconnect = this.hasOpened;
+      this.hasOpened = true;
+      if (isReconnect) this.notifyReconnect();
     };
 
     ws.onmessage = (msg) => {
@@ -364,9 +383,24 @@ class PersistentWebSocketClient {
     });
   }
 
+  private notifyReconnect(): void {
+    this.reconnectHandlers.forEach((h) => {
+      try {
+        h();
+      } catch (err) {
+        console.error('[PersistentWS] reconnect handler error:', err);
+      }
+    });
+  }
+
   // ------------------------------------------------------------------
   // Public API
   // ------------------------------------------------------------------
+
+  /** The socket is open: a `send` now is written to it (not proof of delivery). */
+  get connected(): boolean {
+    return this.ws !== null && this.isOpen;
+  }
 
   send(payload: Record<string, unknown>): boolean {
     if (!this.ws || !this.isOpen) return false;
@@ -379,15 +413,42 @@ class PersistentWebSocketClient {
     }
   }
 
+  /**
+   * Take a hold on the conversation's channel. Every call sends `subscribe`
+   * (the server answers each with a fresh `subscribed` ack), and every call
+   * must be paired with one `unsubscribe` by a caller that ever lets go;
+   * a caller that holds the channel for good (useConversation) never calls
+   * `unsubscribe`.
+   */
   subscribe(conversationId: string): void {
-    this.subscribed.add(conversationId);
+    this.subscribed.set(conversationId, (this.subscribed.get(conversationId) ?? 0) + 1);
     if (this.isOpen) {
       this.sendSubscribe(conversationId);
     }
     this.ensureRefreshTimer(conversationId);
   }
 
+  /**
+   * Send `subscribe` again for a held conversation without taking another
+   * hold (e.g. after a `subscription_expired`). No-op when nobody holds it.
+   */
+  resubscribe(conversationId: string): void {
+    if (!this.subscribed.has(conversationId)) return;
+    this.sendSubscribe(conversationId);
+  }
+
+  /**
+   * Release one hold taken by `subscribe`. The wire `unsubscribe` is sent
+   * only when the last holder leaves, so another caller's subscription of
+   * the same conversation survives. No-op for a conversation nobody holds.
+   */
   unsubscribe(conversationId: string): void {
+    const holders = this.subscribed.get(conversationId);
+    if (holders === undefined) return;
+    if (holders > 1) {
+      this.subscribed.set(conversationId, holders - 1);
+      return;
+    }
     this.subscribed.delete(conversationId);
     this.clearRefreshTimer(conversationId);
     if (this.isOpen) {
@@ -442,6 +503,19 @@ class PersistentWebSocketClient {
     this.globalHandlers.add(handler);
     return () => {
       this.globalHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Called on every open that follows an earlier successful open, after the
+   * conversation re-subscribes are sent. Per-user globals missed while the
+   * socket was down are not replayed, so a view fed by them re-fetches here.
+   * Returns the unsubscribe function.
+   */
+  onReconnect(handler: ReconnectHandler): () => void {
+    this.reconnectHandlers.add(handler);
+    return () => {
+      this.reconnectHandlers.delete(handler);
     };
   }
 

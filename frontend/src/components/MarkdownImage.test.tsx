@@ -1,11 +1,13 @@
 // The shared markdown `img` renderer (MarkdownImage via markdownComponents):
 // Quest Doc asset resolution through MarkdownWorkspaceContext.assetBase, and
-// the unchanged conversation-workspace behaviour without it.
+// the unchanged conversation-workspace behaviour without it; links and the
+// chat:// / proj:// / autoproject:// space references at the end.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
 import ReactMarkdown from 'react-markdown';
 import { API_BASE_URL } from '../api/config';
+import { RichMarkdown } from './RichMarkdown';
 import {
   MarkdownWorkspaceContext,
   markdownComponents,
@@ -188,12 +190,97 @@ describe('MarkdownLink', () => {
 
     const plain = fireEvent.click(note);
     expect(plain).toBe(false); // default prevented: no new tab
-    expect(onOpenFile).toHaveBeenCalledWith('sub/note.txt', 'note.txt');
+    expect(onOpenFile).toHaveBeenCalledWith('sub/note.txt', 'note.txt', { kind: 'conversation', id: 'c1' });
 
     onOpenFile.mockClear();
     expect(fireEvent.click(note, { ctrlKey: true })).toBe(true);
     expect(fireEvent.click(note, { metaKey: true })).toBe(true);
     expect(fireEvent.click(screen.getByRole('link', { name: 'ext' }))).toBe(true);
     expect(onOpenFile).not.toHaveBeenCalled();
+  });
+});
+
+// Space references through the full renderer (RichMarkdown keeps them past
+// react-markdown's URL sanitiser): each scheme resolves against its own id
+// in MarkdownWorkspaceContext, and one whose id the context lacks stays
+// unresolved (link left as written, image shown as a missing ref).
+describe('workspace references', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderRich(markdown: string, ctx: MarkdownWorkspaceContextValue) {
+    return render(
+      <MarkdownWorkspaceContext.Provider value={ctx}>
+        <RichMarkdown components={markdownComponents}>{markdown}</RichMarkdown>
+      </MarkdownWorkspaceContext.Provider>,
+    );
+  }
+
+  const download = (segment: string, id: string, path: string) =>
+    `${API_BASE_URL}/${segment}/${id}/files/download?path=${encodeURIComponent(path)}`;
+
+  it('resolves each scheme against its own space in a run of an AutoProject', () => {
+    renderRich(
+      '[a](autoproject://reports/q3%20final.md) [c](chat://out.csv) [b](notes.md) [p](proj://x.md)',
+      { conversationId: 'c1', autoprojectId: 'ap1' },
+    );
+    const href = (name: string) => screen.getByRole('link', { name }).getAttribute('href');
+    expect(href('a')).toBe(download('autoprojects', 'ap1', 'reports/q3 final.md'));
+    expect(href('c')).toBe(download('conversations', 'c1', 'out.csv'));
+    // A bare path is the conversation's.
+    expect(href('b')).toBe(download('conversations', 'c1', 'notes.md'));
+    // No project in an AutoProject run: proj:// stays as written.
+    expect(href('p')).toBe('proj://x.md');
+  });
+
+  it('resolves a bare path against the AutoProject when it is the only space', () => {
+    renderRich('[n](sub/n.md)', { autoprojectId: 'ap1' });
+    expect(screen.getByRole('link', { name: 'n' }).getAttribute('href')).toBe(
+      download('autoprojects', 'ap1', 'sub/n.md'),
+    );
+  });
+
+  it('leaves autoproject:// unresolved outside an AutoProject and never opens it', () => {
+    const onOpenFile = vi.fn();
+    const { container } = renderRich(
+      '[a](autoproject://notes.md) ![img](autoproject://chart.png)',
+      { conversationId: 'c1', onOpenFile },
+    );
+    const link = screen.getByRole('link', { name: 'a' });
+    expect(link.getAttribute('href')).toBe('autoproject://notes.md');
+    fireEvent.click(link);
+    expect(onOpenFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole('img')).toBeNull();
+    expect(container.querySelector('code.markdown-image-missing')?.getAttribute('title')).toBe(
+      'autoproject://chart.png',
+    );
+  });
+
+  it('opens an autoproject:// link and image in the AutoProject space', () => {
+    const onOpenFile = vi.fn();
+    renderRich('[a](autoproject://d/notes.md) ![chart](autoproject://chart.png)', {
+      conversationId: 'c1',
+      autoprojectId: 'ap1',
+      onOpenFile,
+    });
+    fireEvent.click(screen.getByRole('link', { name: 'a' }));
+    expect(onOpenFile).toHaveBeenCalledWith('d/notes.md', 'notes.md', { kind: 'autoproject', id: 'ap1' });
+    expect(screen.getByRole('img', { name: 'chart' }).getAttribute('src')).toBe(
+      download('autoprojects', 'ap1', 'chart.png'),
+    );
+    fireEvent.click(screen.getByTitle('Open chart.png'));
+    expect(onOpenFile).toHaveBeenLastCalledWith('chart.png', 'chart.png', { kind: 'autoproject', id: 'ap1' });
+  });
+
+  it('shows a space reference as a missing ref inside a doc', () => {
+    const { container } = renderRich('![x](autoproject://a.png)', { ...DOC_CTX, autoprojectId: 'ap1' });
+    expect(screen.queryByRole('img')).toBeNull();
+    expect(container.querySelector('code.markdown-image-missing')).not.toBeNull();
+  });
+
+  it('still blanks unsafe protocols', () => {
+    renderRich('[x](javascript:alert(1))', { conversationId: 'c1' });
+    expect(screen.getByText('x').closest('a')?.getAttribute('href') ?? '').not.toContain('javascript');
   });
 });

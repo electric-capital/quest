@@ -1,0 +1,163 @@
+/**
+ * The AutoProject page's composer state machine, as a pure function
+ * of what the AutoProject page knows, so AutoProjectMainColumn only renders its answer:
+ *
+ * - `archived`: the AutoProject is archived; no composer (the page shows the
+ *   "This AutoProject is archived." notice with Unarchive instead).
+ * - `start`: no active run; Send starts the next run. While a start is in
+ *   flight (`starting`: the optimistic entry is on screen until its run
+ *   shows up in the runs list) the input is `busy`: locked, and no Stop,
+ *   since the run conversation is not known yet.
+ * - `answer`: the active run is `waiting` with a pending question; Send
+ *   answers the OLDEST pending question ("Answering the question" as the
+ *   label, ANSWER_PLACEHOLDER in the input). `busy` while the answer is in
+ *   flight.
+ * - `locked`: the active run is `running`, or `waiting` only on approval /
+ *   connect cards: the input is `disabled` and Stop is offered on the run's
+ *   conversation ("Working..." / "Waiting for your approval").
+ *
+ * User-visible wording says "update" for a run, and mostly drops the noun
+ * (the page shows one active update at a time); `appName` is the deployment's
+ * configured name (useAppConfig), as in the home composer's footer.
+ *
+ * The active run comes from the loaded runs (the newest one that is
+ * `running` or `waiting`). The AutoProject detail's `active_run` (seq and status
+ * only) is the fallback while that run is not loaded yet, unless the loaded
+ * runs already show that run finished (the runs list is then newer than the
+ * detail). A fallback run has no conversation id, so it locks without Stop.
+ */
+
+import type { AutoProjectActiveRun, AutoProjectQuestion, AutoProjectRun } from '../../api/types';
+
+export type AutoProjectComposerMode = 'archived' | 'start' | 'answer' | 'locked';
+
+export interface AutoProjectComposerStateInput {
+  archived: boolean;
+  /** The loaded runs, ascending seq. */
+  runs: AutoProjectRun[];
+  /** The AutoProject detail's active run (fallback while the run is not loaded). */
+  autoprojectActiveRun: AutoProjectActiveRun | null;
+  /** A start is in flight (or its run is not in the runs list yet). */
+  starting: boolean;
+  /** An answer to the pending question is in flight. */
+  answering: boolean;
+  /** The app's configured name, for the start placeholder ("What should Quest do next?"). */
+  appName: string;
+}
+
+export interface AutoProjectComposerState {
+  mode: AutoProjectComposerMode;
+  /** Locks the input without Stop (a submit in flight, or a run not loaded yet). */
+  busy: boolean;
+  /** Locks the input with Stop on `stopConversationId`. */
+  disabled: boolean;
+  /** The run conversation Stop acts on, when Stop is offered. */
+  stopConversationId: string | null;
+  placeholder: string;
+  /** Short label above the composer ("Answering the question"), or null. */
+  label: string | null;
+  /** The pending question an answer goes to (mode `answer`). */
+  question: AutoProjectQuestion | null;
+  /** The active run, when it is loaded. */
+  activeRun: AutoProjectRun | null;
+}
+
+/** The composer's placeholder while it starts the next update. */
+export function startPlaceholder(appName: string): string {
+  return `What should ${appName} do next?`;
+}
+export const ANSWER_PLACEHOLDER = 'Type your answer';
+
+export function isActiveRunStatus(status: AutoProjectRun['status']): boolean {
+  return status === 'running' || status === 'waiting';
+}
+
+/** The newest loaded run that is running or waiting, else null. */
+export function findActiveRun(runs: AutoProjectRun[]): AutoProjectRun | null {
+  for (let i = runs.length - 1; i >= 0; i -= 1) {
+    if (isActiveRunStatus(runs[i].status)) return runs[i];
+  }
+  return null;
+}
+
+/** The oldest pending question of a run, else null. */
+export function oldestPendingQuestion(run: AutoProjectRun): AutoProjectQuestion | null {
+  return run.questions.find((q) => q.status === 'pending') ?? null;
+}
+
+/**
+ * What a `waiting` run with no pending question waits on, from its open
+ * cards: an approval card wins over a connect card; with neither loaded
+ * (e.g. the card row is not on the page yet) the wording stays generic.
+ */
+export function waitingOnPhrase(run: AutoProjectRun): string {
+  if (run.open_requests.some((card) => card.type === 'action_request')) return 'your approval';
+  if (run.open_requests.some((card) => card.type === 'connect_request')) return 'you to connect a service';
+  return 'you';
+}
+
+export function deriveAutoProjectComposerState(input: AutoProjectComposerStateInput): AutoProjectComposerState {
+  const base: AutoProjectComposerState = {
+    mode: 'start',
+    busy: false,
+    disabled: false,
+    stopConversationId: null,
+    placeholder: startPlaceholder(input.appName),
+    label: null,
+    question: null,
+    activeRun: null,
+  };
+
+  if (input.archived) {
+    return { ...base, mode: 'archived', busy: true, placeholder: 'This AutoProject is archived.' };
+  }
+
+  const activeRun = findActiveRun(input.runs);
+  if (activeRun) {
+    const question = activeRun.status === 'waiting' ? oldestPendingQuestion(activeRun) : null;
+    if (question) {
+      const pending = activeRun.questions.filter((q) => q.status === 'pending').length;
+      const label = pending > 1 ? 'Answering the oldest question' : 'Answering the question';
+      return {
+        ...base,
+        mode: 'answer',
+        busy: input.answering,
+        placeholder: ANSWER_PLACEHOLDER,
+        label,
+        question,
+        activeRun,
+      };
+    }
+    return {
+      ...base,
+      mode: 'locked',
+      disabled: true,
+      stopConversationId: activeRun.conversation_id,
+      placeholder:
+        activeRun.status === 'waiting'
+          ? `Waiting for ${waitingOnPhrase(activeRun)}`
+          : 'Working...',
+      activeRun,
+    };
+  }
+
+  // The detail says a run is active, and the loaded runs do not show it
+  // finished: it is not loaded yet.
+  const fallback = input.autoprojectActiveRun;
+  if (fallback && !input.runs.some((run) => run.id === fallback.id)) {
+    return {
+      ...base,
+      mode: 'locked',
+      busy: true,
+      placeholder:
+        fallback.status === 'waiting'
+          ? 'Waiting for you'
+          : 'Working...',
+    };
+  }
+
+  if (input.starting) {
+    return { ...base, busy: true, placeholder: 'Starting...' };
+  }
+  return base;
+}

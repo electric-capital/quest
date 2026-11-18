@@ -71,13 +71,14 @@ def make_conversation_unread_changed(
     }
 
 
-FILE_LIST_SCOPES = frozenset({"conversation", "project"})
+FILE_LIST_SCOPES = frozenset({"conversation", "project", "autoproject"})
 
 
 def make_file_list_changed(
     conversation_id: Optional[str],
     project_id: Optional[str],
     scope: str,
+    autoproject_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Envelope for ``file_list_changed``.
 
@@ -94,21 +95,32 @@ def make_file_list_changed(
       ``project_id`` is still carried);
     * ``"project"`` -- the shared workspace of ``project_id``;
       ``conversation_id`` is the triggering conversation, or None for a
-      write through the project file routes.
+      write through the project file routes;
+    * ``"autoproject"`` -- the shared workspace of the AutoProject ``autoproject_id``
+      (required for this scope); ``conversation_id`` is the triggering
+      AutoProject run, or None for a write through the AutoProject file routes.
 
-    The FE filter keys off ``scope`` plus the matching id.
+    The payload carries an ``autoproject_id`` key only when ``autoproject_id`` is given,
+    so conversation and project payloads keep their shape. The FE filter
+    keys off ``scope`` plus the matching id (``autoproject_id`` for scope AutoProject).
 
     Raises:
-        ValueError: ``scope`` is not one of ``FILE_LIST_SCOPES``.
+        ValueError: ``scope`` is not one of ``FILE_LIST_SCOPES``, or scope
+            ``"autoproject"`` without an ``autoproject_id``.
     """
     if scope not in FILE_LIST_SCOPES:
         raise ValueError(f"invalid file_list_changed scope: {scope!r}")
-    return {
+    if scope == "autoproject" and not autoproject_id:
+        raise ValueError("file_list_changed scope 'autoproject' requires an autoproject_id")
+    event = {
         "type": "file_list_changed",
         "conversation_id": conversation_id,
         "project_id": project_id,
         "scope": scope,
     }
+    if autoproject_id is not None:
+        event["autoproject_id"] = autoproject_id
+    return event
 
 
 def make_routine_list_changed(project_id: str) -> dict[str, Any]:
@@ -208,6 +220,47 @@ def make_table_changed(
         "table_id": table_id,
         "updated_at": updated_at,
         "schema_version": schema_version,
+    }
+
+
+def make_autoproject_list_changed() -> dict[str, Any]:
+    """Envelope for ``autoproject_list_changed``.
+
+    Per-user global published after any AutoProjects change that can alter
+    a list row (create, rename, archive, delete, and every change to a
+    row's ``active_run`` or ``unread``: a run starting, waiting, finishing,
+    the AutoProject being marked unread). Carries no ids: the sidebar section and
+    the archived list simply re-fetch. Published through
+    chat/autoprojects/events.py only.
+    """
+    return {"type": "autoproject_list_changed"}
+
+
+def make_autoproject_changed(
+    autoproject_id: str,
+    event_seq: int,
+    brief_version: int,
+    active_run: Optional[dict],
+) -> dict[str, Any]:
+    """Envelope for ``autoproject_changed``.
+
+    Per-user global published after every change to what an AutoProject's
+    page shows (a run starting, changing status or finishing, a brief write).
+    ``event_seq`` is the AutoProject's change counter after the change: an
+    open AutoProject page of ``autoproject_id`` re-fetches its newest page of
+    runs when it moved. ``brief_version`` lets the page re-fetch the brief
+    only when it moved.
+    ``active_run`` is ``{id, seq, status}`` of the AutoProject's running or
+    waiting run, or None, so the composer and the activity line update
+    without a fetch. Carries no AutoProject text. Published through
+    chat/autoprojects/events.py only.
+    """
+    return {
+        "type": "autoproject_changed",
+        "autoproject_id": autoproject_id,
+        "event_seq": event_seq,
+        "brief_version": brief_version,
+        "active_run": active_run,
     }
 
 

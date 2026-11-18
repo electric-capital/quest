@@ -1,15 +1,21 @@
 // unreadStore: max-merging of the two unread seqs from racing sources, and
 // the acknowledgement of the conversation on screen (focused window only,
-// optimistic, retried after a failure).
+// optimistic, retried after a failure); AutoProjects follow the same rules in
+// maps of their own.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { unreadStore } from './unreadStore';
 
 const mocks = vi.hoisted(() => ({
   markConversationRead: vi.fn(),
+  markAutoProjectRead: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
   markConversationRead: mocks.markConversationRead,
+}));
+
+vi.mock('../api/autoprojectsApi', () => ({
+  markAutoProjectRead: mocks.markAutoProjectRead,
 }));
 
 let focused = true;
@@ -25,6 +31,10 @@ beforeEach(() => {
   mocks.markConversationRead.mockReset();
   mocks.markConversationRead.mockImplementation((_id: string, seq: number) =>
     Promise.resolve({ unread_seq: seq, read_seq: seq }),
+  );
+  mocks.markAutoProjectRead.mockReset();
+  mocks.markAutoProjectRead.mockImplementation((_id: string, seq: number) =>
+    Promise.resolve({ event_seq: seq, unread_seq: seq, read_seq: seq, unread: false }),
   );
   unreadStore.reset();
 });
@@ -217,5 +227,67 @@ describe('unreadStore acknowledging the viewed conversation', () => {
     await flush();
     expect(mocks.markConversationRead).toHaveBeenCalledTimes(2);
     expect(unreadStore.isUnread('c1')).toBe(false);
+  });
+});
+
+describe('unreadStore AutoProjects', () => {
+  it('merges AutoProject seqs apart from conversation seqs', () => {
+    unreadStore.mergeAutoProject('x1', 5, 2);
+    expect(unreadStore.isAutoProjectUnread('x1')).toBe(true);
+    // The same id as a conversation is a different entry.
+    expect(unreadStore.isUnread('x1')).toBe(false);
+    unreadStore.merge('x2', 5, 0);
+    expect(unreadStore.isAutoProjectUnread('x2')).toBe(false);
+
+    // Max-merge: a stale row cannot bring the dot back, a newer one shows.
+    unreadStore.mergeAutoProject('x1', 5, 5);
+    expect(unreadStore.isAutoProjectUnread('x1', 5, 0)).toBe(false);
+    expect(unreadStore.isAutoProjectUnread('x1', 8, 5)).toBe(true);
+  });
+
+  it('acknowledges the AutoProject on screen in a focused window, optimistically', async () => {
+    unreadStore.mergeAutoProject('ap1', 6, 2);
+    focused = false;
+    unreadStore.setViewedAutoProject('ap1');
+    expect(mocks.markAutoProjectRead).not.toHaveBeenCalled();
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(true);
+
+    focused = true;
+    unreadStore.acknowledgeViewed();
+    expect(mocks.markAutoProjectRead).toHaveBeenCalledWith('ap1', 6);
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(false);
+    await flush();
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(false);
+    // The conversation side sent nothing.
+    expect(mocks.markConversationRead).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges a later change while the page stays viewed, and stops once it leaves', async () => {
+    unreadStore.setViewedAutoProject('ap1');
+    unreadStore.mergeAutoProject('ap1', 3, 0);
+    expect(mocks.markAutoProjectRead).toHaveBeenLastCalledWith('ap1', 3);
+    await flush();
+
+    unreadStore.clearViewedAutoProject('ap1');
+    unreadStore.mergeAutoProject('ap1', 7, 3);
+    expect(mocks.markAutoProjectRead).toHaveBeenCalledTimes(1);
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(true);
+  });
+
+  it('brings the dot back after a failed acknowledgement', async () => {
+    mocks.markAutoProjectRead.mockRejectedValueOnce(new Error('offline'));
+    unreadStore.mergeAutoProject('ap1', 4, 0);
+    unreadStore.setViewedAutoProject('ap1');
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(false);
+    await flush();
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(true);
+  });
+
+  it('never acknowledges while acknowledging is off (impersonation)', () => {
+    unreadStore.setAcknowledging(false);
+    unreadStore.mergeAutoProject('ap1', 4, 0);
+    unreadStore.setViewedAutoProject('ap1');
+    expect(mocks.markAutoProjectRead).not.toHaveBeenCalled();
+    expect(unreadStore.isAutoProjectUnread('ap1')).toBe(true);
   });
 });

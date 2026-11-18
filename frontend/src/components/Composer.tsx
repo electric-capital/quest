@@ -238,6 +238,28 @@ export interface ComposerProps {
    * PATCHes the conversation's model).
    */
   onModelChange?: (model: string, thinkingEffort: string | null) => void;
+  /**
+   * Hide the Flags button / popover and the read-only flags label. Set by
+   * the AutoProjects composer: an AutoProject run takes no conversation flags (the
+   * server ignores them). Defaults to false.
+   */
+  hideFlags?: boolean;
+  /**
+   * Replaces the default input placeholder (the unlocked state, and the
+   * streaming state, which shows the same copy). The read-only, pending-wait,
+   * expensive-resume and voice-input placeholders keep their own text.
+   */
+  placeholder?: string;
+  /**
+   * Seeds the input text on mount only (a later change is ignored). Set by
+   * the AutoProjects composer to restore a per-AutoProject draft. Defaults to empty.
+   */
+  initialText?: string;
+  /**
+   * Called whenever the input text changes (typing, dictation, the clear on
+   * Send, a restore after a failed upload), not for the `initialText` seed.
+   */
+  onTextChange?: (text: string) => void;
 }
 
 /**
@@ -272,8 +294,12 @@ export function Composer({
   isPublicProject = false,
   readOnlyNotice = null,
   onModelChange,
+  hideFlags = false,
+  placeholder,
+  initialText = '',
+  onTextChange,
 }: ComposerProps) {
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState(initialText);
   const [pendingAttachments, setPendingAttachments] = useState<PastedImage[]>([]);
   // Generic workspace files queued for upload-before-send (distinct from the
   // image paste queue above). The host owns the actual upload; the composer
@@ -325,6 +351,7 @@ export function Composer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const flagsMenuRef = useRef<HTMLDivElement>(null);
   const prevStreamingRef = useRef(false);
@@ -397,6 +424,8 @@ export function Composer({
     composerPlaceholder = "Waiting for the pending tool call to resolve.";
   } else if (expensiveResumeBlocked) {
     composerPlaceholder = "Choose an option in the cost warning above to continue.";
+  } else if (placeholder) {
+    composerPlaceholder = placeholder;
   } else {
     // Mobile keeps the collapsed pill quiet; the desktop hint mentions the
     // Enter-to-send binding, which mobile doesn't have.
@@ -417,6 +446,25 @@ export function Composer({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, isMobile ? 160 : 200)}px`;
   }, [isMobile]);
+
+  // A seeded draft may span several lines: size the input to it once.
+  const seededRef = useRef(initialText.length > 0);
+  useEffect(() => {
+    if (!seededRef.current) return;
+    seededRef.current = false;
+    resizeInput();
+  }, [resizeInput]);
+
+  // Report text changes to the host (onTextChange). Compared with the last
+  // reported text, so the seed and a re-run of the effect stay silent.
+  const onTextChangeRef = useRef(onTextChange);
+  onTextChangeRef.current = onTextChange;
+  const reportedTextRef = useRef(initialText);
+  useEffect(() => {
+    if (inputValue === reportedTextRef.current) return;
+    reportedTextRef.current = inputValue;
+    onTextChangeRef.current?.(inputValue);
+  }, [inputValue]);
 
   const handleRecordingComplete = useCallback(async (recording: VoiceRecording) => {
     setIsTranscribing(true);
@@ -520,10 +568,18 @@ export function Composer({
   // immediately), and on mount when the composer is fresh (covers the home
   // "pre-focused on load" case and a freshly-created empty conversation).
   // Never on mobile: programmatic focus would pop the software keyboard (and
-  // expand the floating bar) without a user tap.
+  // expand the floating bar) without a user tap. Never scrolling: a host
+  // that places the composer inside a scrolling page (the AutoProject page) must
+  // not be scrolled back to it when a run ends. When streaming ends, only
+  // while nothing else holds the focus (it is on the page body or already in
+  // the composer): another input on the page (the AutoProject brief editor,
+  // a title rename) keeps it.
   useEffect(() => {
     if (!isMobile && !isStreaming && prevStreamingRef.current) {
-      inputRef.current?.focus();
+      const focused = document.activeElement;
+      if (!focused || focused === document.body || rootRef.current?.contains(focused)) {
+        inputRef.current?.focus({ preventScroll: true });
+      }
     }
     prevStreamingRef.current = isStreaming;
   }, [isStreaming, isMobile]);
@@ -531,7 +587,7 @@ export function Composer({
   // Focus on mount when there are no messages yet (home screen + fresh chat).
   useEffect(() => {
     if (isFirstMessage && !inputDisabled && !isMobile) {
-      inputRef.current?.focus();
+      inputRef.current?.focus({ preventScroll: true });
     }
     // Intentionally mount-only (and on conversation switch via the key below);
     // we don't want to steal focus on every render.
@@ -1200,7 +1256,7 @@ export function Composer({
   // (hydrated from the GET response); fall back to the local selection while
   // the first send round-trips. Null when no flags are enabled.
   const effectiveFlags = conversationFlags.length > 0 ? conversationFlags : selectedFlags;
-  const flagsLabel = !isFirstMessage && effectiveFlags.length > 0 ? (
+  const flagsLabel = !hideFlags && !isFirstMessage && effectiveFlags.length > 0 ? (
     <span className="flags-label" title={effectiveFlags.map(getFlagLabel).join(', ')}>
       {effectiveFlags.length} flag{effectiveFlags.length === 1 ? '' : 's'} enabled
     </span>
@@ -1316,7 +1372,7 @@ export function Composer({
       {/* Flags lock at conversation start: interactive button + popover on a
           fresh conversation (hidden when feature gates leave no flag to
           offer), the read-only count label afterwards. */}
-      {isFirstMessage && visibleFlags.length > 0 && (
+      {!hideFlags && isFirstMessage && visibleFlags.length > 0 && (
         <div className="flags-container" ref={flagsMenuRef}>
           <button
             type="button"
@@ -1395,6 +1451,7 @@ export function Composer({
   return (
     <>
       <div
+        ref={rootRef}
         className={
           'input-area composer'
           + (expanded ? ' composer-expanded' : '')

@@ -6,7 +6,7 @@ Wait handles are a unified durable-suspend mechanism for tools that need human i
 
 The DB row is the source of truth. There is no in-process future registry, no live `notify_resolved` fast path, and no shutdown drain -- everything blocking on the user goes through the same suspend / resume cycle, so a server restart between registration and resolution is indistinguishable from a same-process resolution.
 
-The mechanism currently backs five call sites:
+The mechanism backs six call sites:
 
 - `wait_for_handles` -- generic tool surface for blocking on one or more outstanding handle ids. The `run_user_subagent` execute path returns a `user_subagent`-kind handle id that the caller's model blocks on this way (see [Cross-User Subagents](user-subagents.md)); otherwise the tool is kept for resume-bucket compatibility and future opt-in waits.
 - `send_slack_reply_and_get_response` -- Slack-driven thread suspend (see [Slack Socket Mode](slack-socket-mode.md)). The reply is keyed implicitly by `(channel, thread_ts)` via the row payload, and the Socket Mode debounce flush resolves the row directly. Always blocking via `SuspendForSlackReply`.
@@ -15,14 +15,15 @@ The mechanism currently backs five call sites:
   - Stop is the odd one out: the handle becomes terminal (`stopped`, so the composer unlocks and the inbox drops the row) but NO resume is kicked and `_run_resume()` holds on stopped rows -- the tool_use is closed only by the user's next send, with a `stopped` verdict and that message in the same turn.
   - Memory writes use `request_type="create_memory"` and ride on this path. See [Action Requests](action-requests.md).
 - `request_service_connection` -- the inline "Connect <service>" card for an admin-configured service the user has not connected. Always blocking via `SuspendForServiceConnection` on a `service_connection`-kind row; the connect-request resolve endpoint verifies the credential server-side before accepting. See [Service Connect Requests](connect-requests.md).
+- `ask_autoproject_question` -- an AutoProject run's question to the user, answered on the AutoProject page. Always blocking via `SuspendForAutoProjectQuestion` on an `autoproject_question`-kind row that never expires; only the AutoProject answer route resolves it. See [AutoProjects -- Questions](autoprojects.md#questions).
 - `return_to_caller` -- a cross-user subagent's return proposal. Rides on an `action_request`-kind handle and `SuspendForActionRequest` like the generic card, but its deny branch has bespoke semantics (Revise re-drives the subagent under `chat/user_subagent.py`'s control with the generic resume kick suppressed; hard Deny ends the run and never resumes the subagent conversation). See [Cross-User Subagents](user-subagents.md).
 
 ## Key Files
 
-- `db/models.py` -- `ToolWaitHandle` ORM model; `ToolWaitHandleKind` (`slack_reply`, `action_request`, `service_connection`, `user_subagent`); `ToolWaitHandleStatus`. The schema column is `String(50)` so adding kinds requires no migration. See [Database Architecture](database.md)
+- `db/models.py` -- `ToolWaitHandle` ORM model; `ToolWaitHandleKind` (its members' comments give each kind's payload and response); `ToolWaitHandleStatus`. The schema column is `String(50)` so adding kinds requires no migration. See [Database Architecture](database.md)
 - `db/tool_wait_handle_store.py` -- async CRUD plus `find_pending_slack_reply(channel, thread_ts)`, `find_pending_for_action_request(user_id, request_id)`, `bulk_get_handles_by_ids`, `mark_timed_out`, `cancel_pending_for_conversation`, `get_handle_by_tool_id`, and the expiry helpers `set_expires_at` / `list_expired_pending`. `create_handle()` accepts optional `correlation_kind` / `correlation_id` for kinds where the linkage is known up front (used by `action_request`) and an optional `expires_at`
-- `chat/gemini_api/turn_tools.py` -- `SuspendForWaitHandles`, `SuspendForSlackReply`, `SuspendForActionRequest` and `SuspendForServiceConnection` sentinel classes; `_await_wait_for_handles`, `_build_wait_for_handles_result`; the per-tool dispatch handlers that register handles and raise the sentinels
-- `chat/gemini_api/conversation.py` -- the top-level `run_conversation_turn()` catches all three sentinels and returns cleanly, and the resume bucket logic at the top of the same function closes the dangling tool_use on the next run
+- `chat/gemini_api/turn_tools.py` -- `SuspendForWaitHandles`, `SuspendForSlackReply`, `SuspendForActionRequest`, `SuspendForServiceConnection` and `SuspendForAutoProjectQuestion` sentinel classes; `_await_wait_for_handles`, `_build_wait_for_handles_result`; the per-tool dispatch handlers that register handles and raise the sentinels
+- `chat/gemini_api/conversation.py` -- the top-level `run_conversation_turn()` catches the sentinels and returns cleanly, and the resume bucket logic at the top of the same function closes the dangling tool_use on the next run
 - `chat/wait_handles/wait_timer.py` -- deadline enforcement: the per-handle `asyncio.Task` timers, the wait-site overdue check, and the `expires_at` sweep (`expiry_sweep_loop`, `sweep_expired_handles`). See [Expiry](#expiry)
 - `chat/wait_handles/resume.py` -- `maybe_kick_resume`, `_run_resume`, `_conversation_has_dangling_wait`, `_conversation_has_dangling_slack_reply`. Drives a fresh headless `run_conversation_turn()` with `message=""` and preserves `origin` + `slack_context` so Slack-origin resumes boot with the right tools
 - `chat/wait_handle_routes.py` -- REST endpoints (`GET /app/api/wait-handles/{id}`, `POST /app/api/wait-handles/{id}/resolve`); always calls `maybe_kick_resume` on success
@@ -38,13 +39,13 @@ The mechanism currently backs five call sites:
 
 ## Data Model
 
-`tool_wait_handles` rows are owned by a user, scoped to a conversation, and identified by a UUID. The `kind` column discriminates between `slack_reply` (Slack-driven thread suspend), `action_request` (inline Approve / Revise / Stop card), `service_connection` (inline connect card) and `user_subagent`; all share the same lifecycle.
+`tool_wait_handles` rows are owned by a user, scoped to a conversation, and identified by a UUID. The `kind` column discriminates between `slack_reply` (Slack-driven thread suspend), `action_request` (inline Approve / Revise / Stop card), `service_connection` (inline connect card), `user_subagent` and `autoproject_question` (an AutoProject run's question); all share the same lifecycle.
 
 `tool_id` is the LLM tool_use id of the registering call and is indexed so the resume bucket can look it up by tool id. `payload` carries kind-specific content (`{channel, thread_ts, posted_text, posted_ts}` for slack replies; `{request_id, request_type, params}` for action requests; the card fields for connect requests).
 
 `response` is populated on resolve and carries kind-specific resolution data (the user's Slack reply text, `{status: connected|declined, service, label, note}` for connect requests, or `{verdict, request_id, feedback?, result}` for action requests -- `feedback` is present at the top level on a Revise denial so the resumed model can read it directly without descending into `result`).
 
-`correlation_kind` / `correlation_id` are populated **at create time** for `action_request` (the `action_requests.id` is in hand when the wait handle is inserted, so `find_pending_for_action_request()` can index the lookup by it). The `String(50)` `kind` column also accommodates legacy historical rows from now-retired kinds without a schema change.
+`correlation_kind` / `correlation_id` are populated **at create time** for `action_request` and for `autoproject_question` (`autoproject_run` and the run id) (the `action_requests.id` is in hand when the wait handle is inserted, so `find_pending_for_action_request()` can index the lookup by it). The `String(50)` `kind` column also accommodates legacy historical rows from now-retired kinds without a schema change.
 
 `expires_at` is the row's deadline, enforced as described in [Expiry](#expiry). It is set at create time only for `user_subagent` (the 14-day `_CALLER_HANDLE_TTL` backstop in `chat/action_request_types/run_user_subagent.py`); a `wait_for_handles` call overwrites it with that wait's own deadline. `slack_reply` and `action_request` rows are created without one.
 
@@ -87,7 +88,7 @@ All resolution paths additionally publish `wait_handle_resolved` on the user cha
 
 `maybe_kick_resume` is dedupe-safe via a per-conversation `_active_resumes` map and is gated by `_conversation_has_dangling_wait`, which delegates to the provider (via the shared `_pending_tool_uses()` reader) to inspect `sdk_history.json` for a dangling `wait_for_handles`, `send_slack_reply_and_get_response`, or `create_action_request` tool_use. If the saved transcript has already moved past the wait, the kick is a no-op.
 
-**Multi-card gate.** A parallel tool-call batch can leave several dangling `create_action_request` tool_uses, one pending row each. `_run_resume()` therefore starts with `_unresolved_blocking_handle_ids(user_id, conversation_id)`: the still-`pending` rows of kind `action_request` / `slack_reply` / `service_connection` (the one-row-per-tool_use kinds; `wait_for_handles` rows belong to other tools and keep their any-resolves contract) whose `tool_id` is one of the dangling tool_uses.
+**Multi-card gate.** A parallel tool-call batch can leave several dangling `create_action_request` tool_uses, one pending row each. `_run_resume()` therefore starts with `_unresolved_blocking_handle_ids(user_id, conversation_id)`: the still-`pending` rows of kind `action_request` / `slack_reply` / `service_connection` / `autoproject_question` (the one-row-per-tool_use kinds; `wait_for_handles` rows belong to other tools and keep their any-resolves contract) whose `tool_id` is one of the dangling tool_uses.
 
 While that list is non-empty the resume returns before publishing `resume_started` -- nothing streams, the composer stays locked on the remaining `pending_wait_handles` -- and the resolve of the last card kicks the resume that actually runs, so the model receives every verdict in one go.
 
@@ -117,6 +118,7 @@ The resume bucket at the top of `run_conversation_turn()` walks the dangling too
   - If the row is still `pending` when the resume runs (race with the resolve endpoint), a `{"status": "still_waiting"}` marker is used instead.
   - This branch matches before the `wait_for_handles` catch-all so an action_request row never funnels through `_build_wait_for_handles_result`.
 - `kind="service_connection"` -- closed with the row's `response` verbatim (`{"status": "connected", ...}` / `{"status": "declined", ...}`); a terminal row without a response (cancelled, timed out) reads as `{"status": "cancelled", ...}` and a still-`pending` row as `{"status": "still_waiting"}`.
+- `kind="autoproject_question"` -- closed with `{"answer": ...}` from an accepted row; any other terminal status reads as `{"status": "cancelled"}` and a still-`pending` row as `{"status": "still_waiting"}`. An AutoProject run's resume turn runs through its run driver ([AutoProjects -- Drive](autoprojects.md#drive)).
 - Any `wait_for_handles` / `tool_call(tool_name="wait_for_handles")` tool_use, with or without a row -- closed with `_build_wait_for_handles_result(user_id, handle_ids)` from a fresh DB read. A model that emits a follow-up `wait_for_handles(handle_ids=[<id>])` after a blocking `create_action_request` short-circuits here: the row is already terminal, so the live arm returns the resolved-row projection immediately without registering a new suspend.
 - Any other dangling tool_use with no wait-handle row -- closed with its own persisted `tool_output` replayed from `chat_history.json` (`_load_persisted_tool_results()` in `chat/gemini_api/conversation.py`) when the call did run but the batch unwound on a sibling `create_action_request` suspend before `format_tool_results`; otherwise (cancellation / restart mid-tool) with the synthetic `{"status": "interrupted", ...}` marker. Provider-side extra parts (e.g. a Gemini file part) are not replayed, only the text output.
 
@@ -152,7 +154,7 @@ Two channels keep the FE in sync:
 `chat/wait_handle_routes.py` exposes:
 
 - `GET /app/api/wait-handles/{handle_id}` -- returns the row scoped to the authenticated user (404 if not found or owned by someone else).
-- `POST /app/api/wait-handles/{handle_id}/resolve` -- body fields are defined by `ResolveWaitHandleRequest` in the same file: `status` (must be `accepted`, `rejected`, or `cancelled`), optional `response` dict, optional `correlation_kind` / `correlation_id`, optional `feedback` (merged into `response`). Returns 422 (request validation) on any other status, 404 if missing, 400 if already resolved, 409 if a concurrent resolver (or a timeout) won the row first. On success, always calls `maybe_kick_resume`. See [Chat API](../api/chat-api.md) for the full endpoint catalog.
+- `POST /app/api/wait-handles/{handle_id}/resolve` -- body fields are defined by `ResolveWaitHandleRequest` in the same file: `status` (must be `accepted`, `rejected`, or `cancelled`), optional `response` dict, optional `correlation_kind` / `correlation_id`, optional `feedback` (merged into `response`). Returns 422 (request validation) on any other status, 404 if missing, 400 if already resolved, 409 if a concurrent resolver (or a timeout) won the row first, and 409 `use_autoproject_answer_route` for an `autoproject_question` row, which only the AutoProject answer route may resolve. On success, always calls `maybe_kick_resume`. See [Chat API](../api/chat-api.md) for the full endpoint catalog.
 
 The `POST /app/api/action-requests/{id}/resolve` endpoint in `chat/action_request_routes.py` is the primary client of the wait-handle resolve path: it bridges to `tool_wait_handle_store.resolve_handle()` and `maybe_kick_resume()` after flipping the `action_requests` row. See [Action Requests](action-requests.md).
 
