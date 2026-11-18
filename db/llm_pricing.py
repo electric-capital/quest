@@ -33,6 +33,10 @@ ESTIMATE, not billing truth:
   usage metadata reports no cache-write count, so those tokens are priced
   as plain input and estimates run slightly low on cache-heavy calls.
   Global-endpoint rate; the us/eu multi-regions bill 10% more.
+- Gemini 4 Neon (GA 2026-11-18) is $3/$15 (cached input $0.15) with no
+  introductory rate and no long-context tier (checked 2026-11-18).
+  Implicit-cache writes bill at 1.25x input and are priced as plain input,
+  as for Hydrogen. Global-endpoint rate assumed, as for Hydrogen.
 - Gemini explicit-cache storage ($/1M-token-hours) is not modeled -- only
   per-call token rates.
 - Fireworks AI publishes no prices through its API, so its rows are priced
@@ -106,6 +110,8 @@ _GEMINI_PRICING: dict[str, dict] = {
     # Flash-line input/output rate, but cached input at 5% of input (the
     # Gemini 4 ratio), not the Flash line's 10%. No long-context tier.
     "gemini-4-hydrogen": {"input": 1.50, "output": 7.50, "cache_read": 0.075},
+    # Twice Hydrogen, same shape: cached input at 5%, no long-context tier.
+    "gemini-4-neon": {"input": 3.00, "output": 15.00, "cache_read": 0.15},
 }
 
 # Anthropic rates per 1M tokens. Cache rates derive from the input rate via

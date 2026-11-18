@@ -78,6 +78,21 @@ def test_gemini_4_hydrogen_prices_at_the_flash_rate_with_a_five_percent_cache_re
     ) == pytest.approx(expected)
 
 
+def test_gemini_4_neon_prices_at_twice_hydrogen_with_no_long_context_tier():
+    metrics = {
+        "prompt_token_count": 1_000_000,
+        "cached_content_token_count": 400_000,
+        "candidates_token_count": 100_000,
+        "thoughts_token_count": 100_000,
+    }
+    # 600K uncached input at $3 + 400K cached at $0.15 + 200K output/thinking at $15
+    expected = 1.80 + 0.06 + 3.00
+    assert estimate_cost_usd("gemini", "gemini-4-neon", metrics) == pytest.approx(expected)
+    assert estimate_cost_usd(
+        "gemini", "gemini-4-neon", metrics, long_context=True,
+    ) == pytest.approx(expected)
+
+
 def test_anthropic_default_cache_read_is_ten_percent_of_input():
     cost = estimate_cost_usd(
         "anthropic", "claude-opus-5", {"cache_read_input_tokens": 1_000_000},

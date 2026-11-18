@@ -38,6 +38,7 @@ class ModelId(StrEnum):
     GEMINI_4_ARGON = "gemini-4-argon"
     GEMINI_4_CARBON = "gemini-4-carbon"
     GEMINI_4_HYDROGEN = "gemini-4-hydrogen"
+    GEMINI_4_NEON = "gemini-4-neon"
     CLAUDE_HAIKU_4_5 = "claude-haiku-4.5"
     CLAUDE_HAIKU_5_5 = "claude-haiku-5-5"
     CLAUDE_SONNET_4_6 = "claude-sonnet-4-6"
