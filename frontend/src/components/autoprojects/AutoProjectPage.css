@@ -183,6 +183,7 @@
 
 .autoproject-files .file-browser-nav > .autoproject-card-meta {
   flex: 0 1 auto;
+  white-space: nowrap;
 }
 
 .autoproject-files .file-list {

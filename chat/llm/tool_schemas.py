@@ -4158,7 +4158,9 @@ _COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
                     "run the user sees. At most "
                     f"{AUTOPROJECT_RUN_RESULT_MAX_CHARS:,} characters; put large "
                     "outputs in `autoproject://` files, Quest Docs or Quest Tables "
-                    "and point at them."
+                    "and point at them. Link a file with its full path, "
+                    "`[report.md](autoproject://report.md)`; a bare relative "
+                    "link does not open."
                 ),
             },
             "notes": {

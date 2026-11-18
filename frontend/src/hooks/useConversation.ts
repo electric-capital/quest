@@ -298,6 +298,12 @@ export function useConversation(conversationId: string, options?: UseConversatio
     if (!isNewConversation && (state.isLoaded || state.isLoading)) {
       return;
     }
+    // A load that failed leaves the conversation neither loaded nor loading;
+    // retrying from this effect would refetch in a tight loop (a missing or
+    // foreign conversation fails every time).
+    if (!isNewConversation && state.error) {
+      return;
+    }
 
     // Already-seeded fast path: the sidebar's ``handleNewChat`` (or another
     // tab's optimistic write) primed the store with empty messages and a
