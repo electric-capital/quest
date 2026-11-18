@@ -464,3 +464,71 @@ def test_accepted_completion_ends_the_turn_without_another_model_call(turn):
         ) == []
 
     _run(body())
+
+
+def test_sub_agents_of_a_run_get_the_current_brief_and_the_run_ids(turn, monkeypatch):
+    """A spawn inside a run hands its sub-agents the read-only block (loaded
+    fresh, so the brief as it is now) and the run's ids; outside a run
+    nothing; a spawn after the AutoProject was deleted is a tool error."""
+    from chat.autoprojects import service
+    from chat.gemini_api import turn_tools
+    from chat.gemini_api.run_context import RunContext
+    from chat.gemini_api.usage import UsageAccumulator
+
+    seen: list[dict] = []
+
+    async def _fake_run_sub_agent(**kwargs):
+        seen.append(kwargs)
+        return "done"
+
+    monkeypatch.setattr(turn_tools, "_run_sub_agent", _fake_run_sub_agent)
+
+    def _ctx(run):
+        async def _on_event(_event):
+            return None
+
+        return RunContext(
+            app=None, user=dict(turn.owner, api_key="k", settings={}),
+            conversation_id=run["conversation_id"] if run else "c-plain", timezone="UTC",
+            model="fake-model", origin="web", project_id=None, routine_id=None,
+            slack_context=None, provider=MagicMock(), provider_name="gemini", chat=object(),
+            is_slack_origin=False, is_user_subagent=False, is_inference_api=False,
+            is_public=False, nested_subagents=False, user_subagents_enabled=False,
+            user_subagents_gate_open=False, subagent_run=None, subagent_caller=None,
+            resolved_project_guide="", resolved_skills_content="", on_event=_on_event,
+            structured_messages=[], usage_acc=UsageAccumulator(),
+            autoproject_id=run["autoproject_id"] if run else None,
+            autoproject_run_id=run["id"] if run else None,
+        )
+
+    def _spawn(ctx):
+        call = turn_tools.ToolCall(
+            name="agent_task", key="agent_task", tool_id="tid", raw_tool_id="tid",
+            args={"name": "A", "prompt": "look", "description": "d"},
+        )
+        return turn_tools._handle_agent_task(ctx, call, turn_tools.TurnState())
+
+    async def body():
+        autoproject, run = await turn.start()
+        await service.set_brief(
+            turn.owner, autoproject["id"], "Brief now", expected_brief_version=0,
+        )
+        await _spawn(_ctx(run))
+        kwargs = seen[-1]
+        assert kwargs["autoproject_context"].startswith("## AutoProject\n")
+        assert "Brief now" in kwargs["autoproject_context"]
+        assert (kwargs["autoproject_id"], kwargs["autoproject_run_id"]) == (
+            autoproject["id"], run["id"],
+        )
+
+        await _spawn(_ctx(None))
+        assert seen[-1]["autoproject_context"] == ""
+        assert seen[-1]["autoproject_id"] is None
+
+        calls = len(seen)
+        await service.delete_autoproject(turn.owner, autoproject["id"])
+        result = await _spawn(_ctx(run))
+        assert len(seen) == calls
+        assert "no longer exists" in result
+
+    _run(body())

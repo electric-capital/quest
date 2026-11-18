@@ -49,7 +49,8 @@ def _names(tier) -> list[str]:
 
 
 def test_run_tier_is_the_top_level_tier_plus_the_two_loop_tools():
-    assert _names(tool_schemas.AUTOPROJECT_RUN_TOOLS) == _names(tool_schemas.TOP_LEVEL_TOOLS) + LOOP_TOOLS
+    top_level = _names(tool_schemas.TOP_LEVEL_TOOLS)
+    assert _names(tool_schemas.AUTOPROJECT_RUN_TOOLS) == top_level + LOOP_TOOLS
     specs = {t["name"]: t for t in tool_schemas.AUTOPROJECT_RUN_TOOLS}
     complete = specs["complete_autoproject_run"]["parameters"]
     assert complete["required"] == ["summary", "result", "notes"]
@@ -337,7 +338,8 @@ def test_loop_tools_are_refused_for_sub_agents_and_scripts(env, caller, tool, vi
             None, None, dict(env.owner), run["conversation_id"], "UTC", name, call_args,
             autoproject_id=run["autoproject_id"], autoproject_run_id=run["id"], **caller,
         )
-        assert "can only be called by the AutoProject run's own model" in json.loads(result)["error"]
+        error = json.loads(result)["error"]
+        assert "can only be called by the AutoProject run's own model" in error
         assert (await autoproject_store.get_run(run["id"]))["status"] == "running"
         assert await tool_wait_handle_store.list_pending_for_conversation(
             env.owner["id"], run["conversation_id"],
@@ -346,7 +348,9 @@ def test_loop_tools_are_refused_for_sub_agents_and_scripts(env, caller, tool, vi
     _run(body())
 
 
-@pytest.mark.parametrize("caller", [{}, {"is_sub_agent": True, "agent_name": "A"}, {"is_script": True}])
+@pytest.mark.parametrize("caller", [
+    {}, {"is_sub_agent": True, "agent_name": "A"}, {"is_script": True},
+])
 def test_read_tools_reach_the_runs_autoproject_through_dispatch(env, caller):
     async def body():
         autoproject = await service.create_autoproject(env.owner, title="Log")
@@ -433,7 +437,9 @@ def test_set_conversation_name_is_refused_in_a_run(env):
             autoproject_id=run["autoproject_id"], autoproject_run_id=run["id"],
         )
         assert "no conversation name" in json.loads(result)["error"]
-        meta = await conversation_store.get_conversation_meta(env.owner["id"], run["conversation_id"])
+        meta = await conversation_store.get_conversation_meta(
+            env.owner["id"], run["conversation_id"],
+        )
         assert meta.get("custom_name") in (None, "")
 
     _run(body())

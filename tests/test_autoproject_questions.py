@@ -86,7 +86,8 @@ def test_question_at_its_caps_is_accepted():
 
 def test_answer_validation():
     assert questions.validate_answer("  EU  ") == "EU"
-    assert questions.validate_answer("a" * AUTOPROJECT_ANSWER_MAX_CHARS) == "a" * AUTOPROJECT_ANSWER_MAX_CHARS
+    at_cap = "a" * AUTOPROJECT_ANSWER_MAX_CHARS
+    assert questions.validate_answer(at_cap) == at_cap
     for bad in (None, 3, "", "   "):
         with pytest.raises(AutoProjectValidationError) as exc:
             questions.validate_answer(bad)
@@ -210,7 +211,8 @@ def test_answer_resolves_rewrites_publishes_and_kicks_the_resume(env):
         stored = await tool_wait_handle_store.get_handle(handle["id"])
         assert stored["status"] == "accepted"
         assert stored["response"] == {"answer": "EU"}
-        assert (stored["correlation_kind"], stored["correlation_id"]) == ("autoproject_run", run["id"])
+        correlation = (stored["correlation_kind"], stored["correlation_id"])
+        assert correlation == ("autoproject_run", run["id"])
         message = _transcript_question(run, handle["id"])
         assert (message["status"], message["answer"]) == ("answered", "EU")
         assert env.kicks == [(env.app, env.owner["id"], run["conversation_id"])]
@@ -253,7 +255,9 @@ def test_answering_twice_is_a_conflict_with_the_first_answer(env):
         handle = await _ask(env, run)
         await service.answer_question(env.owner, autoproject["id"], handle["id"], "EU", app=env.app)
         with pytest.raises(AutoProjectStoreError) as exc:
-            await service.answer_question(env.owner, autoproject["id"], handle["id"], "US", app=env.app)
+            await service.answer_question(
+                env.owner, autoproject["id"], handle["id"], "US", app=env.app,
+            )
         assert exc.value.code == "question_resolved"
         assert exc.value.details == {"status": "answered", "answer": "EU"}
         assert len(env.kicks) == 1
@@ -462,7 +466,8 @@ def test_arm_posts_the_question_and_suspends(env, via_tool_call):
         assert handle["status"] == "pending"
         assert handle["tool_id"] == "raw-ask"
         assert handle["payload"] == {"question": "Which region?", "options": ["EU", "US"]}
-        assert (handle["correlation_kind"], handle["correlation_id"]) == ("autoproject_run", run["id"])
+        correlation = (handle["correlation_kind"], handle["correlation_id"])
+        assert correlation == ("autoproject_run", run["id"])
         assert handle["expires_at"] is None
         assert emitted == [{
             "type": "autoproject_question", "wait_handle_id": handle["id"],
@@ -585,7 +590,8 @@ def test_question_suspends_the_turn_and_the_answer_resumes_it(env, loop):
         messages = await loop.turn(run, first, message="Plan the trip")
         assert first.stream_calls["n"] == 1
         assert first.format_tool_results.call_count == 0
-        assert [m["type"] for m in messages if m.get("type") in ("tool_use", "tool_result", "autoproject_question")] == [
+        shown = ("tool_use", "tool_result", "autoproject_question")
+        assert [m["type"] for m in messages if m.get("type") in shown] == [
             "tool_use", "autoproject_question",
         ]
         handle = (await tool_wait_handle_store.list_pending_for_conversation(

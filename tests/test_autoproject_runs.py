@@ -381,6 +381,20 @@ def test_start_run_refuses_an_ordinary_conversation(env):
     _run(body())
 
 
+def test_start_run_refuses_a_blank_prompt(env):
+    async def body():
+        autoproject = await _new_autoproject(env)
+        cid = await service.create_run_conversation(env.owner, autoproject["id"])
+        with pytest.raises(autoproject_store.AutoProjectValidationError) as exc:
+            await service.start_run(
+                env.owner, await _meta(env.owner, cid), prompt="  \n", model="fake-model",
+            )
+        assert exc.value.code == "invalid_prompt"
+        assert await autoproject_store.count_runs(autoproject["id"]) == 0
+
+    _run(body())
+
+
 # ---------------------------------------------------------------------------
 # Creating run conversations; the abandoned-conversation sweeps
 # ---------------------------------------------------------------------------
@@ -555,7 +569,9 @@ def test_driver_without_the_tool_after_the_nudge_saves_the_final_text(env):
         autoproject = await _new_autoproject(env)
         run = await _start(env, autoproject)
         final_text = "## Three sources found\n\nA, B and C."
-        turns = _Turns(*([_says("Working on it.")] + [_says(final_text)] * MAX_AUTOPROJECT_COMPLETION_NUDGES))
+        turns = _Turns(
+            _says("Working on it."), *[_says(final_text)] * MAX_AUTOPROJECT_COMPLETION_NUDGES,
+        )
         final = await turns.drive(run)
         assert len(turns.inputs) == 1 + MAX_AUTOPROJECT_COMPLETION_NUDGES
         assert final["status"] == "completed"
@@ -662,7 +678,9 @@ def test_unanswered_brief_conflict_keeps_the_saved_entry_and_the_users_brief(env
         autoproject = await _new_autoproject(env)
         run = await _start(env, autoproject)
         await autoproject_store.freeze_run_context(run["id"], context="ctx", brief_version=0)
-        await service.set_brief(env.owner, autoproject["id"], "User brief", expected_brief_version=0)
+        await service.set_brief(
+            env.owner, autoproject["id"], "User brief", expected_brief_version=0,
+        )
         turns = _Turns(
             _completes(run, brief="Run brief"),
             _says("I will not merge."),
@@ -839,7 +857,9 @@ def test_a_brief_version_the_run_was_never_handed_does_not_override(env):
         assert (await _get_autoproject(autoproject))["brief"] == "User edit"
 
         # The handed version goes stale when the user edits again.
-        await service.set_brief(env.owner, autoproject["id"], "Second edit", expected_brief_version=1)
+        await service.set_brief(
+            env.owner, autoproject["id"], "Second edit", expected_brief_version=1,
+        )
         stale = await _complete(run, brief="Merged", expected_brief_version=1)
         again = json.loads(stale.result)
         assert again["status"] == "brief_conflict"
@@ -968,7 +988,10 @@ def test_stop_ends_a_waiting_run_for_its_owner_only(env):
         )
 
         # Another user, and a conversation that is not a run: no-ops.
-        assert await runs_mod.stop_autoproject_run(env.stranger["id"], run["conversation_id"]) is None
+        stranger_stop = await runs_mod.stop_autoproject_run(
+            env.stranger["id"], run["conversation_id"],
+        )
+        assert stranger_stop is None
         from chat.storage import ChatStorage
         plain, _ = await ChatStorage.create_conversation(env.owner["id"])
         assert await runs_mod.stop_autoproject_run(env.owner["id"], plain) is None
