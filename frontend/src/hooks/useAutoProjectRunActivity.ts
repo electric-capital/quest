@@ -8,22 +8,17 @@
  * webSocketManager, conversationStore or useConversation. It keeps no
  * transcript, only the newest label.
  *
- * Subscription ownership. On a conversation id the hook attaches its event
- * handler first, then always calls `persistentWebSocket.subscribe(id)`: the
- * op is idempotent server side (it only pushes the TTL deadline forward), so
- * even a conversation some other caller already subscribed (the run panel's
- * useConversation, which never unsubscribes) gets a fresh `subscribed` ack
- * with `run_active` and `current_seq`. The hook OWNS the subscription only
- * when the id was not in the client's subscribed set before that call; on
- * cleanup (id change, unmount) it detaches its handler and sends
- * `unsubscribe` only for an owned subscription, so anyone else's
- * subscription survives. Limitation: the client keeps a set, not a
- * refcount, so a caller that subscribes the same conversation WHILE this
- * hook owns it loses the subscription at this hook's cleanup. Route changes
- * are safe (React runs the old page's effect cleanups before the new page's
- * effects), and the 3-minute subscribe refresh is the singleton's job. A
- * `subscription_expired` for an owned subscription re-subscribes at once
- * (the ack's catch-up covers the gap).
+ * Subscription. On a conversation id the hook attaches its event handler
+ * first, then takes a hold with `persistentWebSocket.subscribe(id)`: the op
+ * is idempotent server side (it only pushes the TTL deadline forward), so
+ * even a conversation some other caller already holds (the run panel's
+ * useConversation, which never lets go) gets a fresh `subscribed` ack with
+ * `run_active` and `current_seq`. On cleanup (id change, unmount) it
+ * detaches its handler and releases its hold; the client counts holders, so
+ * the wire `unsubscribe` goes out only when nobody else holds the
+ * conversation. The 3-minute subscribe refresh is the singleton's job. A
+ * `subscription_expired` re-sends the subscribe at once without another
+ * hold (`resubscribe`; the ack's catch-up covers the gap).
  *
  * Catch-up. On every `subscribed` ack: `run_active` sets `streaming`; a
  * `catchup` ack's message bodies are applied directly; then, while no label
@@ -190,9 +185,6 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
     const announcedAt = new Map<number, number>();
     let fetching = false;
     let dirty = false;
-    // This hook put the conversation in the subscribed set (see the module
-    // comment), so it alone takes it out again.
-    const owned = !persistentWebSocket.isSubscribed(id);
 
     const setLabel = (label: string, stamp: number) => {
       if (stamp < labelStamp) return;
@@ -323,7 +315,7 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
           setStreaming(false);
           return;
         case 'subscription_expired':
-          if (owned && persistentWebSocket.isSubscribed(id)) persistentWebSocket.subscribe(id);
+          persistentWebSocket.resubscribe(id);
           return;
         default:
           return;
@@ -337,7 +329,7 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
     return () => {
       active = false;
       detach();
-      if (owned) persistentWebSocket.unsubscribe(id);
+      persistentWebSocket.unsubscribe(id);
     };
   }, [conversationId]);
 

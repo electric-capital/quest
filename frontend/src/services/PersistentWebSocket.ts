@@ -70,7 +70,10 @@ class PersistentWebSocketClient {
   private reconnectHandlers: Set<ReconnectHandler> = new Set();
   private conversationHandlers: Map<string, Set<ConversationHandler>> = new Map();
 
-  private subscribed: Set<string> = new Set();
+  // Holders per subscribed conversation: every `subscribe` adds one, every
+  // `unsubscribe` takes one away, and the wire `unsubscribe` goes out only
+  // when the last holder leaves.
+  private subscribed: Map<string, number> = new Map();
   private lastSeqByConversation: Map<string, number> = new Map();
   private subscriptionRefreshTimers: Map<string, number> = new Map();
 
@@ -166,7 +169,7 @@ class PersistentWebSocketClient {
       this.startHeartbeat();
       // Re-subscribe to all known conversations with their last-known seq
       // so the server can decide between up_to_date / catchup / resync.
-      for (const conversationId of this.subscribed) {
+      for (const conversationId of this.subscribed.keys()) {
         this.sendSubscribe(conversationId);
       }
       // Globals published while no socket was open are lost: tell the views
@@ -416,20 +419,42 @@ class PersistentWebSocketClient {
     }
   }
 
+  /**
+   * Take a hold on the conversation's channel. Every call sends `subscribe`
+   * (the server answers each with a fresh `subscribed` ack), and every call
+   * must be paired with one `unsubscribe` by a caller that ever lets go;
+   * a caller that holds the channel for good (useConversation) never calls
+   * `unsubscribe`.
+   */
   subscribe(conversationId: string): void {
-    this.subscribed.add(conversationId);
+    this.subscribed.set(conversationId, (this.subscribed.get(conversationId) ?? 0) + 1);
     if (this.isOpen) {
       this.sendSubscribe(conversationId);
     }
     this.ensureRefreshTimer(conversationId);
   }
 
-  /** The conversation is in the client's subscribed set (some caller subscribed it). */
-  isSubscribed(conversationId: string): boolean {
-    return this.subscribed.has(conversationId);
+  /**
+   * Send `subscribe` again for a held conversation without taking another
+   * hold (e.g. after a `subscription_expired`). No-op when nobody holds it.
+   */
+  resubscribe(conversationId: string): void {
+    if (!this.subscribed.has(conversationId)) return;
+    this.sendSubscribe(conversationId);
   }
 
+  /**
+   * Release one hold taken by `subscribe`. The wire `unsubscribe` is sent
+   * only when the last holder leaves, so another caller's subscription of
+   * the same conversation survives. No-op for a conversation nobody holds.
+   */
   unsubscribe(conversationId: string): void {
+    const holders = this.subscribed.get(conversationId);
+    if (holders === undefined) return;
+    if (holders > 1) {
+      this.subscribed.set(conversationId, holders - 1);
+      return;
+    }
     this.subscribed.delete(conversationId);
     this.clearRefreshTimer(conversationId);
     if (this.isOpen) {
