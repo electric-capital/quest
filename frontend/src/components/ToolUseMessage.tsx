@@ -56,7 +56,7 @@ const AUTOPROJECT_ENTRY_FIELDS: Array<[key: string, label: string]> = [
  * For complete_autoproject_run calls (direct or through tool_call), the entry's
  * text fields as labelled blocks, since a markdown result or brief reads
  * badly as an escaped JSON string; any other argument (e.g.
- * brief_expected_version) stays in `otherParams`. Null for every other tool.
+ * expected_brief_version) stays in `otherParams`. Null for every other tool.
  */
 function extractAutoProjectEntryFields(
   toolName: string,
