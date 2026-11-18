@@ -351,6 +351,7 @@ export function Composer({
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const flagsMenuRef = useRef<HTMLDivElement>(null);
   const prevStreamingRef = useRef(false);
@@ -569,10 +570,16 @@ export function Composer({
   // Never on mobile: programmatic focus would pop the software keyboard (and
   // expand the floating bar) without a user tap. Never scrolling: a host
   // that places the composer inside a scrolling page (the AutoProject page) must
-  // not be scrolled back to it when a run ends.
+  // not be scrolled back to it when a run ends. When streaming ends, only
+  // while nothing else holds the focus (it is on the page body or already in
+  // the composer): another input on the page (the AutoProject brief editor,
+  // a title rename) keeps it.
   useEffect(() => {
     if (!isMobile && !isStreaming && prevStreamingRef.current) {
-      inputRef.current?.focus({ preventScroll: true });
+      const focused = document.activeElement;
+      if (!focused || focused === document.body || rootRef.current?.contains(focused)) {
+        inputRef.current?.focus({ preventScroll: true });
+      }
     }
     prevStreamingRef.current = isStreaming;
   }, [isStreaming, isMobile]);
@@ -1444,6 +1451,7 @@ export function Composer({
   return (
     <>
       <div
+        ref={rootRef}
         className={
           'input-area composer'
           + (expanded ? ' composer-expanded' : '')
