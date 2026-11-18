@@ -8,7 +8,10 @@ import { formatTimestamp } from '../../utils/formatters'
 import './AutoProjectQuestionCard.css'
 
 export interface AutoProjectQuestionCardProps {
-  /** The AutoProject to answer through; null shows the question read-only (option buttons disabled). */
+  /**
+   * The AutoProject to answer through; null shows the question read-only
+   * (option buttons disabled).
+   */
   autoprojectId: string | null
   question: AutoProjectQuestion
   /** Locks the option buttons (e.g. the composer is sending an answer). */

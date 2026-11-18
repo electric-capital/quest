@@ -66,8 +66,8 @@ export function listAutoProjects(opts: { archived?: boolean } = {}): Promise<Lis
 }
 
 /**
- * Create an AutoProject (201). Rejects 400 `invalid_title` / `invalid_model` / `invalid_thinking_effort` / `model_not_allowed`, 409
- * `autoprojects_cap_reached`.
+ * Create an AutoProject (201). Rejects 400 `invalid_title` / `invalid_model` /
+ * `invalid_thinking_effort` / `model_not_allowed`, 409 `autoprojects_cap_reached`.
  */
 export function createAutoProject(body: CreateAutoProjectRequest): Promise<AutoProject> {
   return apiPost(autoprojectsEndpoint(), { body });
@@ -108,7 +108,10 @@ export function isAutoProjectDeleting(id: string): boolean {
   return deletingAutoProjectIds.has(id);
 }
 
-/** Delete the AutoProject with its runs, their conversations and its files (stops an active run first). */
+/**
+ * Delete the AutoProject with its runs, their conversations and its files
+ * (stops an active run first).
+ */
 export async function deleteAutoProject(id: string): Promise<{ success: boolean }> {
   deletingAutoProjectIds.add(id);
   try {
@@ -174,8 +177,8 @@ export function restoreAutoProjectBriefVersion(
 // --- Runs and questions ----------------------------------------------------
 
 /**
- * One page of the AutoProject's runs (its updates), newest first. `beforeSeq` is the previous page's
- * `next_before_seq`; `limit` 1..100 (server default 20).
+ * One page of the AutoProject's runs (its updates), newest first. `beforeSeq`
+ * is the previous page's `next_before_seq`; `limit` 1..100 (server default 20).
  */
 export function listAutoProjectRuns(
   id: string,
@@ -195,7 +198,10 @@ export function createAutoProjectRunConversation(id: string): Promise<{ conversa
   return apiPost(`${autoprojectEndpoint(id)}/runs`);
 }
 
-/** Delete a finished run's entry and its conversation. 404 `autoproject_run_not_found`, 409 `autoproject_run_active`. */
+/**
+ * Delete a finished run's entry and its conversation. 404
+ * `autoproject_run_not_found`, 409 `autoproject_run_active`.
+ */
 export function deleteAutoProjectRun(id: string, runId: string): Promise<{ success: boolean }> {
   return apiDelete(`${autoprojectEndpoint(id)}/runs/${encodeURIComponent(runId)}`);
 }

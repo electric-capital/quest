@@ -40,7 +40,10 @@ function innerToolArgs(toolName: string, toolInput: Record<string, unknown>): Re
   return args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {};
 }
 
-/** The text fields of an AutoProject run's log entry (complete_autoproject_run), in reading order. */
+/**
+ * The text fields of an AutoProject run's log entry (complete_autoproject_run),
+ * in reading order.
+ */
 const AUTOPROJECT_ENTRY_FIELDS: Array<[key: string, label: string]> = [
   ['autoproject_title', 'AutoProject title'],
   ['summary', 'Summary'],

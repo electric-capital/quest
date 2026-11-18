@@ -165,26 +165,26 @@ export const AutoProjectUpdates = forwardRef<
         </h2>
         {count > 0 && <span className="autoproject-card-meta">{count}</span>}
         {runList.length + (pendingStart ? 1 : 0) > 1 && (
-        <div className="autoproject-card-actions">
-          <div className="autoproject-updates-sort" role="group" aria-label="Sort updates">
-            <button
-              type="button"
-              className="autoproject-updates-sort-option"
-              aria-pressed={order === 'oldest'}
-              onClick={() => onOrderChange('oldest')}
-            >
-              Oldest first
-            </button>
-            <button
-              type="button"
-              className="autoproject-updates-sort-option"
-              aria-pressed={order === 'recent'}
-              onClick={() => onOrderChange('recent')}
-            >
-              Recent first
-            </button>
+          <div className="autoproject-card-actions">
+            <div className="autoproject-updates-sort" role="group" aria-label="Sort updates">
+              <button
+                type="button"
+                className="autoproject-updates-sort-option"
+                aria-pressed={order === 'oldest'}
+                onClick={() => onOrderChange('oldest')}
+              >
+                Oldest first
+              </button>
+              <button
+                type="button"
+                className="autoproject-updates-sort-option"
+                aria-pressed={order === 'recent'}
+                onClick={() => onOrderChange('recent')}
+              >
+                Recent first
+              </button>
+            </div>
           </div>
-        </div>
         )}
       </div>
       <div className="autoproject-card-body">

@@ -235,9 +235,9 @@ function AppContent() {
           )}
         </div>
       ) : autoprojectsRoute ? (
-        // Full takeover: no RightPanel beside the AutoProject views. The AutoProject page
-        // opens its own detail panel (a run, the brief History, the
-        // instructions) beside its main column.
+        // Full takeover: no RightPanel beside the AutoProject views. The
+        // AutoProject page opens its own detail panel (a run or the brief
+        // History) beside its main column.
         <div className="main-content docs-main">
           <AutoProjectsMain route={autoprojectsRoute} enabled={autoprojectsEnabled} />
         </div>

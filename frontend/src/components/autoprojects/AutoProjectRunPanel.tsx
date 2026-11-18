@@ -7,6 +7,7 @@ import { formatTimestamp } from '../../utils/formatters'
 import { ChatPanel } from '../ChatPanel'
 import { FileBrowser } from '../FileBrowser'
 import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
+import { isActiveRunStatus } from './autoprojectComposerState'
 import { AutoProjectDetailPanel } from './AutoProjectDetailPanel'
 import { AutoProjectRunError } from './AutoProjectRunError'
 import { AutoProjectRunPanelContext, type AutoProjectRunPanelContextValue } from './AutoProjectRunPanelContext'
@@ -30,24 +31,26 @@ function autoprojectRunStatusLabel(run: Pick<AutoProjectRun, 'status' | 'handoff
 type RunPanelTab = 'transcript' | 'notes' | 'files'
 
 /**
- * A run's transcript in the AutoProject page's detail panel (AutoProjectDetailPanel),
- * opened by "View run" on its update or by the run URL
- * (/autoprojects/<id>/runs/<conversation id>, which AutoProjectPage maps to this panel).
+ * A run's transcript in the AutoProject page's detail panel
+ * (AutoProjectDetailPanel), opened by "View details" on its update or by the
+ * run URL (/autoprojects/<id>/runs/<conversation id>, which AutoProjectPage
+ * maps to this panel).
  *
- * Header: "Run N" with the run's live status and start time; a failed
- * run's error (AutoProjectRunError, one line with "Show details") or a stopped
- * run's line sits above the transcript. Two tabs under the header:
+ * Header: "Update N" with the run's live status and start time; a failed
+ * run's error (AutoProjectRunError, one line with "Show details") or a
+ * stopped run's line sits above the transcript. Tabs under the header:
  *
  * - Transcript: ChatPanel for the run's conversation, read-only through its
- *   `autoproject` origin ("This is one run of an AutoProject. Continue in the AutoProject."), its
- *   own header suppressed. AutoProjectRunPanelContext hands the transcript's
- *   `autoproject_question` rows the AutoProject id and the run's questions as last
- *   listed, so a pending question is answerable here; approval and connect
- *   cards resolve through their own endpoints, as in any chat.
+ *   `autoproject` origin (its notice line "This is the work behind one update
+ *   of an AutoProject. Continue in the AutoProject."), its own header
+ *   suppressed. AutoProjectRunPanelContext hands the transcript's
+ *   `autoproject_question` rows the AutoProject id and the run's questions as
+ *   last listed, so a pending question is answerable here; approval and
+ *   connect cards resolve through their own endpoints, as in any chat.
  * - Handoff notes (only for a finished run that left notes): what the run
  *   handed to the next one, as markdown in the run's workspace context
- *   (`autoproject://` links open in the page's viewer, `onOpenFile`). The main
- *   column no longer shows them.
+ *   (`autoproject://` links open in the page's viewer, `onOpenFile`). Only
+ *   this panel shows them.
  * - Chat Files: the run's own workspace (FileBrowser), with the page's
  *   Copy / Move row actions to the AutoProject files (`copy`, AutoProjectPage's
  *   useWorkspaceCopy, which also gives the main column's AutoProject files card
@@ -125,8 +128,7 @@ export function AutoProjectRunPanel({
     )
   }
 
-  const notes =
-    run.status !== 'running' && run.status !== 'waiting' && run.notes?.trim() ? run.notes : null
+  const notes = !isActiveRunStatus(run.status) && run.notes?.trim() ? run.notes : null
   const shownTab = tab === 'notes' && !notes ? 'transcript' : tab
 
   const ended =

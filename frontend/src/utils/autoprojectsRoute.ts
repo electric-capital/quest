@@ -3,12 +3,13 @@
  * view is showing (no NavigationContext state), as for Quest Docs and Quest
  * Tables (utils/docsRoute.ts, utils/tablesRoute.ts):
  *
- *   /autoprojects                               AutoProjects list (unarchived)
- *   /autoprojects?archived=true                 Archived AutoProjects
- *   /autoprojects/new                           New AutoProject (creates the AutoProject on first send)
- *   /autoprojects/<id>                          AutoProject page
- *   /autoprojects/<id>/runs/<conversation id>   AutoProject page with that run's transcript
- *                                        open in its detail panel
+ *   /autoprojects                              AutoProjects list (unarchived)
+ *   /autoprojects?archived=true                Archived AutoProjects
+ *   /autoprojects/new                          New AutoProject (creates the
+ *                                              AutoProject on first send)
+ *   /autoprojects/<id>                         AutoProject page
+ *   /autoprojects/<id>/runs/<conversation id>  AutoProject page with that run's
+ *                                              transcript open in its detail panel
  *
  * `new` is reserved and never an AutoProject id. Any other shape is not an AutoProjects
  * route. The server serves the SPA for all of these (quest.py
@@ -27,7 +28,10 @@ const AUTOPROJECTS_PREFIX = '/autoprojects'
 const NEW_SEGMENT = 'new'
 const RUNS_SEGMENT = 'runs'
 
-/** Shape of an AutoProject or conversation id in the URL: uuid-like, nothing that could change a path. */
+/**
+ * Shape of an AutoProject or conversation id in the URL: uuid-like, nothing
+ * that could change a path.
+ */
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
@@ -46,8 +50,8 @@ function decodeId(segment: string): string | null {
 }
 
 /**
- * Parse a location into an AutoProjects route, or null when the location is not a
- * AutoProjects URL. `search` is `location.search` (with or without the leading
+ * Parse a location into an AutoProjects route, or null when the location is not
+ * an AutoProjects URL. `search` is `location.search` (with or without the leading
  * "?"); only the list view reads it (`archived=true`, any other value =
  * the unarchived list).
  */
@@ -96,7 +100,10 @@ export function autoprojectPath(autoprojectId: string): string {
   return `${AUTOPROJECTS_PREFIX}/${encodeURIComponent(autoprojectId)}`
 }
 
-/** URL of an AutoProject's page with one run open in its detail panel, by the run's conversation id. */
+/**
+ * URL of an AutoProject's page with one run open in its detail panel, by the
+ * run's conversation id.
+ */
 export function autoprojectRunPath(autoprojectId: string, conversationId: string): string {
   return `${autoprojectPath(autoprojectId)}/${RUNS_SEGMENT}/${encodeURIComponent(conversationId)}`
 }

@@ -1,8 +1,9 @@
 /**
  * Unsent composer text of the AutoProjects composers, per draft key
- * (AUTOPROJECT_DRAFT_KEY for the New AutoProject page, autoprojectDraftKey(autoprojectId) for an
- * AutoProject's page; constants/drafts.ts), so leaving an AutoProject and coming back keeps what was
- * typed there.
+ * (AUTOPROJECT_DRAFT_KEY for the New AutoProject page,
+ * autoprojectDraftKey(autoprojectId) for an AutoProject's page;
+ * constants/drafts.ts), so leaving an AutoProject and coming back keeps
+ * what was typed there.
  *
  * Held in memory and mirrored to sessionStorage, so a tab reload keeps the
  * drafts too while other tabs and sessions never see them. Every storage

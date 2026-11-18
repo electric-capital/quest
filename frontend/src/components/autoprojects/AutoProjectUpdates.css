@@ -1,6 +1,6 @@
-/* AutoProjectUpdates, AutoProjectRunEntry and AutoProjectActivityLine -- the Updates card of
- * the AutoProject page's main column (AutoProjectPage.css owns the page frame, the card
- * chrome and the composer footer).
+/* AutoProjectUpdates, AutoProjectRunEntry and AutoProjectActivityLine -- the Updates
+ * card of the AutoProject page's main column (AutoProjectPage.css owns the page
+ * frame, the card chrome and the composer block).
  *
  * Every run is an update, in the viewer's sort order, divided by a rule;
  * the one whose transcript the detail panel shows is marked (`.is-open`).

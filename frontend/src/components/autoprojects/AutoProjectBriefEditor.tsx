@@ -19,9 +19,10 @@ interface MergeText {
 }
 
 /**
- * The brief editor (AutoProjectBrief's edit mode, in place in the main column): a monospace markdown
- * textarea (focused on open) with an `n / 12,000` counter (AutoProjectCharCounter:
- * no truncation, Save disabled over the cap), Save and Cancel.
+ * The brief editor (AutoProjectBrief's edit mode, in place in the main
+ * column): a monospace markdown textarea (focused on open) with an
+ * `n / 12,000` counter (AutoProjectCharCounter: no truncation, Save disabled
+ * over the cap), Save and Cancel.
  *
  * Concurrency. Save sends `putAutoProjectBrief(draft, base.version)`, where the
  * base is the version the edit started from, or the newer version the user

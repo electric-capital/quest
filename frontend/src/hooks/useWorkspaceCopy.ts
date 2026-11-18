@@ -55,7 +55,10 @@ export interface OverwritePrompt {
 export interface WorkspaceCopy {
   /** Row actions for the Chat Files card; undefined without both spaces. */
   chatRowActions?: (row: FileRowContext) => FileRowAction[];
-  /** Row actions for the shared space's card (Project Files / AutoProject files); undefined without both spaces. */
+  /**
+   * Row actions for the shared space's card (Project Files / AutoProject
+   * files); undefined without both spaces.
+   */
   sharedRowActions?: (row: FileRowContext) => FileRowAction[];
   notices: Record<CopyCard, WorkspaceCopyNotice | null>;
   dismissNotice: (card: CopyCard) => void;
@@ -74,7 +77,10 @@ const SPACE_LABEL: Record<CopyCard, string> = {
   autoproject: 'AutoProject files',
 };
 
-/** Row action wording per destination ("Copy to project", "Move to chat", "Copy to AutoProject"). */
+/**
+ * Row action wording per destination ("Copy to project", "Move to chat", "Copy
+ * to AutoProject").
+ */
 const ACTION_NOUN: Record<CopyCard, string> = {
   conversation: 'chat',
   project: 'project',

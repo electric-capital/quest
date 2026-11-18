@@ -21,7 +21,7 @@ import { AutoProjectRunPanel } from './AutoProjectRunPanel'
 import { AutoProjectLoadError, AutoProjectNotFound, AutoProjectViewLoading } from './AutoProjectViewState'
 
 /**
- * Router state on a run URL pushed by this page ("View run"): closing the
+ * Router state on a run URL pushed by this page ("View details"): closing the
  * panel then goes back in history instead of pushing the AutoProject URL, so
  * Back and the close button agree.
  */
@@ -56,9 +56,9 @@ interface ViewerFile {
  * two views at a time, beside the main column on desktop and as a
  * full-screen view with "Back to AutoProject" on phones:
  *
- * - a run's transcript (AutoProjectRunPanel): "View run" on an update. The run is
- *   in the URL (`runConversationId`), so run links, the inbox, the
- *   `/chats/<run id>` redirect, reload and Back all work; "View run" pushes
+ * - a run's transcript (AutoProjectRunPanel): "View details" on an update. The run
+ *   is in the URL (`runConversationId`), so run links, the inbox, the
+ *   `/chats/<run id>` redirect, reload and Back all work; "View details" pushes
  *   the run URL (switching from another run replaces it), and closing goes
  *   back when this page pushed it, else replaces it with the AutoProject URL. A
  *   run that is not this AutoProject's shows the panel's not-found state.
@@ -337,7 +337,10 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
   )
 }
 
-/** The AutoProject files card's count: what the workspace root holds (nothing while empty or unknown). */
+/**
+ * The AutoProject files card's count: what the workspace root holds (nothing
+ * while empty or unknown).
+ */
 function autoprojectFilesSummary(rootEntryCount: number | null): string {
   if (rootEntryCount === null || rootEntryCount === 0) return ''
   return `${rootEntryCount} item${rootEntryCount === 1 ? '' : 's'}`

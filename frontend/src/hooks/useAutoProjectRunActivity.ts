@@ -19,8 +19,9 @@
  * `subscription_expired` re-sends the subscribe at once without another
  * hold (`resubscribe`; the ack's catch-up covers the gap).
  *
- * Catch-up. On every `subscribed` ack: a `catchup` ack's message bodies are applied directly; then, while no label
- * has been derived yet, the last TAIL_WINDOW rows are fetched
+ * Catch-up. On every `subscribed` ack: a `catchup` ack's message bodies are
+ * applied directly; then, while no label has been derived yet, the last
+ * TAIL_WINDOW rows are fetched
  * (`GET /conversations/{id}/tail?after_seq=current_seq - TAIL_WINDOW`), else
  * only the rows after the highest seq seen, when the ack reports newer
  * ones. Each `message_appended` (and a per-conversation `resync`) fetches

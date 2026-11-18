@@ -253,7 +253,10 @@ function bareSource(ctx: MarkdownWorkspaceContextValue): FileSource | null {
   return null;
 }
 
-/** The space a `chat://` / `proj://` / `autoproject://` reference names, when the context knows its id. */
+/**
+ * The space a `chat://` / `proj://` / `autoproject://` reference names, when
+ * the context knows its id.
+ */
 function refSource(ref: WorkspaceRef, ctx: MarkdownWorkspaceContextValue): FileSource | null {
   switch (ref.scheme) {
     case 'chat':

@@ -12,7 +12,7 @@ import { AutoProjectPage } from './AutoProjectPage'
  * page. A run URL is the AutoProject page with that run open in its detail panel;
  * the page is keyed by AutoProject id only, so opening and closing a run (or
  * switching runs) keeps the page and its state, while switching AutoProjects
- * starts from a fresh one. Lasting routing glue, not a placeholder.
+ * starts from a fresh one.
  */
 export function AutoProjectsMain({ route, enabled }: { route: AutoProjectsRoute; enabled: boolean }) {
   if (!enabled) return <AutoProjectsGateClosed />
@@ -22,10 +22,13 @@ export function AutoProjectsMain({ route, enabled }: { route: AutoProjectsRoute;
     case 'new':
       return <NewAutoProjectPage />
     case 'page':
-      return <AutoProjectPage key={route.autoprojectId} autoprojectId={route.autoprojectId} runConversationId={null} />
     case 'run':
       return (
-        <AutoProjectPage key={route.autoprojectId} autoprojectId={route.autoprojectId} runConversationId={route.conversationId} />
+        <AutoProjectPage
+          key={route.autoprojectId}
+          autoprojectId={route.autoprojectId}
+          runConversationId={route.kind === 'run' ? route.conversationId : null}
+        />
       )
   }
 }

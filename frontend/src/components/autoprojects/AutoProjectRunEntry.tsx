@@ -293,7 +293,7 @@ export function AutoProjectRunRequest({ prompt }: { prompt: string }) {
 }
 
 /**
- * The finished run's "more" menu (one item, "Delete entry"), following the
+ * The finished run's "more" menu (one item, "Delete update"), following the
  * conversation header's menu: the toggle stops propagation and any outside
  * click closes it; Escape closes it and returns focus to the toggle.
  */

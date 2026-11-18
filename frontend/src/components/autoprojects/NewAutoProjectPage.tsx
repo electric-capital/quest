@@ -19,8 +19,10 @@ import {
   type AutoProjectComposerSubmission,
 } from './autoprojectComposerSend'
 
-
-/** Create refusals about the model alone: retried without it, so they never block the AutoProject. */
+/**
+ * Create refusals about the model alone: retried without it, so they never
+ * block the AutoProject.
+ */
 const MODEL_REFUSALS = new Set(['model_not_allowed', 'invalid_model', 'invalid_thinking_effort'])
 
 /**

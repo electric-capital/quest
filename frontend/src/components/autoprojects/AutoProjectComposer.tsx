@@ -50,7 +50,10 @@ import { Composer } from '../Composer';
 import type { AutoProjectComposerSubmission } from './autoprojectComposerSend';
 
 export interface AutoProjectComposerProps {
-  /** The draft key (AUTOPROJECT_DRAFT_KEY, or autoprojectDraftKey(autoprojectId) on an AutoProject's page). */
+  /**
+   * The draft key (AUTOPROJECT_DRAFT_KEY, or autoprojectDraftKey(autoprojectId)
+   * on an AutoProject's page).
+   */
   draftKey: string;
   onSubmit: (submission: AutoProjectComposerSubmission) => void;
   /** A submit is in flight: the input is locked, no Stop. */

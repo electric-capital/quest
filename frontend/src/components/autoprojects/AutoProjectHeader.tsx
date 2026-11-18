@@ -4,20 +4,20 @@
  * Same interaction model as DocHeader / ConversationHeader: the title plus a
  * chevron open a small dropdown (`role="menu"`, closed by an outside click or
  * Escape), single-key hints act while it is open, and Rename swaps the title
- * for an inline input. Items (spec 8.3: title, archive and delete live here,
- * not in the panel):
+ * for an inline input. Items (title, archive and delete live here, not in
+ * the detail panel):
  *
  * - Rename (R): Enter or blur saves through PATCH /autoprojects/{id}, Escape
  *   cancels; an empty or unchanged title cancels. A 400 `invalid_title`
  *   keeps the input open with the server's message under it; blurring away
  *   from the refused title gives up instead of resubmitting it.
- * - Archive (A) on an unarchived AutoProject, disabled while a run is active (the
- *   server refuses with 409 `autoproject_run_active`, still handled since the shown
- *   state can lag); Unarchive (U) on an archived one (409
+ * - Archive (A) on an unarchived AutoProject, disabled while a run is active
+ *   (the server refuses with 409 `autoproject_run_active`, still handled
+ *   since the shown state can lag); Unarchive (U) on an archived one (409
  *   `autoprojects_cap_reached`).
- * - Delete (D), behind a danger confirm with the AutoProjects list's wording; on
- *   success the page navigates to the AutoProjects list (replace: the AutoProject route
- *   would 404), failures show in the dialog.
+ * - Delete (D), behind a danger confirm with the AutoProjects list's
+ *   wording; on success the page navigates to the AutoProjects list
+ *   (replace: the AutoProject route would 404), failures show in the dialog.
  *
  * The "Archived" chip sits beside the title. Writes hand the returned AutoProject
  * to `onAutoProjectDetail` (useAutoProject.applyDetail) rather than waiting for the
@@ -61,8 +61,6 @@ import './AutoProjectHeader.css'
 
 const NOTICE_MS = 5000
 const ARCHIVED_NOTICE = 'AutoProject archived. It is hidden from the sidebar and takes no new prompts.'
-const CAP_REACHED_FALLBACK =
-  'You have reached the limit of active AutoProjects; archive or delete another AutoProject first.'
 
 const RUN_ACTIVE_MESSAGE =
   'An update is still in progress. Stop it or wait for it to finish before archiving.'
@@ -87,7 +85,10 @@ export type AutoProjectHeaderJumpTarget = 'brief' | 'latest'
 
 /** The header's jump button (AutoProjectMainColumn owns the scroller it moves). */
 export interface AutoProjectHeaderJump {
-  /** `latest` while the newest update is out of view, `brief` once scrolled down with it in view. */
+  /**
+   * `latest` while the newest update is out of view, `brief` once scrolled down
+   * with it in view.
+   */
   target: AutoProjectHeaderJumpTarget
   onJump: (target: AutoProjectHeaderJumpTarget) => void
   /** On "Latest": a run is working, or the AutoProject has an update not yet seen. */
@@ -99,7 +100,7 @@ export interface AutoProjectHeaderJump {
 export interface AutoProjectHeaderProps {
   autoproject: AutoProject
   /** An AutoProject returned by rename / archive / unarchive (useAutoProject.applyDetail). */
-  onAutoProjectDetail?: (autoproject: AutoProject) => void
+  onAutoProjectDetail: (autoproject: AutoProject) => void
   /** The jump between the brief and the newest update; none while both are in view. */
   jump?: AutoProjectHeaderJump
 }
@@ -248,7 +249,7 @@ export function AutoProjectHeader({ autoproject, onAutoProjectDetail, jump }: Au
       setRenameSaving(true)
       try {
         const updated = await updateAutoProject(autoproject.id, { title })
-        onAutoProjectDetail?.(updated)
+        onAutoProjectDetail(updated)
         restoreTitleFocusRef.current = fromKeyboard
         setRenaming(false)
         setRenameValue('')
@@ -282,14 +283,12 @@ export function AutoProjectHeader({ autoproject, onAutoProjectDetail, jump }: Au
       setArchiving(true)
       try {
         const updated = action === 'archive' ? await archiveAutoProject(autoproject.id) : await unarchiveAutoProject(autoproject.id)
-        onAutoProjectDetail?.(updated)
+        onAutoProjectDetail(updated)
         if (action === 'archive') showNotice(ARCHIVED_NOTICE, 'status')
       } catch (err) {
         const code = apiErrorCode(err)
         if (code === 'autoproject_run_active') {
           showNotice(RUN_ACTIVE_MESSAGE, 'error')
-        } else if (code === 'autoprojects_cap_reached') {
-          showNotice(errorMessage(err, CAP_REACHED_FALLBACK), 'error')
         } else {
           const verb = action === 'archive' ? 'archived' : 'unarchived'
           showNotice(errorMessage(err, `The AutoProject could not be ${verb}.`), 'error')

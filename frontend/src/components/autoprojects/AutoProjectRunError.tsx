@@ -22,8 +22,8 @@ export function summarizeRunError(error: string): { line: string; truncated: boo
 }
 
 /**
- * A failed run's error (its update on the AutoProject page and its run panel): "Run failed: <one
- * line>", and when the raw text (often a long provider error) is longer
+ * A failed run's error (its update on the AutoProject page and its run
+ * panel): "Failed: <one line>", and when the raw text (often a long provider error) is longer
  * than that line, a "Show details" toggle that reveals the whole text in a
  * bounded, scrollable block. `role="alert"` is left to the caller's
  * context: the updates render finished runs, so it stays a plain line.

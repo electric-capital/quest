@@ -6,7 +6,7 @@ import './AutoProjectViewState.css'
 /**
  * Centered loading / not-found / error notices shared by the AutoProjects
  * views (AutoProjectPage, AutoProjectsListView), styled like the doc and
- * table viewers' states. Not a placeholder: later phases keep using it.
+ * table viewers' states.
  *
  * `delayed` (the loading states, AutoProjectViewLoading) fades the notice in only
  * after a short delay (AutoProjectViewState.css), so a fast load shows an empty
@@ -25,7 +25,10 @@ export function AutoProjectViewLoading({ text }: { text: string }) {
   )
 }
 
-/** An AutoProject that does not exist, was deleted or is someone else's, with a link to the AutoProjects list. */
+/**
+ * An AutoProject that does not exist, was deleted or is someone else's, with a
+ * link to the AutoProjects list.
+ */
 export function AutoProjectNotFound() {
   return (
     <AutoProjectViewState>

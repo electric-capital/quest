@@ -22,11 +22,7 @@ export interface AutoProjectDetailPanelProps {
   meta?: ReactNode
   /** Controls under the heading row (the run panel's Transcript / Chat Files tabs). */
   toolbar?: ReactNode
-  /**
-   * Close the panel: the close (desktop) or back (phone) button, and
-   * Escape. The page decides whether it closes at once or first asks to
-   * discard an unsaved draft inside (AutoProjectPage).
-   */
+  /** Close the panel: the close (desktop) or back (phone) button, and Escape. */
   onClose: () => void
   /**
    * `scroll`: the body scrolls as a whole (History); `fill`:

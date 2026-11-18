@@ -70,8 +70,9 @@ interface SidebarProps {
   onConversationSelect: (id: string, projectId?: string | null, opts?: { implicit?: boolean }) => void;
   onNewConversation: (id: string, projectId?: string | null) => void;
   // Called after the Sidebar navigates to a view that is not a conversation
-  // (an AutoProject, doc or table, an AutoProjects list, the All Docs / All Tables list): the host closes its
-  // drawer on phone. The desktop layout passes nothing.
+  // (an AutoProject, doc or table, an AutoProjects list, the All Docs / All
+  // Tables list): the host closes its drawer on phone. The desktop layout
+  // passes nothing.
   onNavigateAway?: () => void;
 }
 

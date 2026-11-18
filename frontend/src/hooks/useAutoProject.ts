@@ -24,11 +24,11 @@
  * during it sets a dirty flag and one more fetch runs when it lands, never
  * superseding it (under a burst, superseding would drop every response).
  *
- * The brief panel rule "re-fetch the brief only when brief_version moved"
- * holds without a separate brief fetch: the detail always carries the
- * brief, and consumers key their draft reset on `autoproject.brief_version`, so an
- * unrelated re-fetch (a run status change, a rename) never clobbers an
- * edit in progress.
+ * The rule "re-fetch the brief only when brief_version moved" holds without
+ * a separate brief fetch: the detail always carries the brief, and
+ * consumers key their draft reset on `autoproject.brief_version`, so an
+ * unrelated re-fetch (a run status change, a rename) never clobbers an edit
+ * in progress.
  *
  * Every loaded detail's unread seqs are merged into the unread store.
  */

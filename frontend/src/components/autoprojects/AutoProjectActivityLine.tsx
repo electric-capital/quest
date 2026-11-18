@@ -8,7 +8,7 @@ import '../ChatPanel.css'
  * working indicator (the chat's typing dots while the run works, a
  * still "needs you" dot while it waits), the label of what the run is doing
  * now, the elapsed time since the run started (ticking every second, `m:ss`
- * or `h:mm:ss`) and Stop. "View run" sits on the update's header row
+ * or `h:mm:ss`) and Stop. "View details" sits on the update's header row
  * (AutoProjectRunEntry).
  *
  * The label is single-line with an ellipsis and the elapsed time has a fixed

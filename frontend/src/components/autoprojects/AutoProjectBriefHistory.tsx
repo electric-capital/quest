@@ -99,7 +99,7 @@ function BriefDiff({ before, after }: { before: string; after: string }) {
  * the panel's, which closes).
  *
  * List: `listAutoProjectBriefVersions`, newest first: "Version N", its source
- * ("Run N", "Edited by you", "Restored from version n"), when it was
+ * ("Update N", "Edited by you", "Restored from version n"), when it was
  * written, and the excerpt; the row whose version is `autoproject.brief_version`
  * is marked Current. Fetched on open and again ONLY when
  * `autoproject.brief_version` moves while History is open (every write adds a

@@ -86,7 +86,7 @@ export interface FileRowAction {
 interface FileBrowserProps {
   /**
    * The file space browsed: a conversation's own workspace (card titled
-   * "Chat Files"), a project's shared workspace ("Project Files") or a
+   * "Chat Files"), a project's shared workspace ("Project Files") or an
    * AutoProject's workspace ("AutoProject files"). Null renders the no-conversation empty
    * state.
    */

@@ -123,7 +123,7 @@ const REASON_MESSAGES: Record<string, string> = {
 
 /**
  * Start a run of the AutoProject with `opts.message` as its prompt. Resolves once
- * the server has stored the message (the run is live); rejects with a
+ * the server has stored the message (the run is live); rejects with an
  * AutoProjectRunStartError only.
  */
 export async function startAutoProjectRun(

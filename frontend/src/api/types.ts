@@ -2083,7 +2083,10 @@ export interface AutoProjectListRow {
   read_seq: number;
 }
 
-/** Who wrote the current brief: 'ui', `run:<run id>`, `restore:<version>`, or null (never written). */
+/**
+ * Who wrote the current brief: 'ui', `run:<run id>`, `restore:<version>`, or
+ * null (never written).
+ */
 export type AutoProjectBriefSource = string | null;
 
 /** GET /autoprojects/{id} (also returned by create, PATCH, archive and unarchive). */

@@ -972,7 +972,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   AutoProjects section (AutoProjects): the user's unarchived AutoProjects between Projects
+   AutoProjects section: the user's unarchived AutoProjects between Projects
    and Docs (main panel only). It is a .docs-section with .doc-row rows, so
    spacing, rows, focus rings and the phone drawer rules above apply; the
    rules here add the header's "+" (New AutoProject), the per-row status slot and

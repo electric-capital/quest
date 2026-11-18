@@ -131,7 +131,7 @@ export function useAutoProjectRun(autoprojectId: string, conversationId: string,
     void refresh();
   }, [refresh, commit]);
 
-  // Re-read the run now, or once the fetch in flight lands (never for a
+  // Re-read the run now, or once the fetch in flight lands (never for an
   // AutoProject this tab is deleting).
   const requestRefresh = useCallback(() => {
     if (isAutoProjectDeleting(autoprojectId)) return;
@@ -139,8 +139,9 @@ export function useAutoProjectRun(autoprojectId: string, conversationId: string,
     else void refreshRef.current();
   }, [autoprojectId]);
 
-  // An autoproject_changed of this AutoProject (useAutoProject resets changeSeq to 0 on an AutoProject
-  // change, so a new requestRefresh alone never re-reads here).
+  // An autoproject_changed of this AutoProject (useAutoProject resets
+  // changeSeq to 0 on an AutoProject change, so a new requestRefresh alone
+  // never re-reads here).
   useEffect(() => {
     if (changeSeq === 0) return;
     requestRefresh();

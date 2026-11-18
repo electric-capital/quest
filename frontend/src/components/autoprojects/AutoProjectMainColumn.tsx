@@ -159,7 +159,10 @@ export function AutoProjectMainColumn({
   autoprojectId: string
   autoproject: AutoProject
   runs: AutoProjectRunsView
-  /** Merge an AutoProject returned by unarchive, the default-model PATCH or a header action into the page's view. */
+  /**
+   * Merge an AutoProject returned by unarchive, the default-model PATCH or a
+   * header action into the page's view.
+   */
   onAutoProjectDetail: (autoproject: AutoProject) => void
   /** The page's router-state notice, shown under the header. */
   notice?: ReactNode

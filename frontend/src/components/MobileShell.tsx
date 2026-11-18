@@ -173,7 +173,8 @@ export function MobileShell({
     setWorkspaceOpen(false)
   }, [tablesRouteKey])
 
-  // Same for an AutoProjects view (a list, New AutoProject, an AutoProject page or one of its runs).
+  // Same for an AutoProjects view (a list, New AutoProject, an AutoProject page
+  // or one of its runs).
   const autoprojectsRouteKey = autoprojectsRoute
     ? autoprojectsRoute.kind === 'list'
       ? `list:${autoprojectsRoute.archived ? 'archived' : 'active'}`

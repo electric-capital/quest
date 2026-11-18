@@ -13,7 +13,10 @@ export type AutoProjectUpdatesOrder = 'oldest' | 'recent'
 
 const ORDER_STORAGE_KEY = 'quest_autoproject_updates_order'
 
-/** The viewer's stored sort order (one preference for every AutoProject); recent first by default. */
+/**
+ * The viewer's stored sort order (one preference for every AutoProject); recent
+ * first by default.
+ */
 export function readAutoProjectUpdatesOrder(): AutoProjectUpdatesOrder {
   try {
     return localStorage.getItem(ORDER_STORAGE_KEY) === 'oldest' ? 'oldest' : 'recent'

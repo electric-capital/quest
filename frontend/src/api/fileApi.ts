@@ -6,7 +6,7 @@
  * Files" card, and every inline-image / attachment path in chat), a
  * project's shared workspace (`/projects/{pid}/files...`, the "Project
  * Files" card) and an AutoProject's workspace, shared by every run of the
- * AutoProject (`/autoprojects/{tid}/files...`, the "AutoProject files" card). Every function
+ * AutoProject (`/autoprojects/{id}/files...`, the "AutoProject files" card). Every function
  * takes a `FileTarget`: a `FileSource`, or a bare string meaning a
  * conversation id -- the historical signature the many conversation-space
  * callers (Composer, HomeComposer, MarkdownImage, previews) keep using. The
@@ -178,7 +178,10 @@ function toSource(target: FileTarget): FileSource {
   return typeof target === 'string' ? conversationSource(target) : target;
 }
 
-/** Stable per-space key (`conversation:<id>` / `project:<id>` / `autoproject:<id>`) for UI state maps. */
+/**
+ * Stable per-space key (`conversation:<id>` / `project:<id>` /
+ * `autoproject:<id>`) for UI state maps.
+ */
 export function fileSourceKey(source: FileSource): string {
   return `${source.kind}:${source.id}`;
 }
@@ -520,7 +523,7 @@ export function saveProjectFileToDrive(
 // ---------------------------------------------------------------------------
 // Copy / move between a conversation's workspace and the shared space it
 // belongs to: a project conversation and its project
-// (POST /conversations/{cid}/files/copy-to-project|copy-from-project), a
+// (POST /conversations/{cid}/files/copy-to-project|copy-from-project), an
 // AutoProject run and its AutoProject (.../copy-to-autoproject|copy-from-autoproject).
 // ---------------------------------------------------------------------------
 
@@ -591,7 +594,10 @@ export function copyFileToAutoProject(conversationId: string, options: CopyEntry
   return copyBetweenSpaces(conversationId, 'copy-to-autoproject', options);
 }
 
-/** The reverse of `copyFileToAutoProject`: AutoProject workspace -> the run's conversation workspace. */
+/**
+ * The reverse of `copyFileToAutoProject`: AutoProject workspace -> the run's
+ * conversation workspace.
+ */
 export function copyFileFromAutoProject(conversationId: string, options: CopyEntryOptions): Promise<CopyEntryResponse> {
   return copyBetweenSpaces(conversationId, 'copy-from-autoproject', options);
 }

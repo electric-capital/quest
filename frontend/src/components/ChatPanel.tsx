@@ -686,7 +686,7 @@ export const ChatPanel = React.memo(function ChatPanel({ conversationId, onProje
 
   // Lets the shared markdown renderer resolve `![alt](path.png)` image refs
   // and `[name](path)` links against this conversation's workspace, and
-  // `proj://` / `autoproject://` references against its project or its AutoProject (a
+  // `proj://` / `autoproject://` references against its project or its AutoProject (an
   // AutoProject run) -- see MarkdownImage / MarkdownLink in Message.tsx.
   const conversationProjectId = loadedProject?.conversationId === conversationId ? loadedProject.projectId : null;
   const markdownWorkspaceCtx = useMemo(
