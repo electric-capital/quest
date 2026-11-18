@@ -404,9 +404,18 @@ export function AutoProjectMainColumn({
         })
       }
     }
+    // Pinned (oldest first): reaching the bottom pins; only the reader
+    // scrolling UP unpins. Content growing under a pinned view (an update
+    // opening in, a result streaming) moves the bottom away before the
+    // follow-up scroll lands, and must not count as leaving it.
+    let lastTop = scroller.scrollTop
     const onScroll = () => {
-      const nearBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - NEAR_BOTTOM_PX
-      pinnedRef.current = orderRef.current === 'oldest' && nearBottom && scroller.scrollTop > 0
+      const top = scroller.scrollTop
+      const nearBottom = top + scroller.clientHeight >= scroller.scrollHeight - NEAR_BOTTOM_PX
+      if (orderRef.current !== 'oldest') pinnedRef.current = false
+      else if (nearBottom && top > 0) pinnedRef.current = true
+      else if (top < lastTop - 1) pinnedRef.current = false
+      lastTop = top
       schedule()
     }
     sync()
