@@ -1,6 +1,7 @@
 // FileBrowser per file space: the card title, which routes it calls
 // (conversation vs project), the per-source file_list_changed filter, the
-// per-source navigation/dotfile state, and the rowActions extension point.
+// per-source navigation/dotfile state, the rowActions extension point, and
+// the compact variant used by the AutoProject page's files card.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FileEntry } from '../api/types';
@@ -58,6 +59,7 @@ vi.mock('./FileViewerModal', () => ({
 
 const CHAT: FileSource = { kind: 'conversation', id: 'c1' };
 const PROJECT: FileSource = { kind: 'project', id: 'p1' };
+const AUTOPROJECT: FileSource = { kind: 'autoproject', id: 'ap1' };
 
 const entry = (name: string, type: 'file' | 'folder' = 'file'): FileEntry => ({
   name, type, size: type === 'file' ? 10 : null, lastModified: '2026-10-01T00:00:00Z',
@@ -171,6 +173,30 @@ describe('file_list_changed filter', () => {
     expect(fileListEventMatchesSource(proj, CHAT)).toBe(false);
     expect(fileListEventMatchesSource({ ...conv, conversation_id: 'c2' }, CHAT)).toBe(false);
     expect(fileListEventMatchesSource({ ...proj, project_id: 'p2' }, PROJECT)).toBe(false);
+  });
+
+  it('maps autoproject-scope events to the AutoProject files card only', () => {
+    const ap = { type: 'file_list_changed', scope: 'autoproject', autoproject_id: 'ap1', conversation_id: null };
+    expect(fileListEventMatchesSource(ap, AUTOPROJECT)).toBe(true);
+    expect(fileListEventMatchesSource({ ...ap, autoproject_id: 'ap2' }, AUTOPROJECT)).toBe(false);
+    expect(fileListEventMatchesSource(ap, CHAT)).toBe(false);
+    expect(fileListEventMatchesSource(ap, PROJECT)).toBe(false);
+    // A conversation event carrying the same id is not an AutoProject event.
+    expect(fileListEventMatchesSource({ ...ap, scope: 'conversation' }, AUTOPROJECT)).toBe(false);
+  });
+
+  it('refreshes after a socket reconnect (events published while down are lost)', async () => {
+    renderCards(<FileBrowser source={AUTOPROJECT} compact />);
+    await waitFor(() => expect(mocks.listFiles).toHaveBeenCalledTimes(1));
+    expect(mocks.reconnectHandlers.size).toBe(1);
+
+    vi.useFakeTimers();
+    act(() => {
+      for (const handler of [...mocks.reconnectHandlers]) handler();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(mocks.listFiles).toHaveBeenCalledTimes(2);
+    expect(mocks.listFiles).toHaveBeenLastCalledWith(AUTOPROJECT, '/');
   });
 
   it('refreshes only the card whose space changed', async () => {
@@ -338,5 +364,58 @@ describe('host notice', () => {
     expect(notice.textContent).toContain('Could not copy "a.csv" to Project Files: nope');
     fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss' }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('compact variant', () => {
+  it('has icon Upload and New folder buttons, no card heading and no full-width button row', async () => {
+    serveListing({ 'autoproject:ap1:/': [entry('plan.md')] });
+    const { container } = renderCards(
+      <FileBrowser source={AUTOPROJECT} compact toolbarLead={<span>AutoProject files · 1</span>} />,
+    );
+    await screen.findByText('plan.md');
+    expect(screen.queryByRole('heading')).toBeNull();
+    expect(screen.getByText('AutoProject files · 1')).toBeTruthy();
+    const upload = screen.getByRole('button', { name: 'Upload files' });
+    const newFolder = screen.getByRole('button', { name: 'New folder' });
+    expect(upload.textContent).toBe('');
+    expect(newFolder.textContent).toBe('');
+    expect(container.querySelector('.file-browser-actions')).toBeNull();
+    // At the root: no Back / Forward / Up.
+    expect(screen.queryByTitle('Up one level')).toBeNull();
+    expect(screen.queryByTitle('Back')).toBeNull();
+
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+    fireEvent.click(upload);
+    expect(click).toHaveBeenCalledTimes(1);
+    click.mockRestore();
+  });
+
+  it('shows Up and the path inside a folder', async () => {
+    serveListing({ 'autoproject:ap1:/': [entry('out', 'folder')], 'autoproject:ap1:/out': [entry('a.csv')] });
+    renderCards(<FileBrowser source={AUTOPROJECT} compact />);
+    fireEvent.click(await screen.findByText('out'));
+    await screen.findByText('a.csv');
+    expect(screen.getByTitle('/out').textContent).toBe('/out');
+    fireEvent.click(screen.getByRole('button', { name: 'Up one level' }));
+    await screen.findByText('out');
+  });
+
+  it('has a one-line empty state with an upload button', async () => {
+    renderCards(<FileBrowser source={AUTOPROJECT} compact />);
+    const emptyState = await screen.findByText(/No files yet\. Drop files here or/);
+    expect(within(emptyState).getByRole('button', { name: 'upload' })).toBeTruthy();
+    expect(screen.queryByText(/autoproject:\/\/ paths/)).toBeNull();
+  });
+
+  it('leaves the default card unchanged: heading, button row, multi-line empty state', async () => {
+    const { container } = renderCards(<FileBrowser source={AUTOPROJECT} />);
+    expect(screen.getByRole('heading', { name: 'AutoProject files' })).toBeTruthy();
+    expect(container.querySelector('.file-browser-actions')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Upload Files' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'New Folder' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'New folder' })).toBeNull();
+    expect(await screen.findByText(/Shared across the updates of this AutoProject, as autoproject:\/\/ paths/)).toBeTruthy();
+    expect(screen.getByText('No files yet')).toBeTruthy();
   });
 });
