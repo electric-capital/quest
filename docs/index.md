@@ -41,6 +41,8 @@
 | [dreaming.md](architecture/dreaming.md) | Dreaming: offline reviews of each user's saved memories proposed as inbox suggestions; daemon, pacing, model choice, run ledger |
 | [quest-tables.md](architecture/quest-tables.md) | Quest Tables (in-app typed tables): metadata, columns, table.db, change log and restore, access, service layer, events, prompting, gate |
 | [quest-tables-frontend.md](architecture/quest-tables-frontend.md) | Quest Tables UI: routes and gate, sidebar blocks, All Tables, viewer and grid, filters, schema editor, History drawer, card previews, phone layouts |
+| [autoprojects.md](architecture/autoprojects.md) | AutoProjects: brief, work log and fresh-context runs; data model, run lifecycle, starting context, questions, model tools, files, gate |
+| [autoprojects-frontend.md](architecture/autoprojects-frontend.md) | AutoProjects UI: routes and gate, sidebar section, the AutoProject page, detail panel, composer, live activity, read state |
 | [plugins.md](architecture/plugins.md) | Plugin system: discovery, manifest validation, atomic registration, what a plugin can register, in-tree plugins |
 | [route-dispatch.md](architecture/route-dispatch.md) | Internal route dispatch for tool calls: conversation_id injection, blocked proxy paths |
 | [run-modes.md](architecture/run-modes.md) | Run modes (local, staging, prod): capability flags, zero-credential local mode, dev-config pre-baking, first-run setup pointer |
@@ -76,6 +78,7 @@
 | [project-db-api.md](api/project-db-api.md) | REST endpoints for browsing and deleting project database tables |
 | [quest-docs-api.md](api/quest-docs-api.md) | Quest Docs UI routes: list, create, read, edit, assets, sharing, history, doc notes and the review of note suggestions |
 | [tables-api.md](api/tables-api.md) | Quest Tables caller contract: query language, results, refusal codes, model tools and tiers, the table action requests, the HTTP routes |
+| [autoprojects-api.md](api/autoprojects-api.md) | AutoProjects routes, error codes and shapes, starting a run over the WebSocket, workspace and copy routes, events |
 | [ramp-api.md](api/ramp-api.md) | Ramp spend-management read access via authed_get over per-user OAuth |
 | [projects-api.md](api/projects-api.md) | Project REST endpoints: CRUD, conversion from a conversation, files, archiving, public flag, doc sources |
 | [routines-api.md](api/routines-api.md) | Routine REST endpoints: CRUD, skill auto-loads, optimistic concurrency, cost report |

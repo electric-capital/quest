@@ -8,11 +8,11 @@ All data-directory path constants are centralized in `config/paths.py`. Modules 
 
 | File | Description |
 |------|-------------|
-| `config/paths.py` | Defines `PROJECT_ROOT`, `DATA_DIR`, `DATABASE_PATH`, `CHATS_DIR`, `PROJECTS_DIR`, `DOCS_DIR`, `TABLES_DIR`, `SECRET_KEY_FILE`, `LOG_DIR`, `SERVICE_CREDENTIALS_DIR` |
+| `config/paths.py` | Defines `PROJECT_ROOT`, `DATA_DIR`, `DATABASE_PATH`, `CHATS_DIR`, `PROJECTS_DIR`, `DOCS_DIR`, `TABLES_DIR`, `AUTOPROJECTS_DIR`, `SECRET_KEY_FILE`, `LOG_DIR`, `SERVICE_CREDENTIALS_DIR` |
 | `server_config.json` | Optional `data_dir` key to relocate the data directory outside the source tree |
 | `db/engine.py` | Imports `DATABASE_PATH` from `config/paths` |
 | `auth/config.py` | Imports `SECRET_KEY_FILE` and `PROJECT_ROOT` from `config/paths` |
-| `chat/storage.py` | Imports and re-exports `CHATS_DIR` and `PROJECTS_DIR` from `config/paths` (backward compat); hosts the ONLY id-to-path resolvers (`ChatStorage.get_conversation_dir` / `get_project_dir` / `get_project_db_path` / `get_conversation_workspace_root` / `get_project_workspace_root` / `get_doc_dir` / `get_table_dir`) and `InvalidStorageIdError` |
+| `chat/storage.py` | Imports and re-exports `CHATS_DIR` and `PROJECTS_DIR` from `config/paths` (backward compat); hosts the ONLY id-to-path resolvers (`ChatStorage.get_conversation_dir` / `get_project_dir` / `get_project_db_path` / `get_conversation_workspace_root` / `get_project_workspace_root` / `get_doc_dir` / `get_table_dir` / `get_autoproject_dir` / `get_autoproject_workspace_root`) and `InvalidStorageIdError` |
 | `chat/conversation_access.py` | Ownership-aware accessors for HTTP routes (`require_owned_conversation`, `resolve_owned_workspace`, `require_owned_project`, `resolve_owned_project_workspace`) that fuse the DB ownership lookup with the validated path |
 | `chat/logging_config.py` | Imports `LOG_DIR` from `config/paths` |
 | `quest.py` | Imports `DATA_DIR` from `config/paths` |
@@ -37,13 +37,14 @@ The data directory defaults to `PROJECT_ROOT / "data"` but can be overridden by 
 | `PROJECTS_DIR` | `DATA_DIR / "projects"` | Per-project directories (project workspace, `project.db`) |
 | `DOCS_DIR` | `DATA_DIR / "docs"` | Per-doc directories (`doc.md`, `assets/`, `revisions/`; see [Quest Docs](quest-docs.md)) |
 | `TABLES_DIR` | `DATA_DIR / "tables"` | Per-table directories holding `table.db` (see [Quest Tables](quest-tables.md)) |
+| `AUTOPROJECTS_DIR` | `DATA_DIR / "autoprojects"` | Per-AutoProject directories holding the AutoProject workspace (see [AutoProjects](autoprojects.md)) |
 | `SECRET_KEY_FILE` | `DATA_DIR / "secret_key"` | Cookie signing key file |
 | `LOG_DIR` | `DATA_DIR / "logs"` | Application log files |
 | `SERVICE_CREDENTIALS_DIR` | `DATA_DIR / "service_credentials"` | Per-service upstream credential files (see [Service Credentials](service-credentials.md)) |
 
 ## Conversation, Project, Doc and Table Path Resolution
 
-Turning a `conversation_id` / `project_id` / `doc_id` / `table_id` into an on-disk path happens in exactly one place: the resolvers on `ChatStorage` in `chat/storage.py`. Production code never joins `CHATS_DIR` / `PROJECTS_DIR` / `DOCS_DIR` / `TABLES_DIR` with an id itself (Alembic migrations keep their own historical joins -- they run over trusted rows and directory listings, not request input).
+Turning a `conversation_id` / `project_id` / `doc_id` / `table_id` / AutoProject id into an on-disk path happens in exactly one place: the resolvers on `ChatStorage` in `chat/storage.py`. Production code never joins `CHATS_DIR` / `PROJECTS_DIR` / `DOCS_DIR` / `TABLES_DIR` / `AUTOPROJECTS_DIR` with an id itself (Alembic migrations keep their own historical joins -- they run over trusted rows and directory listings, not request input).
 
 | Resolver | Returns |
 |----------|---------|
@@ -54,11 +55,13 @@ Turning a `conversation_id` / `project_id` / `doc_id` / `table_id` into an on-di
 | `ChatStorage.get_project_workspace_root(project_id)` | `PROJECTS_DIR / project_id / workspace / workspace` -- the project workspace shared by the project's conversations (the doubled segment is the historical layout; not created) |
 | `ChatStorage.get_doc_dir(doc_id)` | `DOCS_DIR / doc_id` (not created; `chat/docs/files.py` gets every doc path through it via `doc_paths()`) |
 | `ChatStorage.get_table_dir(table_id)` | `TABLES_DIR / table_id` (not created) |
+| `ChatStorage.get_autoproject_dir(autoproject_id)` | `AUTOPROJECTS_DIR / autoproject_id` (not created) |
+| `ChatStorage.get_autoproject_workspace_root(autoproject_id)` | `AUTOPROJECTS_DIR / autoproject_id / workspace` -- the AutoProject workspace shared by its runs (not created) |
 
 Every resolver enforces two checks and raises `InvalidStorageIdError` (a `ValueError` subclass, so callers that already treat a bad id as a cache miss or a 4xx keep working):
 
 1. **Canonical id** -- the id must be a single path segment (`Path(id).name == id`): empty, `.`, `..`, embedded separators (`<id>/workspace/cache` -- the vector in security finding #279217) and absolute paths are rejected. No id format beyond that is enforced (UUIDs in production, short names in fixtures).
-2. **Containment** -- the joined path must resolve under the root, which catches a planted `CHATS_DIR/<id>` symlink pointing outside the tree (dangling ones included); the two workspace-root resolvers re-check the full root against the resolved id dir itself (`CHATS_DIR/<id>` / `PROJECTS_DIR/<id>`), so a symlinked `workspace` segment below a real id dir is refused too -- including one pointing at another conversation's or project's workspace (`chats/A/workspace -> chats/B/workspace`). A symlinked data directory itself is fine because the root is resolved first. The plain join, not the resolved path, is what gets returned.
+2. **Containment** -- the joined path must resolve under the root, which catches a planted `CHATS_DIR/<id>` symlink pointing outside the tree (dangling ones included); the workspace-root resolvers re-check the full root against the resolved id dir itself (`CHATS_DIR/<id>` / `PROJECTS_DIR/<id>` / `AUTOPROJECTS_DIR/<id>`), so a symlinked `workspace` segment below a real id dir is refused too -- including one pointing at another conversation's or project's workspace (`chats/A/workspace -> chats/B/workspace`). A symlinked data directory itself is fine because the root is resolved first. The plain join, not the resolved path, is what gets returned.
 
 The workspace roots are what `chat/file_storage.py` functions take (`validate_path(root, rel)`, `copy_entry(src_root, ..., dst_root, ...)` and friends); no caller appends `"workspace"` to a resolver result. There is no resolver that picks a space for the caller: a project conversation has both roots, and every caller names the one it means (the former `get_workspace_path()`, which returned the project workspace for project conversations, and `resolve_owned_project_dir()` no longer exist). The tool handlers reach the roots through `conversation_workspace_dir()` / `project_workspace_dir()` in `chat/gemini_api/tool_handlers/_common.py`, thin wrappers that also create the dir.
 
@@ -78,6 +81,8 @@ Routes that serve conversation- or project-scoped files go through these accesso
 - the project-table routes (`chat/project_db_routes.py`),
 - the Gmail Simple URL-lookup routes, and
 - the Gmail draft route's workspace attachments (`api/gmail/draft_endpoints.py` -- the body-supplied `conversation_id` is ownership-checked before any attachment is read).
+
+The AutoProject routes keep their ownership guard with the feature, because it checks the `autoprojects` gate before ownership: `require_autoproject_for_route()` and `resolve_autoproject_workspace_for_route()` in `chat/autoprojects/http.py` (over `require_owned_autoproject()` in `chat/autoprojects/service.py`) serve the `/autoprojects/{id}/files...` routes and the copy-to-autoproject / copy-from-autoproject routes, with one 404 `autoproject_not_found` for a missing or foreign AutoProject ([AutoProjects](autoprojects.md#invariants)).
 
 The Quest Docs routes (`chat/docs/routes.py` and its sibling `share_routes.py` / `edit_routes.py` / `history_routes.py`) do not use these accessors. Doc visibility and ownership are decided by the Quest Docs access rule (`resolve_doc_access`, see [Quest Docs](quest-docs.md)), and the path still comes only from `get_doc_dir`. The URL-supplied path parts below it are validated before any path is built: asset names by `files._validate_asset_name()`, revision ids by the fullmatch pattern in `chat/docs/history.py` (and they must name a snapshot `files.list_revisions()` currently lists).
 

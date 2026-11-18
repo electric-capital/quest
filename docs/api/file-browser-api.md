@@ -1,17 +1,18 @@
 # File Browser API Documentation
 
-This document describes the File Browser API endpoints for managing files within conversation workspaces and project workspaces.
+This document describes the File Browser API endpoints for managing files within conversation, project and AutoProject workspaces.
 
 ## Overview
 
-The File Browser API provides endpoints for listing, uploading, downloading, creating folders, deleting and copying files in the two workspace spaces the model reaches during tool execution.
+The File Browser API provides endpoints for listing, uploading, downloading, creating folders, deleting and copying files in the workspace spaces the model reaches during tool execution.
 
-Two workspaces are browsable:
+Three workspaces are browsable:
 
 - the **conversation workspace** `data/chats/{id}/workspace/` (`ChatStorage.get_conversation_workspace_root`), for every conversation -- standalone or in a project -- under `/app/api/conversations/{conversation_id}/files`;
-- the **project workspace** `data/projects/{id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root`), shared by every conversation of a project, under `/app/api/projects/{project_id}/files`.
+- the **project workspace** `data/projects/{id}/workspace/workspace/` (`ChatStorage.get_project_workspace_root`), shared by every conversation of a project, under `/app/api/projects/{project_id}/files`;
+- the **AutoProject workspace** `data/autoprojects/{id}/workspace/` (`ChatStorage.get_autoproject_workspace_root`), shared by every run of an [AutoProject](../architecture/autoprojects.md), under `/app/api/autoprojects/{autoproject_id}/files`.
 
-A path passed to one route set resolves only inside that set's workspace; neither falls back to the other space on a miss.
+A path passed to one route set resolves only inside that set's workspace; none falls back to another space on a miss.
 
 ## Key Files
 
@@ -33,7 +34,7 @@ A path passed to one route set resolves only inside that set's workspace; neithe
 | `frontend/src/components/JsonTreeViewer.tsx` | Recursive collapsible tree viewer for JSON files with syntax coloring, expand/collapse toggles, and item count badges; dark/light mode support |
 | `frontend/src/components/JsonTreeViewer.css` | JsonTreeViewer styling (syntax colors, toggle controls, dark/light mode variants) |
 | `frontend/src/components/PdfViewer.tsx` | In-modal pdf.js PDF viewer (thumbnail rail + fit-to-width pages, lazy canvas rendering, self-hosted worker/assets); see [Frontend Architecture](../architecture/frontend.md#right-panel-file-browser-and-project-tables) |
-| `frontend/src/hooks/useWorkspaceCopy.ts` | Copy / Move row actions between the Chat Files and Project Files cards (copy routes, 409 overwrite prompt, per-card notices) |
+| `frontend/src/hooks/useWorkspaceCopy.ts` | Copy / Move row actions between the Chat Files card and the Project Files or AutoProject files card (copy routes, 409 overwrite prompt, per-card notices) |
 | `frontend/src/hooks/useFileBrowser.ts` | State management hook for file browser (includes `uploadFilesWithPaths` for folder uploads, `uploadPercent` state for progress tracking, `deleteItem` for file/folder deletion, `downloadFile` / `downloadFolder` behind the hidden-data download warning, and `createFolder` for creating new folders in the current path) |
 | `frontend/src/api/fileApi.ts` | Frontend API client functions (includes `xhrUpload()` helper for XHR-based uploads with progress callback, `uploadFiles()` and `uploadFilesWithPaths()` with `onProgress` parameter, `fetchFileContent()`, `getFileInfo()`, `deleteFile()`, `downloadFile(target, path, variant)` with the `DownloadVariant` `'original'` / `'sanitized'` choosing `/files/download` or `/files/download-sanitized`, `downloadFolder()`, `createFolder()`, `saveToDrive()`, and `saveBlobToDisk()` -- the temporary-anchor step every workspace download ends with) |
 | `frontend/src/contexts/DownloadWarningContext.tsx`, `frontend/src/hooks/useWorkspaceDownload.ts`, `frontend/src/utils/downloadWarnings.ts` | The hidden-data download warning: every UI download of a non-plain-text file (and every folder zip) is acknowledged in a modal before the fetch; for PNG/JPEG/GIF/WebP the modal offers the sanitized copy first and the original only behind a second checkbox-confirmed dialog -- see [Frontend Architecture -- Workspace Download Warning](../architecture/frontend.md#workspace-download-warning) |
@@ -62,7 +63,7 @@ The mutating routes (upload, composer attachments, delete, create-folder, and th
 
 The publish is a best-effort `bus.publish_to_user(...)` wrapped in try/except via `_publish_file_list_changed` in `chat/file_routes.py`; a publish failure never rolls back the underlying write.
 
-Each route passes `scope` explicitly: the conversation routes publish `scope="conversation"` (project conversations included, with their `project_id` still on the envelope), the project routes `scope="project"` with `conversation_id: null` (so every tab of the project refreshes), and the copy routes one event per scope (`conversation` and `project`, both carrying the conversation id and project id), also when the copy fails with 500 `copy_failed`. See [Realtime Architecture](../architecture/realtime.md#backend-publish-sites-per-user-globals) for the publish sites and [Subscription Protocol](../architecture/realtime.md#subscription-protocol) for the wire envelope.
+Each route passes `scope` explicitly: the conversation routes publish `scope="conversation"` (project conversations included, with their `project_id` still on the envelope), the project routes `scope="project"` with `conversation_id: null` (so every tab of the project refreshes), the AutoProject routes `scope="autoproject"` with `autoproject_id`, and the copy routes one event per scope (`conversation` and `project`, both carrying the conversation id and project id), also when the copy fails with 500 `copy_failed`. See [Realtime Architecture](../architecture/realtime.md#backend-publish-sites-per-user-globals) for the publish sites and [Subscription Protocol](../architecture/realtime.md#subscription-protocol) for the wire envelope.
 
 Endpoints under `/app/api/conversations/{conversation_id}/files` always serve the conversation's own workspace -- project conversations included, never the project workspace -- via `resolve_owned_workspace()` in `chat/conversation_access.py`:
 
@@ -83,6 +84,10 @@ Endpoints under `/app/api/conversations/{conversation_id}/files` always serve th
 
 `GET /app/api/projects/{project_id}/files`, `POST /files/upload`, `GET /files/content`, `GET /files/download`, `GET /files/download-sanitized`, `GET /files/download-folder`, `GET /files/info`, `DELETE /files`, `POST /files/create-folder`, `POST /files/save-to-drive` mirror the conversation routes above with the same handlers and error shapes, over `resolve_owned_project_workspace()` in `chat/conversation_access.py` (404 `not_found` via `require_owned_project` unless the caller owns the project; no other gate). The project root is created on first access, so listing a project that never wrote a file returns an empty list. There is no project composer-attachment route: `pasted/` is conversation scratch.
 
+### AutoProject workspace routes
+
+`GET /app/api/autoprojects/{autoproject_id}/files` and the same nine sub-routes mirror the project workspace routes with the same handlers and error shapes, over `resolve_autoproject_workspace_for_route()` in `chat/autoprojects/http.py`: 403 `autoprojects_disabled` while the gate is closed for the user, then 404 `autoproject_not_found` (one body for a missing and a foreign AutoProject). Archived AutoProjects stay readable and writable here, and the root is created on first access ([AutoProjects API -- Files](autoprojects-api.md#files)).
+
 ### Copy / move routes
 
 `POST /app/api/conversations/{conversation_id}/files/copy-to-project` and `/files/copy-from-project` copy (or, with `move: true`, move) a file or folder between a project conversation's workspace and its project's workspace. Body: `{path, dest?, overwrite?, move?, include_hidden?}` (`CopyEntryRequest`; a missing or blank `dest` defaults to `path`; the three booleans default to false). Both ends must be owned: the conversation via `resolve_owned_workspace()` and its project via `resolve_owned_project_workspace()`. Success returns `copy_entry()`'s result `{type: "file" | "folder", path: "/<dest>", files_copied, skipped, moved}` (`skipped` counts the symlinks, special files and unrequested dot-entries left out of a folder copy; `moved` is true only when a move also removed the source). The work is `copy_entry()` in `chat/file_storage.py`, run via `asyncio.to_thread`. Rules (both ends validated with `validate_path`, symlink / special-file leaves refused, symlinks and special files inside a folder skipped, dot-entries skipped unless named or `include_hidden`, folder merge on `overwrite`, a destination that is the source, inside it or (same root) an ancestor of it refused, every conflict found before anything is written, mid-copy symlink swaps refused, a failed copy into a fresh destination removed again incl. the parents it created, permission bits masked to `0o777`, folder nesting capped at `MAX_COPY_DEPTH` (256), a move deletes only what was copied). Errors use the usual `{error, message}` detail:
@@ -100,11 +105,13 @@ A move whose copy completed but whose source removal failed is not an error: the
 
 In the UI these routes back the "Copy to project" / "Move to project" (Chat Files card) and "Copy to chat" / "Move to chat" (Project Files card) row actions of a project conversation's right panel (`copyFileToProject` / `copyFileFromProject` in `frontend/src/api/fileApi.ts`, driven by `frontend/src/hooks/useWorkspaceCopy.ts`; `dest` is not sent, so the entry keeps its relative path; `include_hidden` follows the source card's show-hidden toggle; scratch-root rows get no to-project actions; a non-zero `skipped` is reported to the user). A 409 `destination_exists` asks the user to overwrite and retries with `overwrite: true`; see [Frontend -- Right Panel](../architecture/frontend.md#right-panel-file-browser-and-project-tables).
 
+`POST /app/api/conversations/{conversation_id}/files/copy-to-autoproject` and `/files/copy-from-autoproject` are the same pair between an AutoProject run's conversation workspace and its AutoProject's workspace, with the same body, rules and errors, except that a conversation that is not an AutoProject run is 400 `not_an_autoproject_run_conversation`, followed by the AutoProject gate and ownership checks; they publish the `conversation` and `autoproject` scopes. The AutoProject page's run panel drives them (`copyFileToAutoProject` / `copyFileFromAutoProject`).
+
 A separate composer-attachment upload route, `POST /app/api/conversations/{id}/composer-attachments`, persists clipboard-pasted images (PNG/JPEG only) into `workspace/pasted/<attachment_id>.<ext>` ahead of the next `send_message` WS frame. It is documented under [Chat API -- Composer Attachments](chat-api.md#composer-attachments) rather than here because the lifecycle is tied to the composer/send path, not the generic file browser.
 
 All paths are validated to prevent directory traversal attacks. Paths must resolve within the workspace directory.
 
-**Symlink policy:** symlinks are banned from workspaces entirely. The only place one could ever be created is the script sandbox's read-write mounts (`/workspace`, plus `/project` in project conversations), and the sandbox seccomp profile denies the `symlink`/`symlinkat` syscalls (see [Script Runner -- Security](../architecture/script-runner.md#security)); a startup sweep (`chat/workspace_symlinks.py`, called from the quest.py lifespan) deletes any link that predates that fix.
+**Symlink policy:** symlinks are banned from workspaces entirely. The only place one could ever be created is the script sandbox's read-write mounts (`/workspace`, plus `/project` in project conversations and `/autoproject` in AutoProject runs), and the sandbox seccomp profile denies the `symlink`/`symlinkat` syscalls (see [Script Runner -- Security](../architecture/script-runner.md#security)); a startup sweep (`chat/workspace_symlinks.py`, called from the quest.py lifespan) deletes any link that predates that fix.
 
 The file endpoints keep defense-in-depth guards anyway:
 

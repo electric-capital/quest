@@ -2,7 +2,7 @@
 
 ## Overview
 
-Feature gates are **server-global, admin-controlled on/off switches for optional features**. Every gated feature is off by default; an admin turns it on for the whole instance from the desktop-only **Settings > Features** section. Gated features: `user_subagents` (cross-user subagents, [user-subagents.md](user-subagents.md)), `voice_input` (dictated prompts transcribed server-side on Vertex, [voice-input.md](voice-input.md)), `docs` (Quest Docs, [quest-docs.md](quest-docs.md)), `doc_notes` (per-doc instructions and memories, [doc-notes.md](doc-notes.md)), `tables` (Quest Tables, [quest-tables.md](quest-tables.md)), `browser` (the headless browser for public projects, [public-browser.md](public-browser.md)), and `dreaming` (offline reviews of users' saved memories, [dreaming.md](dreaming.md)).
+Feature gates are **server-global, admin-controlled on/off switches for optional features**. Every gated feature is off by default; an admin turns it on for the whole instance from the desktop-only **Settings > Features** section. Gated features: `user_subagents` (cross-user subagents, [user-subagents.md](user-subagents.md)), `voice_input` (dictated prompts transcribed server-side on Vertex, [voice-input.md](voice-input.md)), `docs` (Quest Docs, [quest-docs.md](quest-docs.md)), `doc_notes` (per-doc instructions and memories, [doc-notes.md](doc-notes.md)), `tables` (Quest Tables, [quest-tables.md](quest-tables.md)), `browser` (the headless browser for public projects, [public-browser.md](public-browser.md)), `dreaming` (offline reviews of users' saved memories, [dreaming.md](dreaming.md)), and `autoprojects` (long-lived AutoProjects answered by fresh-context runs, [autoprojects.md](autoprojects.md)).
 
 Features in `PER_USER_ACCESS_FEATURES` (`config/feature_gates.py`) additionally support **per-user access**: an enabled gate can be open to all users or restricted to an `allowed_users` email list (case-insensitive). For a user outside the list the gate behaves exactly as if it were closed, at every enforcement point. `user_subagents` deliberately stays all-or-nothing — a run involves two users (caller and target) and a per-user list would be ambiguous about which side it restricts.
 
@@ -91,6 +91,18 @@ The notes routes (`chat/docs/note_routes.py`) answer 403 `doc_notes_disabled` be
 3. **HTTP routes**: every table route under `/app/api` answers 403 `tables_disabled` first, before any DB work ([Quest Tables API -- HTTP Routes](../api/tables-api.md#http-routes)).
 
 Nothing is deleted: table rows and files survive, and restoring access brings them back.
+
+## Enforcement Layers (AutoProjects)
+
+`autoprojects` gates [AutoProjects](autoprojects.md) and supports per-user access. Every layer calls `autoprojects_enabled_for(email)` with the acting user (the run's owner on a resume), and `autoprojects_disabled_message()` in `chat/autoprojects/constants.py` is the one gate-closed text. While closed for a user:
+
+1. **HTTP routes**: every `/app/api/autoprojects...` route and the AutoProject file routes answer 403 `autoprojects_disabled` first, the two run copy routes right after their own conversation checks (`require_owned_autoproject()` in `chat/autoprojects/service.py` checks the gate before ownership).
+2. **Send path**: `start_run()` refuses a run's first message with `send_message_rejected` reason `autoprojects_disabled`, before anything is appended.
+3. **Prompt and tools**: `get_user_connected_services()` sets the pseudo-key `autoprojects`, so the two read tools and `system:autoprojects` drop out like a disconnected service; an explicit `load_skills` returns the gate-closed text, and the read tools answer `autoprojects_disabled`. `get_public_connected_services()` pins the key to false whatever the gate.
+4. **Resume**: a wait handle resolved for a run after the gate closed stops the run instead of resuming it (`drive_autoproject_run()`); Stop itself is never gated.
+5. **Frontend**: `AUTOPROJECTS_FEATURE` (`frontend/src/api/autoprojectsApi.ts`) missing from `enabled_features` hides the sidebar section, renders `AutoProjectsGateClosed` on an `/autoprojects*` URL and keeps a run's `/chats/<id>` URL as a read-only transcript.
+
+Nothing is deleted: the rows, the run conversations and the workspace survive, and reopening the gate restores everything.
 
 ## Scope Notes
 

@@ -73,7 +73,7 @@ The conversation loop resolves `nested_subagents` from the array and threads it 
 
 ## Scope and Constraints
 
-- **Web-only**: both activation paths live at the web send entry point (`_handle_send_message`) -- the out-of-band `flags` field originates only from the web composer, and the magic line is parsed only here. Slack-driven conversations (Socket Mode worker) and routine/scheduler-created first messages set no flags; supporting them would be a follow-up.
+- **Web-only**: both activation paths live at the web send entry point (`_handle_send_message`) -- the out-of-band `flags` field originates only from the web composer, and the magic line is parsed only here. Slack-driven conversations (Socket Mode worker) and routine/scheduler-created first messages set no flags, and an AutoProject run takes none from either path (`_handle_send_message` skips both, `run_conversation_turn()` ignores any passed; [AutoProjects](autoprojects.md#start)).
 - **Start-of-conversation only**: flags are set once on the first message and never changed thereafter (the setter is set-only-if-not-already-set). This makes per-conversation system-prompt divergence (e.g. the nested sub-agent prompt note) stable for the conversation's lifetime.
 - **Failure handling**: `set_conversation_flags` failures are non-fatal -- the turn still runs with the in-memory merged flags so the requested behavior is honored.
 - **FE/BE registry drift**: the composer popover's label/description text is a static hand-mirror (`frontend/src/constants/flags.ts`) of `FLAG_LABELS` in `chat/conversation_flags.py`, not fetched from an endpoint (mirroring the `constants/models.ts` pattern). The two can drift; adding a flag requires editing both.

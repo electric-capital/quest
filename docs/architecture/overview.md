@@ -46,6 +46,7 @@ This doc is the map: where each piece lives, how a turn moves through them, and 
 | `chat/system_skills/` | `system:*` skill catalog and prompt enumeration | [Skill Library](skill-library.md) |
 | `chat/docs/` | Quest Docs | [Quest Docs](quest-docs.md) |
 | `chat/tables/` | Quest Tables | [Quest Tables](quest-tables.md) |
+| `chat/autoprojects/` | AutoProjects: brief, work log and fresh-context runs | [AutoProjects](autoprojects.md), [AutoProjects API](../api/autoprojects-api.md) |
 | `chat/artifact_access.py` | The access procedure shared by Quest Docs and Quest Tables | [Quest Docs -- Access Rule](quest-docs.md#access-rule) |
 | `chat/scheduler.py`, `chat/routine_runs.py` | Scheduled and one-click routine runs | [Scheduling](scheduling.md), [Routines](routines.md) |
 | `chat/slack_socket_mode.py`, `chat/slack_driven_runtime.py`, `chat/slack_notifier.py` | Slack-driven conversations, pending-request DMs | [Slack Socket Mode](slack-socket-mode.md), [Slack Pending-Request Notifier](slack-pending-request-notifier.md) |
@@ -94,7 +95,7 @@ Exactly one sign-in method is active, Google OAuth or email/password (`login_met
 - **SQLite** (`db/engine.py`, `db/models.py`, Alembic migrations run by `run.py`) holds all relational state: users and their credentials, conversation metadata, projects, routines, action requests and the other models in `db/models.py`. See [Database](database.md).
 - **DuckDB** (`analytics/store.py`, migrations applied at open) holds the append-only event ledgers the admin reports aggregate, apart from the transactional state so their writes and scans never touch `quest.db`. See [Analytics Store](analytics.md).
 - **Per-conversation files** under `chats/<conversation_id>/`: the `chat_history.json` transcript, the SDK history and the conversation workspace. Ownership lives in the `conversations` table, not in the directory layout.
-- **Workspaces**: every conversation has its own conversation workspace; each project adds a shared project workspace that tools and the UI reach only on purpose (`proj://` paths, the `/project` sandbox mount, the Project Files card, the copy routes). See [Projects -- Workspace Resolution](projects.md#workspace-resolution).
+- **Workspaces**: every conversation has its own conversation workspace; each project adds a shared project workspace that tools and the UI reach only on purpose (`proj://` paths, the `/project` sandbox mount, the Project Files card, the copy routes). See [Projects -- Workspace Resolution](projects.md#workspace-resolution). An AutoProject's runs share an AutoProject workspace the same way (`autoproject://`, `/autoproject`; [AutoProjects -- Files](autoprojects.md#files)).
 - **Paths** come only from the `ChatStorage` resolvers in `chat/storage.py`, under a data directory that `config/paths.py` lets a deployment relocate. See [Data Paths](data-paths.md).
 
 ## Security Model
