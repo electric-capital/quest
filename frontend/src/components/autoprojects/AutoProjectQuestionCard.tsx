@@ -12,9 +12,8 @@ export interface AutoProjectQuestionCardProps {
   question: AutoProjectQuestion
   /** Locks the option buttons (e.g. the composer is sending an answer). */
   disabled?: boolean
-  /** After a successful answer (or a 409 question_resolved): the server's Question when known.
-   *  The page refreshes its runs here. */
-  onAnswered?: (question: AutoProjectQuestion | null) => void
+  /** After a successful answer (or a 409 question_resolved). The page refreshes its runs here. */
+  onAnswered?: () => void
   /** Replaces the pending question's hint under the options (by default it
    *  points at the page's composer, above the Updates card). */
   hint?: ReactNode
@@ -106,12 +105,12 @@ export function AutoProjectQuestionCard({
         answer: updated.answer ?? option,
         answeredAt: updated.answered_at,
       })
-      onAnswered?.(updated)
+      onAnswered?.()
     } catch (err) {
       const resolved = resolvedOutcome(err, handleId)
       if (resolved) {
         setOutcome(resolved)
-        onAnswered?.(null)
+        onAnswered?.()
       } else {
         refocusRef.current = false
         setError(err instanceof Error && err.message ? err.message : SEND_FAILED)

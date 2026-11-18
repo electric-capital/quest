@@ -187,7 +187,7 @@ export const AutoProjectUpdates = forwardRef<
         </div>
         )}
       </div>
-      <div className="autoproject-card-body autoproject-updates-body">
+      <div className="autoproject-card-body">
         {order === 'oldest' && earlier}
         {body}
         {order === 'recent' && earlier}

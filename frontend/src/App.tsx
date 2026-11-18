@@ -238,7 +238,7 @@ function AppContent() {
         // Full takeover: no RightPanel beside the AutoProject views. The AutoProject page
         // opens its own detail panel (a run, the brief History, the
         // instructions) beside its main column.
-        <div className="main-content docs-main autoprojects-main">
+        <div className="main-content docs-main">
           <AutoProjectsMain route={autoprojectsRoute} enabled={autoprojectsEnabled} />
         </div>
       ) : (

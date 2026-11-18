@@ -1,7 +1,6 @@
 /**
  * The AutoProject page's activity line: what the ACTIVE run of an AutoProject is
- * doing right now, as one short label, plus whether a model turn is
- * streaming on the run's conversation.
+ * doing right now, as one short label.
  *
  * The page is not a ChatPanel: this hook follows the run conversation's
  * live events straight off the persistent socket and never touches
@@ -20,8 +19,7 @@
  * `subscription_expired` re-sends the subscribe at once without another
  * hold (`resubscribe`; the ack's catch-up covers the gap).
  *
- * Catch-up. On every `subscribed` ack: `run_active` sets `streaming`; a
- * `catchup` ack's message bodies are applied directly; then, while no label
+ * Catch-up. On every `subscribed` ack: a `catchup` ack's message bodies are applied directly; then, while no label
  * has been derived yet, the last TAIL_WINDOW rows are fetched
  * (`GET /conversations/{id}/tail?after_seq=current_seq - TAIL_WINDOW`), else
  * only the rows after the highest seq seen, when the ack reports newer
@@ -52,11 +50,9 @@
  * label only replaces one with an older stamp. So a tail fetch that lands
  * after a later `text_delta` cannot put an older step back on the line.
  *
- * `streaming`: the ack's `run_active`; `resume_started`, `text_delta` and
- * `sub_agent_tool_use` set it true; `send_message_finished` sets it false
- * and keeps the last label (the page re-renders the run from
- * `autoproject_changed`). null until the first ack. The hook does not interpret
- * the run's AutoProject status: the page decides what to show for `waiting`.
+ * `send_message_finished` keeps the last label (the page re-renders the run
+ * from `autoproject_changed`). The hook does not interpret the run's
+ * AutoProject status: the page decides what to show for `waiting`.
  */
 
 import { useEffect, useState } from 'react';
@@ -69,10 +65,6 @@ export interface AutoProjectRunActivity {
    *  ("Searching for flights") or "Running <tool name>", "Sub-agent: <...>",
    *  "Resuming". Never empty while a conversation id is given. */
   label: string;
-  /** Whether a model turn is streaming on the run conversation right now, from the
-   *  subscribe ack's `run_active`, `resume_started` and `send_message_finished`;
-   *  null until the first ack. */
-  streaming: boolean | null;
 }
 
 export const AUTOPROJECT_ACTIVITY_STARTING = 'Starting';
@@ -91,7 +83,7 @@ interface ActivityState extends AutoProjectRunActivity {
 }
 
 function initialState(id: string | null): ActivityState {
-  return { id, label: AUTOPROJECT_ACTIVITY_STARTING, streaming: null };
+  return { id, label: AUTOPROJECT_ACTIVITY_STARTING };
 }
 
 function str(value: unknown): string {
@@ -195,13 +187,6 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
       });
     };
 
-    const setStreaming = (streaming: boolean) => {
-      setState((prev) => {
-        const base = prev.id === id ? prev : initialState(id);
-        return base.streaming === streaming && base === prev ? prev : { ...base, streaming };
-      });
-    };
-
     // Rows in seq order. Rows at or below the highest seq seen are skipped,
     // except for a window read (`rereadSeen`), which runs only while no
     // label has been derived from them.
@@ -270,7 +255,6 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
       if (!active) return;
       switch (event.type) {
         case 'subscribed': {
-          if (typeof event.run_active === 'boolean') setStreaming(event.run_active);
           const stamp = ++clock;
           if (event.mode === 'catchup') applyRows(event.messages, stamp);
           if (typeof event.current_seq === 'number') {
@@ -301,18 +285,12 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
           return;
         case 'text_delta':
           setLabel(AUTOPROJECT_ACTIVITY_WRITING, ++clock);
-          setStreaming(true);
           return;
         case 'sub_agent_tool_use':
           setLabel(subAgentLabel(event), ++clock);
-          setStreaming(true);
           return;
         case 'resume_started':
           setLabel(AUTOPROJECT_ACTIVITY_RESUMING, ++clock);
-          setStreaming(true);
-          return;
-        case 'send_message_finished':
-          setStreaming(false);
           return;
         case 'subscription_expired':
           persistentWebSocket.resubscribe(id);
@@ -333,7 +311,7 @@ export function useAutoProjectRunActivity(conversationId: string | null): AutoPr
     };
   }, [conversationId]);
 
-  if (conversationId === null) return { label: AUTOPROJECT_ACTIVITY_STARTING, streaming: null };
+  if (conversationId === null) return { label: AUTOPROJECT_ACTIVITY_STARTING };
   const current = state.id === conversationId ? state : initialState(conversationId);
-  return { label: current.label, streaming: current.streaming };
+  return { label: current.label };
 }

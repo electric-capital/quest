@@ -747,7 +747,7 @@ export function AutoProjectMainColumn({
           <div className="autoproject-composer-block" ref={composerBlockRef}>
             {composer.mode === 'archived' ? (
               <div className="autoproject-composer-archived">
-                <span className="autoproject-composer-archived-text">This AutoProject is archived.</span>
+                <span>This AutoProject is archived.</span>
                 <button
                   type="button"
                   className="autoproject-ctl-button"

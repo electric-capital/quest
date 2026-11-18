@@ -242,7 +242,6 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
       <section className="autoproject-card autoproject-files" aria-labelledby={filesHeadingId}>
         <FileBrowser
           source={filesSource}
-          hideTitle
           compact
           toolbarLead={
             <>
@@ -284,7 +283,7 @@ export function AutoProjectPage({ autoprojectId, runConversationId }: { autoproj
   }
 
   return (
-    <div className={`autoproject-page${panel ? ' has-panel' : ''}`}>
+    <div className="autoproject-page">
       <AutoProjectMainColumn
         autoprojectId={autoprojectId}
         autoproject={autoproject}

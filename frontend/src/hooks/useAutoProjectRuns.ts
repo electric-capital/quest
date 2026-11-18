@@ -36,12 +36,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AUTOPROJECT_RUNS_MAX_PAGE_SIZE,
-  AUTOPROJECT_RUNS_PAGE_SIZE,
-  isAutoProjectDeleting,
-  listAutoProjectRuns,
-} from '../api/autoprojectsApi';
+import { AUTOPROJECT_RUNS_PAGE_SIZE, isAutoProjectDeleting, listAutoProjectRuns } from '../api/autoprojectsApi';
 import { ApiClientError } from '../api/request';
 import type { AutoProjectRun, AutoProjectRunsPage } from '../api/types';
 import { persistentWebSocket } from '../services/PersistentWebSocket';
@@ -119,15 +114,7 @@ function mergeNewestPage(
   };
 }
 
-export function useAutoProjectRuns(
-  autoprojectId: string | null,
-  opts: { pageSize?: number } = {},
-): AutoProjectRunsView {
-  const pageSize = Math.min(
-    AUTOPROJECT_RUNS_MAX_PAGE_SIZE,
-    Math.max(1, Math.floor(opts.pageSize ?? AUTOPROJECT_RUNS_PAGE_SIZE)),
-  );
-
+export function useAutoProjectRuns(autoprojectId: string | null): AutoProjectRunsView {
   const [state, setState] = useState<RunsState>(EMPTY);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
@@ -155,7 +142,7 @@ export function useAutoProjectRuns(
     const seq = ++requestSeqRef.current;
     pendingSeqRef.current = seq;
     try {
-      const page = await listAutoProjectRuns(autoprojectId, { limit: pageSize });
+      const page = await listAutoProjectRuns(autoprojectId, { limit: AUTOPROJECT_RUNS_PAGE_SIZE });
       if (seq !== requestSeqRef.current) return;
       const prev = stateRef.current;
       if (prev.id !== autoprojectId || prev.notFound) {
@@ -201,11 +188,11 @@ export function useAutoProjectRuns(
         }
       }
     }
-  }, [autoprojectId, pageSize, commit]);
+  }, [autoprojectId, commit]);
   refreshRef.current = refresh;
 
-  // Newest page on mount and whenever the AutoProject (or page size) changes,
-  // dropping the previous AutoProject's runs (and any in-flight response for them) first.
+  // Newest page on mount and whenever the AutoProject changes, dropping the
+  // previous AutoProject's runs (and any in-flight response for them) first.
   useEffect(() => {
     requestSeqRef.current += 1;
     loadOlderSeqRef.current += 1;
@@ -225,7 +212,7 @@ export function useAutoProjectRuns(
     setLoadingOlder(true);
     void (async () => {
       try {
-        const page = await listAutoProjectRuns(autoprojectId, { beforeSeq: cursor, limit: pageSize });
+        const page = await listAutoProjectRuns(autoprojectId, { beforeSeq: cursor, limit: AUTOPROJECT_RUNS_PAGE_SIZE });
         const current = stateRef.current;
         // The list was replaced (or the AutoProject changed) meanwhile, or a merge
         // moved the cursor: the page no longer extends what is shown.
@@ -248,7 +235,7 @@ export function useAutoProjectRuns(
         if (token === loadOlderSeqRef.current) setLoadingOlder(false);
       }
     })();
-  }, [autoprojectId, pageSize, loadingOlder, commit]);
+  }, [autoprojectId, loadingOlder, commit]);
 
   const removeRun = useCallback(
     (runId: string) => {

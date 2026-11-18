@@ -92,13 +92,6 @@ interface FileBrowserProps {
    */
   source: FileSource | null;
   /**
-   * Leave out the card's title, for a host that heads the card itself (the
-   * AutoProject page's "AutoProject files" section, an AutoProject run's Chat Files tab). The
-   * hidden-files toggle and Refresh then sit at the end of the navigation
-   * row.
-   */
-  hideTitle?: boolean;
-  /**
    * The dense variant for a card inside a page column (the AutoProject page):
    * Upload and New folder become icon buttons beside the hidden-files
    * toggle and Refresh instead of the full-width button row, the toolbar
@@ -212,7 +205,7 @@ function formatDate(isoString: string): string {
   });
 }
 
-export function FileBrowser({ source, hideTitle = false, compact = false, toolbarLead, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
+export function FileBrowser({ source, compact = false, toolbarLead, onListing, rowActions, notice, onDismissNotice }: FileBrowserProps) {
   // Primitives for effect deps: hosts may pass a fresh object every render.
   const sourceKind = source?.kind ?? null;
   const sourceId = source?.id ?? null;
@@ -456,7 +449,7 @@ export function FileBrowser({ source, hideTitle = false, compact = false, toolba
         <>
           <button
             type="button"
-            className="nav-button file-browser-compact-action"
+            className="nav-button"
             onClick={handleUploadClick}
             disabled={uploadProgress || isInitialLoading}
             title={uploadLabel}
@@ -466,7 +459,7 @@ export function FileBrowser({ source, hideTitle = false, compact = false, toolba
           </button>
           <button
             type="button"
-            className="nav-button file-browser-compact-action"
+            className="nav-button"
             onClick={handleNewFolderClick}
             disabled={uploadProgress || isInitialLoading}
             title="New folder"
@@ -515,14 +508,14 @@ export function FileBrowser({ source, hideTitle = false, compact = false, toolba
 
   return (
     <div
-      className={`file-browser${hideTitle ? ' file-browser--untitled' : ''}${compact ? ' file-browser--compact' : ''}${isDragOver ? ' drag-over' : ''}`}
+      className={`file-browser${compact ? ' file-browser--compact' : ''}${isDragOver ? ' drag-over' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Header with title (left out for a host-headed card: its actions
-          then end the navigation row) */}
-      {!hideTitle && !compact && (
+      {/* Header with title (left out by the compact card: its actions then
+          end the navigation row) */}
+      {!compact && (
         <div className="file-browser-header">
           <h3>{fileBrowserTitle(source)}</h3>
           {headerActions}
@@ -591,7 +584,6 @@ export function FileBrowser({ source, hideTitle = false, compact = false, toolba
         <span className="current-path" title={currentPath}>
           {currentPath}
         </span>
-        {hideTitle && headerActions}
       </div>
       )}
 

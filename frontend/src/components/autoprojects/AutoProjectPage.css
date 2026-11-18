@@ -1,5 +1,5 @@
 /* AutoProjectPage (/autoprojects/<id>, and a run open in its panel) -- rendered inside
- * .docs-main.autoprojects-main (App.css; MobileShell's pane on phones).
+ * .docs-main (App.css; MobileShell's pane on phones).
  *
  * The page fills the pane as a row: the main column (AutoProjectMainColumn) and,
  * while a detail view is open, the detail panel (AutoProjectDetailPanel.css: about

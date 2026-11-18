@@ -149,7 +149,7 @@ export function AutoProjectRunPanel({
           <span className={`autoproject-run-panel-status ${run.status}`} role="status">
             {autoprojectRunStatusLabel(run)}
           </span>
-          <time className="autoproject-run-panel-time" dateTime={run.started_at}>
+          <time dateTime={run.started_at}>
             {formatTimestamp(run.started_at)}
           </time>
         </div>
@@ -212,7 +212,6 @@ export function AutoProjectRunPanel({
         <div className="autoproject-run-panel-files" role="tabpanel" aria-label="Chat Files">
           <FileBrowser
             source={chatSource}
-            hideTitle
             compact
             rowActions={copy.chatRowActions}
             notice={copy.notices.conversation}

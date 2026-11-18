@@ -216,7 +216,7 @@ function AutoProjectsListRow({
         {active && active.status === 'running' && (
           <span className="autoprojects-list-row-state" title="An update is in progress">
             <LoaderCircle size={13} className="autoprojects-list-row-spinner" aria-hidden="true" />
-            <span className="autoprojects-list-row-state-label">Working</span>
+            <span>Working</span>
           </span>
         )}
         {activity && (

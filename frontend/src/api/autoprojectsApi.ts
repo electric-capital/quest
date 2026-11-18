@@ -47,7 +47,6 @@ export const AUTOPROJECT_RUNS_MAX_PAGE_SIZE = 100;
 // The server enforces them; keep these in step when one changes there.
 export const AUTOPROJECT_TITLE_MAX_CHARS = 120;
 export const AUTOPROJECT_BRIEF_MAX_CHARS = 12000;
-export const AUTOPROJECT_ANSWER_MAX_CHARS = 8000;
 
 /** `/app/api/autoprojects` (list + create). */
 export function autoprojectsEndpoint(): string {

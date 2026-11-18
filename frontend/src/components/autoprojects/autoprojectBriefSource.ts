@@ -9,7 +9,7 @@ import type { AutoProjectBriefSource } from '../../api/types'
  * and the History list (AutoProjectBrief, AutoProjectBriefEditor, AutoProjectBriefHistory).
  */
 
-export type ParsedBriefSource =
+type ParsedBriefSource =
   | { kind: 'run' }
   | { kind: 'ui' }
   | { kind: 'restore'; version: number }
@@ -24,30 +24,13 @@ export function parseBriefSource(source: AutoProjectBriefSource): ParsedBriefSou
 }
 
 /**
- * The current brief's attribution: "Update N" ("An update" when the run is
- * gone), "Edited by you", "Restored from version n"; null when there is no
- * (known) source, e.g. an empty brief at version 0. AutoProjectBrief puts the time
- * first for an update ("Updated 3h ago · update 2"), see briefByline.
+ * Who wrote a brief or a brief version: "Update N" ("An update" when the run
+ * is gone), "Edited by you", "Restored from version n"; null when there is
+ * no (known) source, e.g. an empty brief at version 0. Used for the brief's
+ * attribution line (AutoProjectBrief) and each History row and version
+ * (AutoProjectBriefHistory).
  */
 export function briefAttribution(source: AutoProjectBriefSource, runSeq: number | null): string | null {
-  const parsed = parseBriefSource(source)
-  switch (parsed.kind) {
-    case 'run':
-      return runSeq !== null ? `Update ${runSeq}` : 'An update'
-    case 'ui':
-      return 'Edited by you'
-    case 'restore':
-      return `Restored from version ${parsed.version}`
-    default:
-      return null
-  }
-}
-
-/**
- * A History row's source: "Update N" ("An update" when the run is gone), "Edited
- * by you", "Restored from version n"; null for an unknown source.
- */
-export function versionSourceLabel(source: AutoProjectBriefSource, runSeq: number | null): string | null {
   const parsed = parseBriefSource(source)
   switch (parsed.kind) {
     case 'run':

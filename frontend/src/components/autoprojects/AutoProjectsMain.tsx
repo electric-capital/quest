@@ -7,7 +7,7 @@ import { AutoProjectPage } from './AutoProjectPage'
 /**
  * The main-pane view of a /autoprojects URL (parseAutoProjectsRoute), shared by the
  * desktop layout (App.tsx) and MobileShell, which wrap it in their
- * `main-content docs-main autoprojects-main` pane: the gate notice while the
+ * `main-content docs-main` pane: the gate notice while the
  * `autoprojects` feature gate is closed, otherwise the list, New AutoProject, or the AutoProject
  * page. A run URL is the AutoProject page with that run open in its detail panel;
  * the page is keyed by AutoProject id only, so opening and closing a run (or

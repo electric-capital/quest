@@ -11,7 +11,7 @@ import type { AutoProject, AutoProjectBriefState, AutoProjectBriefVersion } from
 import { boundedWordDiff, type WordDiffSegment } from '../../utils/wordDiff'
 import { DocConfirmDialog } from '../docs/DocConfirmDialog'
 import { AutoProjectBriefMarkdown } from './AutoProjectBriefMarkdown'
-import { versionSourceLabel } from './autoprojectBriefSource'
+import { briefAttribution } from './autoprojectBriefSource'
 import { AutoProjectTimeAgo, autoprojectSaveErrorMessage } from './AutoProjectBriefControls'
 import './AutoProjectBriefHistory.css'
 
@@ -347,7 +347,7 @@ export function AutoProjectBriefHistory({
           <ul ref={listRef} className="autoproject-brief-history-list" aria-label="Versions" onKeyDown={onListKeyDown}>
             {versions.map((row) => {
               const current = row.version === currentVersion
-              const source = versionSourceLabel(row.source, row.run_seq)
+              const source = briefAttribution(row.source, row.run_seq)
               const metaId = `${ids}-meta-${row.version}`
               return (
                 <li key={row.version} className="autoproject-brief-history-item">
@@ -358,7 +358,7 @@ export function AutoProjectBriefHistory({
                     aria-describedby={metaId}
                     onClick={() => openVersion(row.version)}
                   >
-                    <span className="autoproject-brief-history-item-title">Version {row.version}</span>
+                    <span>Version {row.version}</span>
                     {current && <span className="autoproject-ctl-badge">Current</span>}
                   </button>
                   <div id={metaId} className="autoproject-brief-history-item-meta">
@@ -385,7 +385,7 @@ export function AutoProjectBriefHistory({
     const version = selectedRow.version
     const error = detailError?.version === version ? detailError : null
     const gone = error !== null && !error.retryable
-    const source = versionSourceLabel(selectedRow.source, selectedRow.run_seq)
+    const source = briefAttribution(selectedRow.source, selectedRow.run_seq)
 
     let detailBody
     if (body !== undefined) {

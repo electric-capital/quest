@@ -75,12 +75,7 @@
   gap: 4px;
 }
 
-/* A card headed by its host (`hideTitle`): the nav row is the first row and
-   ends with the hidden-files toggle and Refresh. */
-.file-browser--untitled .file-browser-nav {
-  padding-top: 0.5rem;
-}
-
+/* The compact card's nav row ends with the header actions. */
 .file-browser-nav .file-browser-header-actions {
   flex-shrink: 0;
 }

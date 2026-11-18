@@ -96,23 +96,6 @@
 
 /* --- Text ------------------------------------------------------------- */
 
-.autoproject-ctl-text {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.autoproject-ctl-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.625rem;
-}
-
-.autoproject-ctl-empty-text,
 .autoproject-ctl-muted {
   margin: 0;
   font-size: 0.8125rem;

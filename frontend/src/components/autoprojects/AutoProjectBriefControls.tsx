@@ -143,7 +143,7 @@ export function AutoProjectDiscardConfirm({
         <button
           ref={keepRef}
           type="button"
-          className="autoproject-ctl-button autoproject-ctl-button--primary autoproject-ctl-discard-keep"
+          className="autoproject-ctl-button autoproject-ctl-button--primary"
           onClick={onKeepEditing}
         >
           Keep editing

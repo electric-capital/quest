@@ -6,7 +6,7 @@
  *
  * - `autoproject_changed` for THIS AutoProject (a run starting or changing status, a
  *   brief write, an answer, a run delete, the AutoProject's delete): bumps
- *   `changeSeq`, records `lastChange`, and re-fetches the detail unless the
+ *   `changeSeq` and re-fetches the detail unless the
  *   shown one already has the event's `event_seq`, `brief_version` and
  *   `active_run` (id and status). A delete sends a last `autoproject_changed` with
  *   a bumped `event_seq` and `active_run: null`; its re-fetch 404s, which
@@ -56,8 +56,6 @@ export interface AutoProjectView {
   // Count of `autoproject_changed` events for this AutoProject since it was opened (0 on
   // open; reset when autoprojectId changes).
   changeSeq: number;
-  // The most recent `autoproject_changed` event for this AutoProject, or null.
-  lastChange: AutoProjectChangedEvent | null;
   // Merge an AutoProject returned by PATCH / archive / unarchive (other ids and
   // details older than the shown one are ignored).
   applyDetail: (autoproject: AutoProject) => void;
@@ -79,10 +77,9 @@ const EMPTY: AutoProjectState = { id: null, autoproject: null, error: null, notF
 interface ChangeState {
   id: string | null;
   seq: number;
-  last: AutoProjectChangedEvent | null;
 }
 
-const NO_CHANGES: ChangeState = { id: null, seq: 0, last: null };
+const NO_CHANGES: ChangeState = { id: null, seq: 0 };
 
 function sameActiveRun(a: AutoProjectActiveRun | null, b: AutoProjectActiveRun | null): boolean {
   if (a === null || b === null) return a === b;
@@ -211,9 +208,7 @@ export function useAutoProject(autoprojectId: string | null): AutoProjectView {
         active_run: parseAutoProjectActiveRun(event.active_run),
       };
       setChanges((prev) =>
-        prev.id === autoprojectId
-          ? { id: autoprojectId, seq: prev.seq + 1, last: change }
-          : { id: autoprojectId, seq: 1, last: change },
+        prev.id === autoprojectId ? { id: autoprojectId, seq: prev.seq + 1 } : { id: autoprojectId, seq: 1 },
       );
       const prev = stateRef.current;
       const shown = prev.id === autoprojectId ? prev.autoproject : null;
@@ -261,7 +256,6 @@ export function useAutoProject(autoprojectId: string | null): AutoProjectView {
     notFound: current.notFound,
     refresh,
     changeSeq: currentChanges.seq,
-    lastChange: currentChanges.last,
     applyDetail,
     applyBrief,
   };

@@ -300,7 +300,7 @@ export function MobileShell({
             )}
           </div>
         ) : autoprojectsRoute ? (
-          <div className="main-content docs-main autoprojects-main">
+          <div className="main-content docs-main">
             <AutoProjectsMain route={autoprojectsRoute} enabled={autoprojectsEnabled} />
           </div>
         ) : activeConversationId ? (

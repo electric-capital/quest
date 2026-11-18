@@ -515,9 +515,7 @@ export function AutoProjectHeader({ autoproject, onAutoProjectDetail, jump }: Au
         {jump && !renaming && (
           <button
             type="button"
-            className={`autoproject-header-jump autoproject-header-jump--${jump.target}`}
-            data-jump-target={jump.target}
-            data-jump-mark={jump.mark ?? undefined}
+            className="autoproject-header-jump"
             aria-label={jumpLabel(jump)}
             title={jumpLabel(jump)}
             onClick={() => jump.onJump(jump.target)}
