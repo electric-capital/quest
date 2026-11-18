@@ -1303,6 +1303,12 @@ class AutoProjectRun(Base):
     context_brief_version: Mapped[Optional[int]] = mapped_column(
         sa.Integer, nullable=True, default=None
     )
+    # The brief_version a brief_conflict result handed the run (the current
+    # brief it must merge into); the only expected_brief_version its next
+    # complete_autoproject_run may pass. NULL until a conflict.
+    brief_conflict_version: Mapped[Optional[int]] = mapped_column(
+        sa.Integer, nullable=True, default=None
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

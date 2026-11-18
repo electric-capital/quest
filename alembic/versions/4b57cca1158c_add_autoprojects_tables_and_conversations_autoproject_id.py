@@ -5,9 +5,14 @@ Revises: a3d9e5c7f2b4
 Create Date: 2026-11-10 12:00:00.000000
 
 AutoProjects: an ``autoprojects`` row holds an AutoProject's title, the brief
-(with its version counter) and the counters the thread and the unread dot run
-on. Each prompt is answered by a run, an ``autoproject_runs`` row numbered per
-AutoProject by ``seq`` and tied one-to-one to its own conversation;
+(with its version counter) and the counters the AutoProject page and its
+unread dot run on. Each prompt is answered by a run, an ``autoproject_runs``
+row numbered per AutoProject by ``seq`` and tied one-to-one to its own
+conversation. The run row also freezes the run's starting ``## AutoProject``
+context block with the brief version it shows (``context``,
+``context_brief_version``, NULL until the run's first turn), so a resumed run
+rebuilds the prompt it started with, and records ``brief_conflict_version``,
+the brief version a ``brief_conflict`` result handed the run.
 ``autoproject_brief_versions`` keeps the recent brief texts. A run's
 conversation carries ``conversations.autoproject_id``.
 
@@ -100,6 +105,9 @@ def upgrade() -> None:
         sa.Column('model', sa.String(length=100), nullable=True),
         sa.Column('started_at', sa.DateTime(), nullable=False),
         sa.Column('finished_at', sa.DateTime(), nullable=True),
+        sa.Column('context', sa.Text(), nullable=True),
+        sa.Column('context_brief_version', sa.Integer(), nullable=True),
+        sa.Column('brief_conflict_version', sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(['autoproject_id'], ['autoprojects.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(
             ['conversation_id'], ['conversations.id'], ondelete='CASCADE',
