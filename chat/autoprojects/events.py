@@ -98,8 +98,7 @@ async def publish_autoproject_state(autoproject_id: str, *, list_changed: bool =
         active = await autoproject_store.get_active_run(autoproject_id)
     except Exception:
         logger.debug(
-            "[autoprojects] loading AutoProject state for publish failed (autoproject_id=%s)",
-            autoproject_id, exc_info=True,
+            "[autoprojects] loading AutoProject state for publish failed", exc_info=True,
         )
         return
     publish_autoproject_changed(

@@ -173,7 +173,4 @@ async def publish_request_count_changed(user_id: int) -> None:
         counts = await count_action_requests_by_status(user_id)
         bus.publish_to_user(user_id, realtime_events.make_request_count_changed(counts))
     except Exception:
-        logger.debug(
-            "[realtime-bus] publish request_count_changed failed (user_id=%s)",
-            user_id, exc_info=True,
-        )
+        logger.debug("[realtime-bus] publish request_count_changed failed", exc_info=True)

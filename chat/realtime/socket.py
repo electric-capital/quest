@@ -1025,10 +1025,7 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
         )
         meta = None
     if meta is None:
-        logger.warning(
-            "[realtime] stop ignored: conversation %s is not the user's (user_id=%s)",
-            conv_id, conn.user_id,
-        )
+        logger.warning("[realtime] stop ignored: the conversation is not the user's")
         return
 
     cancel_conversation_runs(conv_id)
@@ -1050,10 +1047,7 @@ async def _handle_stop(conn: _Connection, data: dict) -> None:
         from chat.autoprojects.runs import stop_autoproject_run
         await stop_autoproject_run(conn.user_id, conv_id)
     except Exception:
-        logger.exception(
-            "[realtime] stop_autoproject_run failed (conversation=%s, user_id=%s)",
-            conv_id, conn.user_id,
-        )
+        logger.exception("[realtime] stop_autoproject_run failed")
 
     await _send_to_client(conn, {
         "type": "stop_acknowledged",
