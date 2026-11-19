@@ -211,6 +211,28 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "thinking_effort": "high",
         "thinking_efforts": ["low", "medium", "high", "xhigh"],
     },
+    # Generally available since 2026-11-18 (global endpoint and the us/eu
+    # multi-regions; Google limits it to verified enterprise customers).
+    # The fast reasoning Gemini 4 model, priced between Hydrogen and the
+    # Argon/Carbon list rate ($3/$15 -- see db/llm_pricing.py), so it sits
+    # with Argon and Carbon: top-level and sub-agent, not template-batch
+    # or nested-sub-agent. Request contract identical to Hydrogen: ONE
+    # 1,048,576-token window shared by input, thinking and output, up to
+    # 65,536 thinking + output tokens per synchronous request (long decode
+    # not driven), thinking always on, sampling parameters ignored,
+    # implicit caching only, default level ``high`` with
+    # low/medium/high/xhigh (``minimal`` and ``thinking_budget`` are
+    # rejected with a 400).
+    "gemini-4-neon": {
+        "provider": "gemini",
+        "backend": "vertex",
+        "display_name": "Gemini 4 Neon",
+        "vertex_model_id": "gemini-4-neon",
+        "max_input_tokens": 1_000_000,
+        "max_output_tokens": 65_000,
+        "thinking_effort": "high",
+        "thinking_efforts": ["low", "medium", "high", "xhigh"],
+    },
     "claude-haiku-4.5": {
         "provider": "anthropic",
         "display_name": "Claude Haiku 4.5",

@@ -258,6 +258,10 @@ def test_registry_lists_selectable_levels_per_model():
     hydrogen = resolve_model("gemini-4-hydrogen")
     assert hydrogen.thinking_efforts == ("low", "medium", "high", "xhigh")
     assert hydrogen.thinking_effort == "high"
+    # Neon has the same contract as Hydrogen
+    neon = resolve_model("gemini-4-neon")
+    assert neon.thinking_efforts == ("low", "medium", "high", "xhigh")
+    assert neon.thinking_effort == "high"
     # No sublevel for models the registry pins nothing on
     assert resolve_model("claude-sonnet-5").thinking_efforts == ()
     # Picks are validated against the list; anything else is the default

@@ -60,6 +60,8 @@ class TestDisallowedConstant:
         assert "gemini-4-hydrogen" in TEMPLATE_BATCH_ALLOWED_MODELS
         assert "gemini-4-argon" not in TEMPLATE_BATCH_ALLOWED_MODELS
         assert "gemini-4-carbon" not in TEMPLATE_BATCH_ALLOWED_MODELS
+        # Neon costs twice Hydrogen (above Sonnet 5, which is also out).
+        assert "gemini-4-neon" not in TEMPLATE_BATCH_ALLOWED_MODELS
 
 
 # ---------------------------------------------------------------------------
