@@ -26,6 +26,7 @@ const KEY_PAGES: Record<string, string> = {
   fireworks: 'https://fireworks.ai/settings/users/api-keys',
   nearai: 'https://cloud.near.ai',
   trustedrouter: 'https://trustedrouter.com',
+  uberllm: 'https://uberllm.dev/signup',
 };
 
 export type ModelsOutcome =

@@ -787,6 +787,7 @@ def test_admin_list_shape(admin_routes, health_store):
         ("fireworks", "Fireworks AI", False, "fireworks"),
         ("nearai", "NEAR AI", False, "nearai"),
         ("trustedrouter", "TrustedRouter", False, "trustedrouter"),
+        ("uberllm", "UberLLM", False, "uberllm"),
         ("local", "Self-hosted", True, "server"),
     ]
     # The first-run setup card needs the key placeholder and whether a key is needed

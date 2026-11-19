@@ -164,7 +164,7 @@ This section is **optional**. The built-in Claude and Gemini model registry runs
 Cloud Vertex AI**, authenticated with Application Default Credentials (ADC), and needs a GCP
 project with Vertex AI enabled and a service account key. Without Vertex, the first admin to
 sign in gets a "Connect a model" card in place of the composer: paste an Anthropic, OpenAI or
-Gemini API key (or an OpenRouter / Fireworks / NEAR AI / TrustedRouter key, or a self-hosted
+Gemini API key (or an OpenRouter / Fireworks / NEAR AI / TrustedRouter / UberLLM key, or a self-hosted
 server URL) and Quest adds that provider's models for everyone. Admins add or change providers
 later in Settings > Inference Providers (see
 [docs/architecture/inference-providers.md](docs/architecture/inference-providers.md)). You can

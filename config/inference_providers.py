@@ -28,7 +28,9 @@ Providers:
   pick models from NEAR AI's public, priced model list
   (``chat/llm/nearai_catalog.py``); ``trustedrouter`` instances hold a
   TrustedRouter API key and pick models from TrustedRouter's public, priced
-  model list (``chat/llm/trustedrouter_catalog.py``); ``local`` instances point at a self-hosted inference
+  model list (``chat/llm/trustedrouter_catalog.py``); ``uberllm`` instances
+  hold an UberLLM API key and pick models from UberLLM's public, priced
+  model list (``chat/llm/uberllm_catalog.py``); ``local`` instances point at a self-hosted inference
   server (``base_url`` + ``api_type``, optional key) and pick models from
   what that server reports (``chat/llm/local_catalog.py``). Several
   instances of the same kind can coexist (e.g. a personal and a team
@@ -65,7 +67,8 @@ directory dev-config.json (``inference_credentials: {"<instance_id>":
 synthesizes an instance entry for every credential file that has none, of
 the key-holding kind the file stem starts with (``fireworks-2.json`` -> a
 ``fireworks`` instance, ``nearai.json`` -> a ``nearai`` one,
-``trustedrouter.json`` -> a ``trustedrouter`` one; anything else
+``trustedrouter.json`` -> a ``trustedrouter`` one, ``uberllm.json`` -> an
+``uberllm`` one; anything else
 an OpenRouter one), seeded from the
 file's optional ``models`` list so a pre-baked instance can come up with
 ready-to-pick models.
@@ -112,7 +115,9 @@ logger = logging.getLogger(__name__)
 # own key (chat/llm/fireworks_catalog.py), ``nearai`` = NEAR AI Cloud's
 # public model list (chat/llm/nearai_catalog.py, no key needed),
 # ``trustedrouter`` = TrustedRouter's public model list
-# (chat/llm/trustedrouter_catalog.py, no key needed), ``anthropic`` /
+# (chat/llm/trustedrouter_catalog.py, no key needed), ``uberllm`` =
+# UberLLM's public model list (chat/llm/uberllm_catalog.py, no key
+# needed), ``anthropic`` /
 # ``openai`` / ``gemini`` = the vendor's own model list fetched with the
 # instance's key (chat/llm/anthropic_catalog.py, openai_catalog.py,
 # gemini_catalog.py), ``server`` = live discovery against the instance's
@@ -248,6 +253,21 @@ INSTANCE_KINDS: dict[str, dict] = {
         "endpoint": False,
         "upstream_url": "https://api.trustedrouter.com/v1",
         "catalog": "trustedrouter",
+    },
+    # UberLLM (https://uberllm.dev): an OpenAI-compatible router at
+    # api.uberllm.dev/v1, authenticated by an API key (``ull_...``) sent as a
+    # bearer token. Wire ids are ``<vendor>/<model>`` slugs like OpenRouter's
+    # (``deepseek/deepseek-v4-flash-0731``). Its model list is public and
+    # carries per-token prices, so the catalog module needs no key.
+    "uberllm": {
+        "label": "UberLLM",
+        "hint": "ull_...",
+        "provider": "openrouter",
+        "backend": "uberllm",
+        "key_required": True,
+        "endpoint": False,
+        "upstream_url": "https://api.uberllm.dev/v1",
+        "catalog": "uberllm",
     },
     "local": {
         "label": "Self-hosted",

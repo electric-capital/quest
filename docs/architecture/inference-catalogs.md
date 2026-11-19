@@ -34,6 +34,12 @@ Entries use the OpenRouter row shape plus `detail` / `capabilities` (like self-h
 
 Checked 2026-10-12: 659 entries (~4 MB), 572 of them chat models.
 
+### UberLLM catalog cache
+
+`chat/llm/uberllm_catalog.py` serves `https://api.uberllm.dev/v1/models` -- **public**, no key, cached in `DATA_DIR / "uberllm_catalog.json"` for 24 hours with the same stale-on-failure degradation. The list is the same OpenRouter row shape the TrustedRouter catalog reads, so the module reuses that module's entry normalization (chat-model filter, `tools` / `vision` flags, null-for-unknown) and keeps only its own fetch, cache and two UberLLM differences: the human name comes from `display_name` (rows have no `name`), and rows marked `available: false` are left out.
+
+Checked 2026-11-12: 245 entries, 236 of them available chat models.
+
 ### Anthropic, OpenAI and Gemini catalog caches
 
 The direct vendor kinds share the plumbing in `chat/llm/catalog_cache.py` (`get_json()` with the vendor's `error.message` on failure, `read_cache()` / `write_cache()`, `serve_catalog()` -- 24h TTL, stale-on-failure, an empty list with the error when there never was a cache) and each keep only their URL, headers, entry normalization and metadata enrichment; all three are read with the instance's own key (`get_catalog(api_key, refresh=False)`, "No API key saved yet." without one), cached in `data/anthropic_catalog.json` / `data/openai_catalog.json` / `data/gemini_catalog.json`, and expose `suggested_wire_ids(models)` for the quick setup. Rows have the OpenRouter shape plus `detail` / `capabilities` (like self-hosted discovery) and, when a Vertex registry entry serves the same model, `registry_id`.
@@ -65,5 +71,6 @@ Neither kind of server publishes a marketing name, so `name` is derived from the
 | `chat/llm/fireworks_catalog.py` | Cached Fireworks serverless catalog fetched with an instance key (`get_catalog(api_key, refresh)`; `fetch_catalog()` = `fetch_inference_models()` merged with the paginated best-effort `fetch_model_details()`; chat/embedding/router/deprecation handling in `_normalize_entry()`, `friendly_name()`, `FireworksCatalogError`) |
 | `chat/llm/nearai_catalog.py` | Cached public NEAR AI Cloud catalog (`get_catalog(refresh)`, `fetch_catalog()`; chat-model filter `is_chat_model()` over modalities + `_NON_CHAT_ID_RE`, capability flags with null-for-unknown in `_normalize_entry()`, the `/v1/model/list` TEE metadata via `fetch_tee_metadata()` folded into the fail-closed `tee` label by `classify_entry()`, `NearAICatalogError`; the quick setup's `suggested_wire_ids()` over the curated `SUGGESTED_WIRE_IDS`); also what the NEAR AI health check consults |
 | `chat/llm/trustedrouter_catalog.py` | Cached public TrustedRouter catalog (same structure as the NEAR AI module; modalities read from `architecture`, capabilities from `supported_parameters`; `TrustedRouterCatalogError`) |
+| `chat/llm/uberllm_catalog.py` | Cached public UberLLM catalog (entry normalization reused from the TrustedRouter module; `display_name` as the name, unavailable rows dropped; `UberLLMCatalogError`) |
 | `chat/llm/local_catalog.py` | Live self-hosted model discovery (`discover_models()` over `/v1/models` + `/props` or `/api/tags` + `/api/show`), `friendly_name()`, `default_snapshot()` |
 | `chat/llm/openrouter_catalog.py` | Cached OpenRouter catalog fetch, `normalize_openrouter_entry()` (shared with the NEAR AI catalog), `search_catalog()`, `catalog_snapshot()` (passes a NEAR AI entry's `tee` label through) |

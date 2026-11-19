@@ -29,12 +29,12 @@ from config.inference_providers import INSTANCE_KINDS, effective_api_key
 KEY_FETCHED_SOURCES = ("fireworks", "anthropic", "gemini", "openai")
 # Public, keyless lists -- ``get_catalog(refresh=False)``; the NEAR AI one
 # also exposes ``suggested_wire_ids(models)``.
-PUBLIC_SOURCES = ("nearai", "trustedrouter")
+PUBLIC_SOURCES = ("nearai", "trustedrouter", "uberllm")
 # Sources whose catalog module picks the quick setup's models itself.
 _CURATED_SOURCES = ("anthropic", "gemini", "openai", "nearai")
 
 # Suggestions for the remaining OpenRouter-shaped routers (OpenRouter,
-# TrustedRouter): the curated ids the legacy OpenRouter configuration
+# TrustedRouter, UberLLM): the curated ids the legacy OpenRouter configuration
 # served, when the router lists them.
 _ROUTER_SUGGESTIONS_LIMIT = 4
 
@@ -54,6 +54,8 @@ def catalog_module(source: str):
         from chat.llm import nearai_catalog as module
     elif source == "trustedrouter":
         from chat.llm import trustedrouter_catalog as module
+    elif source == "uberllm":
+        from chat.llm import uberllm_catalog as module
     elif source == "openrouter":
         from chat.llm import openrouter_catalog as module
     else:

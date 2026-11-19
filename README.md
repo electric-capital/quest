@@ -23,7 +23,7 @@ memories, sub-agents, a sandboxed script runner, and admin tooling for credentia
 gates, model health, and cost reporting.
 
 **Models**: Anthropic Claude, OpenAI and Google Gemini with a plain API key from the vendor, Claude
-and Gemini via Vertex AI, open-weight models via OpenRouter, Fireworks AI, NEAR AI or TrustedRouter,
+and Gemini via Vertex AI, open-weight models via OpenRouter, Fireworks AI, NEAR AI, TrustedRouter or UberLLM,
 and self-hosted servers (llama.cpp, vLLM, Ollama, ...). The first admin to sign in on a fresh
 deployment is asked for one API key right in the composer and can start chatting; everything else
 is configured in Settings > Inference Providers. Users pick a model per conversation; the
