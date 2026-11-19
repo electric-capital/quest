@@ -163,15 +163,87 @@ def resolve_password(*, interactive: bool = False, confirm: bool = False) -> str
     return None
 
 
+def _read_masked(prompt: str, fd: int, out) -> str:
+    """Read one line from terminal ``fd``, writing a ``*`` to ``out`` per character.
+
+    Echo and line buffering are switched off for the read, so typed and
+    pasted characters each show as a star straight away. Backspace removes
+    one character, Ctrl-U clears the line, Ctrl-C still interrupts.
+    """
+    import codecs
+    import termios
+
+    saved = termios.tcgetattr(fd)
+    raw = termios.tcgetattr(fd)
+    raw[3] &= ~(termios.ECHO | termios.ICANON)  # lflags; ISIG stays on
+    raw[6][termios.VMIN] = 1
+    raw[6][termios.VTIME] = 0
+    chars: list[str] = []
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    out.write(prompt)
+    out.flush()
+    termios.tcsetattr(fd, termios.TCSAFLUSH, raw)
+    try:
+        while True:
+            byte = os.read(fd, 1)
+            if not byte or byte in (b"\r", b"\n"):
+                break
+            if byte == b"\x04":  # Ctrl-D
+                if not chars:
+                    raise EOFError
+                break
+            if byte in (b"\x7f", b"\x08"):  # Backspace
+                if chars:
+                    chars.pop()
+                    out.write("\b \b")
+                    out.flush()
+                continue
+            if byte == b"\x15":  # Ctrl-U
+                out.write("\b \b" * len(chars))
+                out.flush()
+                chars.clear()
+                continue
+            if byte < b" ":
+                continue  # other control characters are never part of a password
+            text = decoder.decode(byte)
+            if text:
+                chars.extend(text)
+                out.write("*" * len(text))
+                out.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        out.write("\n")
+        out.flush()
+    return "".join(chars)
+
+
+def _read_password(prompt: str) -> str:
+    """Read a password from the controlling terminal with ``*`` feedback.
+
+    Falls back to ``getpass`` (no feedback) where there is no ``/dev/tty``
+    or no ``termios`` (Windows).
+    """
+    try:
+        import termios  # noqa: F401
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except (ImportError, OSError):
+        return getpass.getpass(prompt)
+    try:
+        with os.fdopen(fd, "w", closefd=False) as out:
+            return _read_masked(prompt, fd, out)
+    finally:
+        os.close(fd)
+
+
 def prompt_for_password(*, confirm: bool = False) -> str:
-    """Prompt on the TTY for the encryption password (hidden input)."""
+    """Prompt on the TTY for the encryption password (shown as ``*``)."""
     while True:
         if confirm:
             print("No encryption key file found -- choose a password that will")
             print("protect the stored credentials. You will need it (or the")
             print(f"{PASSWORD_ENV} / {PASSWORD_FILE_ENV} environment")
             print("variable) on every startup.")
-        password = getpass.getpass("Encryption password (input hidden): ").strip()
+        password = _read_password("Encryption password: ").strip()
         if not password:
             print("! The password cannot be empty.")
             continue
@@ -180,7 +252,7 @@ def prompt_for_password(*, confirm: bool = False) -> str:
             continue
         if not confirm:
             return password
-        again = getpass.getpass("Confirm encryption password: ").strip()
+        again = _read_password("Confirm encryption password: ").strip()
         if again == password:
             return password
         print("! The passwords do not match; try again.")

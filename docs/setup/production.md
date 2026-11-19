@@ -85,7 +85,7 @@ the request also exports it into the running process).
 
 **The encryption password** is resolved by `run.py` before any build step
 (`resolve_encryption_password()`): `QUEST_ENCRYPTION_PASSWORD`, then
-`QUEST_ENCRYPTION_PASSWORD_FILE`, then a hidden TTY prompt (asked twice on the first
+`QUEST_ENCRYPTION_PASSWORD_FILE`, then a masked TTY prompt (asked twice on the first
 run, when `<data_dir>/encryption_key.json` does not exist yet). Step 3 of startup
 runs `uv run python -m config.encryption init` to create or verify the key file. A
 non-interactive start with no password aborts. For systemd, put the password in a
