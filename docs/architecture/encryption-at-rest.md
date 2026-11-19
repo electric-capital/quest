@@ -88,7 +88,7 @@ Startup (`run.py`):
    before the build steps -> `config/encryption.py`
    (`resolve_password`): `QUEST_ENCRYPTION_PASSWORD`, then the file named by
    `QUEST_ENCRYPTION_PASSWORD_FILE`, then (local mode only)
-   `LOCAL_DEV_PASSWORD`, then a hidden TTY prompt (asked twice when the key
+   `LOCAL_DEV_PASSWORD`, then a masked TTY prompt (asked twice when the key
    file does not exist yet). No password on a non-TTY staging/prod start
    aborts with instructions. This is the only command-line input a
    deployment needs: the same password unlocks the first-run setup screen

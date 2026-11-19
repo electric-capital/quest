@@ -256,3 +256,84 @@ def test_inference_credentials_written_encrypted_and_swept(store_dirs):
     assert ip.effective_api_key("openrouter") == ("plain", "store")
     assert ip.encrypt_plaintext_inference_files() == ["openrouter"]
     assert ip.effective_api_key("openrouter") == ("plain", "store")
+
+
+# ---------------------------------------------------------------------------
+# Masked TTY prompt
+# ---------------------------------------------------------------------------
+
+def _masked_read(keys: bytes) -> tuple[str, str]:
+    """Run _read_masked on a pty, typing ``keys`` once the prompt is up.
+
+    Returns (password, everything the terminal displayed).
+    """
+    import pty
+    import threading
+
+    master, slave = pty.openpty()
+    shown = bytearray()
+
+    def type_keys():
+        while not shown.endswith(b": "):
+            shown.extend(os.read(master, 1024))
+        os.write(master, keys)
+
+    typist = threading.Thread(target=type_keys, daemon=True)
+    typist.start()
+    try:
+        with os.fdopen(slave, "w", closefd=False) as out:
+            password = encryption._read_masked("Password: ", slave, out)
+        typist.join(timeout=5)
+        os.set_blocking(master, False)
+        try:
+            while chunk := os.read(master, 1024):
+                shown.extend(chunk)
+        except OSError:
+            pass
+    finally:
+        os.close(master)
+        os.close(slave)
+    return password, shown.decode()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a pty")
+class TestMaskedPrompt:
+    def test_each_character_shows_as_a_star(self):
+        password, shown = _masked_read(b"hunter2\n")
+        assert password == "hunter2"
+        assert "Password: *******" in shown
+        assert "hunter2" not in shown
+
+    def test_backspace_removes_one_character_and_its_star(self):
+        password, shown = _masked_read(b"abcd\x7f\x7fx\n")
+        assert password == "abx"
+        assert shown.count("*") == 5
+        assert shown.count("\b \b") == 2
+
+    def test_ctrl_u_clears_the_line(self):
+        password, shown = _masked_read(b"wrong\x15right\n")
+        assert password == "right"
+        assert shown.count("\b \b") == 5
+
+    def test_multibyte_character_is_one_star(self):
+        password, shown = _masked_read("pä€\n".encode())
+        assert password == "pä€"
+        assert shown.count("*") == 3
+
+    def test_terminal_settings_are_restored(self):
+        import pty
+        import termios
+
+        master, slave = pty.openpty()
+        try:
+            before = termios.tcgetattr(slave)
+            import threading
+            # Nothing typed: Ctrl-D on an empty line ends the read with EOFError.
+            threading.Timer(0.2, os.write, (master, b"\x04")).start()
+            with os.fdopen(slave, "w", closefd=False) as out:
+                with pytest.raises(EOFError):
+                    encryption._read_masked("Password: ", slave, out)
+            assert termios.tcgetattr(slave) == before
+        finally:
+            os.close(master)
+            os.close(slave)
