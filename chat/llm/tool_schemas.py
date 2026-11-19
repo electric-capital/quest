@@ -3933,7 +3933,8 @@ _CREATE_ACTION_REQUEST: ToolSpec = {
         "`system:routines`, "
         "cross-user subagent runs (`request_type=\"run_user_subagent\"`) in "
         "`system:user_subagents`, shared Quest Doc changes (`write_doc`) in "
-        "`system:quest_docs`. "
+        "`system:quest_docs`, renaming an AutoProject from one of its runs "
+        "(`rename_autoproject`) in `system:autoprojects`. "
         "Before calling this tool for a given backend, "
         "load that backend's `system:<name>` skill so you have the correct "
         "request_type and parameter names. "
@@ -4201,7 +4202,11 @@ _COMPLETE_AUTOPROJECT_RUN: ToolSpec = {
                     "Optional short title for this AutoProject (at most "
                     f"{AUTOPROJECT_TITLE_MAX_CHARS} characters). Used only while "
                     "the AutoProject still has the default title cut from "
-                    "its first prompt; ignored otherwise."
+                    "its first prompt; ignored otherwise. To change a title "
+                    "that is already set, propose it with "
+                    "`create_action_request(request_type="
+                    "\"rename_autoproject\", params={\"title\": \"...\"})`, "
+                    "which the user approves."
                 ),
             },
         },

@@ -47,6 +47,7 @@ from chat.action_request_types.create_table import CreateTableHandler
 from chat.action_request_types.change_table_schema import ChangeTableSchemaHandler
 from chat.action_request_types.write_table_rows import WriteTableRowsHandler
 from chat.action_request_types.forward_gmail_message import ForwardGmailMessageHandler
+from chat.action_request_types.rename_autoproject import RenameAutoProjectHandler
 
 # Register built-in handlers
 register_handler(CreateCalendarInviteHandler())
@@ -68,3 +69,4 @@ register_handler(CreateTableHandler())
 register_handler(ChangeTableSchemaHandler())
 register_handler(WriteTableRowsHandler())
 register_handler(ForwardGmailMessageHandler())
+register_handler(RenameAutoProjectHandler())

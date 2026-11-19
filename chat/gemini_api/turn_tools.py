@@ -1480,6 +1480,17 @@ async def _handle_create_action_request(
             await archive_memory_precard_check(
                 validated_params, ctx.user, ctx.project_id,
             )
+        # rename_autoproject pre-card check: only a run may ask, for its own
+        # AutoProject, and only once the title is no longer the default one
+        # (until then complete_autoproject_run's autoproject_title names it
+        # without a card); the current title is snapshotted for the preview.
+        if req_type == "rename_autoproject":
+            from chat.action_request_types.rename_autoproject import (
+                rename_autoproject_precard_check,
+            )
+            await rename_autoproject_precard_check(
+                validated_params, ctx.user, ctx.autoproject_id,
+            )
         # Routine create/edit pre-card checks: project scoping, routine
         # existence, name collision, and skill access, plus preview
         # enrichment (current name, skill names, prompt content_diff) and

@@ -593,7 +593,8 @@ async def _tool_set_conversation_name(ctx: ToolContext, args: dict) -> str:
             "error": (
                 "An AutoProject run has no conversation name to set. "
                 "The AutoProject's title is set through complete_autoproject_run's "
-                "autoproject_title (first run only)."
+                "autoproject_title while it is still the default one, and "
+                "changed afterwards with the rename_autoproject action request."
             ),
         })
     return await _handle_set_conversation_name(

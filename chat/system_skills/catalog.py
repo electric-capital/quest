@@ -63,6 +63,7 @@ from chat.autoprojects.constants import (
     AUTOPROJECT_RUN_NOTES_MAX_CHARS,
     AUTOPROJECT_RUN_RESULT_MAX_CHARS,
     AUTOPROJECT_RUN_SUMMARY_MAX_CHARS,
+    AUTOPROJECT_TITLE_MAX_CHARS,
     AUTOPROJECTS_SERVICE_KEY,
 )
 
@@ -1865,7 +1866,30 @@ write one whenever a later run will build on this one.
 {AUTOPROJECT_RUN_SUMMARY_MAX_CHARS} characters): what this run did or found
 ("Compared three vendors; Acme is cheapest"), not the prompt restated.
 While this AutoProject still has the title cut from its first prompt, give
-it a short title with `autoproject_title`.
+it a short title with `autoproject_title`. That first naming needs no
+approval and happens once: after it, or once the user has named the
+AutoProject, `autoproject_title` is ignored.
+
+### Renaming the AutoProject later
+
+To change a title that is already set (the work has changed direction, or
+the user asks for another name), propose it and let the user approve:
+
+```
+create_action_request(
+    request_type="rename_autoproject",
+    params={{"title": "New short title"}},
+    reasoning="Why the current title no longer fits",
+)
+```
+
+`title` is the only parameter (at most {AUTOPROJECT_TITLE_MAX_CHARS}
+characters); the AutoProject is always this run's own. The card shows the
+current and the new title, and the run waits until the user resolves it.
+The request is refused while the title is still the default one (use
+`autoproject_title` then) and when the title would not change. Do not
+propose a rename the user did not ask for unless the title has become
+misleading.
 
 ### Asking instead of assuming
 
