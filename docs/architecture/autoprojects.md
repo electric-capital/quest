@@ -10,7 +10,7 @@ An **AutoProject** is a long-lived unit of work that one user keeps prompting in
 
 A run is an ordinary `conversations` row carrying `autoproject_id` (origin `"autoproject"`), the way a routine run carries `routine_id` ([Routines](routines.md)), so stop, approval cards, wait-handle resume and per-call cost records work through the existing machinery. The UI calls a run an "update"; code, routes and model-facing text say "run".
 
-This doc covers the invariants, data model, run lifecycle, starting context, questions, the model-facing surface, files, the docs and tables an AutoProject owns, events, unread state, the `autoprojects` [feature gate](feature-gates.md) and the security posture. The HTTP routes and the WebSocket start sequence are in the [AutoProjects API](../api/autoprojects-api.md), the UI in [AutoProjects Frontend](autoprojects-frontend.md).
+This doc covers the invariants, data model, run lifecycle, starting context, the title rule, questions, the model-facing surface, files, the docs and tables an AutoProject owns, events, unread state, the `autoprojects` [feature gate](feature-gates.md) and the security posture. The HTTP routes and the WebSocket start sequence are in the [AutoProjects API](../api/autoprojects-api.md), the UI in [AutoProjects Frontend](autoprojects-frontend.md).
 
 ## Key Files
 
@@ -22,6 +22,7 @@ This doc covers the invariants, data model, run lifecycle, starting context, que
 | `chat/autoprojects/runs.py` | The `complete_autoproject_run` body, the run driver `drive_autoproject_run()`, `settle_finished_run()`, `stop_autoproject_run()`; the module docstring holds the run-status table |
 | `chat/autoprojects/questions.py` | `ask_autoproject_question`: validation, the wait handle, the transcript message and the page's question view |
 | `chat/autoprojects/context.py` | The `## AutoProject` prompt block, its sub-agent variant and the per-run freeze; the module docstring holds the size budget and the escaping rule |
+| `chat/action_request_types/rename_autoproject.py` | The `rename_autoproject` card and its pre-card check ([Title](#title)) |
 | `chat/autoprojects/artifacts.py` | The delete-time capture and sweep of the Quest Docs and Quest Tables an AutoProject owns ([Docs and Tables](#docs-and-tables)) |
 | `chat/artifact_access.py` | The AutoProject rule of the shared doc and table access procedure |
 | `chat/autoprojects/events.py` / `chat/realtime/events.py` | The two realtime globals: audience and publishers (module docstring); the `make_autoproject_*` envelopes |
@@ -47,7 +48,7 @@ The backend tests are the `test_autoproject_*` files in `tests/`; the frontend t
 1. **Fresh context.** A run conversation takes exactly one user message (`start_run()` refuses a second with `autoproject_run_single_message`), so a run's model history never holds another run's messages. Everything a run knows of earlier runs comes from its starting context and the workspace.
 2. **Bounded context.** The `## AutoProject` block is at most `AUTOPROJECT_CONTEXT_MAX_CHARS` however many runs exist. Every cap that feeds it is enforced at write time, and the builder cuts each field again at render time ([Starting Context](#starting-context)).
 3. **The AutoProject is the record.** A later run inherits only from `autoprojects`, `autoproject_runs` and the AutoProject workspace; deleting a run's transcript changes nothing it sees.
-4. **User text is the user's.** The model writes only the brief, its own run's log entry, files, and docs and tables under their own access rule. It may set the title only while `title_is_default` is true (the title is still the one cut from the first prompt).
+4. **User text is the user's.** The model writes only the brief, its own run's log entry, files, and docs and tables under their own access rule. It sets the title on its own only while `title_is_default` is true (the title is still the one cut from the first prompt); any later change is a `rename_autoproject` card the user approves ([Title](#title)).
 5. **A run writes only its own entry.** The run tools take no AutoProject or run id; both come from `ToolContext.autoproject_id` / `autoproject_run_id`, resolved from the conversation row by `run_conversation_turn()`.
 6. **One active run per AutoProject** (`running` or `waiting`). `allocate_run()` in the store checks it inside the inserting transaction, and `start_run()` is its one send-path caller, so lifting the rule is a change in those two places.
 7. **Owner only, one 404.** `require_owned_autoproject()` (`chat/autoprojects/service.py`) checks the gate, then ownership; a foreign AutoProject raises exactly what a missing one does, with `autoproject_not_found_message()` as the only text. Questions, runs and the read tools follow the same rule ([AutoProjects API -- Conventions](../api/autoprojects-api.md#conventions)).
@@ -93,7 +94,7 @@ A resume turn re-checks first: a run that finished meanwhile (a card approved af
 
 ### Complete
 
-`complete_autoproject_run(summary, result, notes, brief?, expected_brief_version?, autoproject_title?)` validates every argument before writing anything; a refusal (`summary_too_long`, `brief_too_long`, ... with `cap` and `actual`) is a tool error and the run stays open for a retry. Then it writes the brief, the entry and the status, applies `autoproject_title` while the title is still the default, and settles the run.
+`complete_autoproject_run(summary, result, notes, brief?, expected_brief_version?, autoproject_title?)` validates every argument before writing anything; a refusal (`summary_too_long`, `brief_too_long`, ... with `cap` and `actual`) is a tool error and the run stays open for a retry. Then it writes the brief, the entry and the status, applies `autoproject_title` while the title is still the default ([Title](#title)), and settles the run.
 
 The brief write is checked against `brief_write_base_version()`: the version the run's prompt showed (`context_brief_version`), or the `brief_conflict_version` a conflict handed the run. Any other `expected_brief_version` is ignored, so a model cannot overwrite a user edit it never saw. When the user changed the brief during the run, the entry is saved as pending (the page hides it while the run is active), the run stays open, and the tool returns `brief_conflict` with the current brief for the model to merge and call again. A run that ends without retrying keeps the pending entry and the user's brief wins.
 
@@ -115,6 +116,16 @@ Every finish (completed, failed, stopped) goes through `settle_finished_run()`: 
 
 The block is built once per run: `load_run_autoproject_context()` freezes it with its brief version on the run row on the first turn and returns the frozen pair on every later one. A run resumed after a question, a rebuilt session or a restart therefore sees the context it started with, and its brief write is checked against the version that context showed.
 
+## Title
+
+The model names an AutoProject once on its own and needs the user's approval for every change after that. `title_is_default` on the row is the switch: true while the title is the one cut from the first prompt (or the fallback), cleared by the first naming from either side.
+
+- **First naming, no approval.** `complete_autoproject_run`'s `autoproject_title` is applied by `set_title_from_run()` (`db/autoproject_store.py`), whose UPDATE checks and clears the flag in one statement, so exactly one such naming lands. Once the flag is clear the argument is ignored: after a run named the AutoProject, and from the start when the user typed a title or renamed it (`PATCH /autoprojects/{id}`).
+- **Later changes, approved.** A run proposes `create_action_request(request_type="rename_autoproject", params={"title"})` (`RenameAutoProjectHandler` in `chat/action_request_types/rename_autoproject.py`). The AutoProject is never a parameter: the pre-card check takes it from `ToolContext.autoproject_id` and `execute()` from the conversation row, so a run renames only its own AutoProject and the type is refused outside a run. The pre-card check (`rename_autoproject_precard_check`, in the `create_action_request` arm) also refuses while `title_is_default` is still true (the model is pointed at `autoproject_title`) and when the title would not change, and snapshots the title into the server-only `current_title` the card shows beside the new one.
+- **On Approve.** `execute()` re-checks the gate and ownership and renames through `service.update_autoproject()`, the path of the user's own rename, which publishes the two AutoProject events. Like every card of a run, an open rename card is closed as `stopped` when the run finishes ([Stop, Failure and Settling](#stop-failure-and-settling)), so the run waits on it.
+
+The type is not in `PUBLIC_ACTION_REQUEST_TYPES` and its parameters are documented for the model in `system:autoprojects`.
+
 ## Questions
 
 `ask_autoproject_question(question, options?)` is a loop arm (`chat/gemini_api/turn_tools.py`) over `chat/autoprojects/questions.py`. It validates the question and options, creates a pending wait handle of kind `autoproject_question` (payload `{question, options}`, correlated to the run from creation, no expiry), records a durable `autoproject_question` transcript row and raises `SuspendForAutoProjectQuestion`; the driver marks the run `waiting`. An unanswered question keeps the run waiting until the user answers or stops it.
@@ -127,7 +138,7 @@ A run is a private standalone top-level conversation in everything else: `run_ki
 
 - **Tier.** `run_conversation_turn()` gives a run `AUTOPROJECT_RUN_TOOLS`: the top-level tier plus `complete_autoproject_run` and `ask_autoproject_question`. Sub-agents keep their own tier, and shared dispatch refuses the two loop tools to sub-agents and scripts.
 - **Read tools.** `list_autoproject_runs` (pages the whole log) and `read_autoproject_run` (one run's prompt, result, notes and questions) are core-tier `tool_call` tools in `AUTOPROJECT_ONLY_TOOL_CALL_TOOLS`, gated on the pseudo-key and excluded from every prompt but a run's and its sub-agents'. They are in `SCRIPT_TOOL_CALL_ALLOWLIST` (the sandbox lease carries the run's ids) and never public. Outside a run they answer `not_autoproject_run`; an unknown or deleted run number answers `run_not_found`.
-- **Prompt.** The `## AutoProject` section stands alone, so a run needs no skill load to finish correctly. `set_conversation_name` is hidden and refused: the title comes from `autoproject_title`.
+- **Prompt.** The `## AutoProject` section stands alone, so a run needs no skill load to finish correctly. `set_conversation_name` is hidden and refused: a run names its AutoProject, not its conversation ([Title](#title)).
 - **Skill.** `system:autoprojects` holds the longer guidance (what belongs in the brief, the notes and the result, when to ask, durable files in `autoproject://`). It requires the pseudo-key and `requires_autoproject_run`, so it is listed and loads only in a run. Loaded in a run, `system:workspace` gets a note on the run's two spaces prepended, and `system:quest_docs` and `system:tables` a note on the `autoproject` target and scope ([Docs and Tables](#docs-and-tables)).
 - **Sub-agents.** The spawn arms load `load_autoproject_subagent_context()` (title and brief, read-only) into the sub-agent prompt and pass the run's ids to every sub-agent tool call, nested ones included, so `autoproject://`, the `/autoproject` mount and the read tools reach the parent run's AutoProject.
 

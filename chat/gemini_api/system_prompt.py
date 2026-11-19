@@ -665,7 +665,7 @@ _ROUTINE_NAMING_SECTION = """**Routine run:** This conversation is a routine run
 # shown by name (the AutoProject page shows the AutoProject's title), so
 # ``set_conversation_name`` is not offered. How an AutoProject run finishes is
 # in the ``## AutoProject`` section near the end of the prompt.
-_AUTOPROJECT_RUN_NAMING_SECTION = """**AutoProject run:** This conversation is one run of an AutoProject and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. How to finish the run, ask the user and hand off to the next run is in the `## AutoProject` section at the end of this prompt. If the title shown there is still just the start of the first prompt, give this AutoProject a short title through `complete_autoproject_run`'s `autoproject_title` (it is ignored once a title has been set)."""
+_AUTOPROJECT_RUN_NAMING_SECTION = """**AutoProject run:** This conversation is one run of an AutoProject and has no name of its own: do not try to set a conversation name; go straight to the work in the user's message. How to finish the run, ask the user and hand off to the next run is in the `## AutoProject` section at the end of this prompt. If the title shown there is still just the start of the first prompt, give this AutoProject a short title through `complete_autoproject_run`'s `autoproject_title` (it is ignored once a title has been set; changing a set title needs the user's approval through the `rename_autoproject` action request)."""
 
 # The two loop-level tools of an AutoProject run, appended to the numbered tool
 # list (which then counts fifteen). Their own function declarations carry the
