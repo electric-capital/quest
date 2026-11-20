@@ -113,3 +113,31 @@ def cookie_secure() -> bool:
 def image_suffix() -> str:
     """Suffix for per-mode container image tags (quest-script-runner-*)."""
     return get_quest_env()
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def normalize_host(host: str) -> str:
+    """Strip whitespace and the brackets of an IPv6 literal (``[::1]`` -> ``::1``)."""
+    host = host.strip()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host
+
+
+def is_loopback_host(host: str) -> bool:
+    return normalize_host(host).lower() in LOOPBACK_HOSTS
+
+
+def resolve_bind_host(mode: str, host_arg: "str | None" = None, env_host: "str | None" = None) -> str:
+    """Pick the address uvicorn binds to.
+
+    An explicit --host wins, then QUEST_HOST, then the mode default: local mode
+    stays on loopback (it enables the password-free dev login), staging and
+    prod listen on every interface.
+    """
+    for explicit in (host_arg, env_host):
+        if explicit and normalize_host(explicit):
+            return normalize_host(explicit)
+    return "127.0.0.1" if mode == LOCAL else "0.0.0.0"

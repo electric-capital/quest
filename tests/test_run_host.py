@@ -31,6 +31,26 @@ def test_flag_wins_over_env():
     assert run.resolve_bind_host("local", host_arg="0.0.0.0", env_host="127.0.0.1") == "0.0.0.0"
 
 
+def test_bracketed_ipv6_is_stripped_for_binding():
+    assert run.resolve_bind_host("local", host_arg="[::1]") == "::1"
+    assert run.resolve_bind_host("prod", env_host="[::]") == "::"
+
+
+def test_url_host_brackets_ipv6_only():
+    assert run.url_host("::1") == "[::1]"
+    assert run.url_host("127.0.0.1") == "127.0.0.1"
+
+
+def test_warning_shows_bracketed_ipv6():
+    assert "[::]:9000" in run.local_mode_network_warning("local", "::", "9000")
+
+
+def test_uvicorn_cmd_carries_host_and_port():
+    cmd = run.build_uvicorn_cmd("192.168.1.5", "9000", "/tmp/log.json")
+    assert cmd[cmd.index("--host") + 1] == "192.168.1.5"
+    assert cmd[cmd.index("--port") + 1] == "9000"
+
+
 def test_empty_values_fall_back_to_default():
     assert run.resolve_bind_host("local", host_arg="", env_host="") == "127.0.0.1"
     assert run.resolve_bind_host("prod", host_arg=None, env_host="") == "0.0.0.0"

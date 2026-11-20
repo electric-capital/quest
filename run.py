@@ -62,6 +62,8 @@ from pathlib import Path
 
 from typing import Optional
 
+from config.environment import is_loopback_host, resolve_bind_host
+
 # Throwaway local-mode data directories live under data/local-runs/; the
 # most recent LOCAL_RUNS_KEEP are retained, older ones are pruned at startup.
 LOCAL_RUNS_DIRNAME = "local-runs"
@@ -793,29 +795,26 @@ def print_local_service_summary(project_root: Path, data_dir: Path) -> None:
     print()
 
 
-LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+def url_host(host: str) -> str:
+    """Bracket an IPv6 literal so it can sit in a URL."""
+    return f"[{host}]" if ":" in host else host
 
 
-def resolve_bind_host(mode: str, host_arg: Optional[str] = None, env_host: Optional[str] = None) -> str:
-    """Pick the address uvicorn binds to.
-
-    An explicit --host wins, then QUEST_HOST, then the mode default: local mode
-    stays on loopback (it enables the password-free dev login), staging and
-    prod listen on every interface.
-    """
-    if host_arg:
-        return host_arg
-    if env_host:
-        return env_host
-    return "127.0.0.1" if mode == "local" else "0.0.0.0"
+def build_uvicorn_cmd(host: str, port: str, log_config_path: str) -> list:
+    return [
+        "uv", "run", "uvicorn", "quest:app",
+        "--host", host,
+        "--port", port,
+        "--log-config", log_config_path,
+    ]
 
 
 def local_mode_network_warning(mode: str, host: str, port: str) -> Optional[str]:
     """Return a warning when local mode is bound beyond loopback, else None."""
-    if mode != "local" or host.strip("[]").lower() in LOOPBACK_HOSTS:
+    if mode != "local" or is_loopback_host(host):
         return None
     return (
-        f"WARNING: local mode is listening on {host}:{port}. The password-free dev login is "
+        f"WARNING: local mode is listening on {url_host(host)}:{port}. The password-free dev login is "
         "reachable from the network: anyone who can connect can sign in as any account, "
         "including the admin. Use --host 127.0.0.1 unless you need remote access."
     )
@@ -1048,7 +1047,7 @@ def main() -> None:
     print(f"[6/6] Starting backend server ({mode_label.lower()} mode)...")
     from config.version import describe_release
     print(f"  Release: {describe_release()}")
-    print(f"Server will run on http://{host}:{port}")
+    print(f"Server will run on http://{url_host(host)}:{port}")
     warning = local_mode_network_warning(mode, host, port)
     if warning:
         print()
@@ -1084,12 +1083,7 @@ def main() -> None:
     with os.fdopen(log_fd, "w") as f:
         json.dump(log_config, f, indent=4)
 
-    uvicorn_cmd = [
-        "uv", "run", "uvicorn", "quest:app",
-        "--host", host,
-        "--port", port,
-        "--log-config", log_config_path,
-    ]
+    uvicorn_cmd = build_uvicorn_cmd(host, port, log_config_path)
 
     try:
         subprocess.run(uvicorn_cmd, cwd=project_root, check=True)

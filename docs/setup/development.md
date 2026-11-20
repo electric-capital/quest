@@ -121,7 +121,15 @@ All server credentials live in `server_credentials.json` (see `server_credential
 
 - **Google OAuth** (`google_oauth.web`): Client ID and secret from Google Cloud Console. Redirect URIs: `http://localhost:8000/auth/callback` (app login) and `http://localhost:8000/auth/google-services/callback` (Google Services OAuth). Can also be set from the admin-only Settings > Service Credentials section instead of the file; at startup the section is migrated into the per-service store under the data directory, which takes precedence. See [Service Credentials](../architecture/service-credentials.md)
 
-When the dev server is reached by raw IP (e.g. a remote dev box), Google rejects IP-based redirect URIs. Set the top-level `oauth_hostname` key in `server_config.json` (e.g. `dev.example.com`), add an `/etc/hosts` entry pointing that hostname at the server's IP, browse the app through the hostname, start the server with `python3 run.py --host 0.0.0.0` (local mode listens on 127.0.0.1 by default, and this makes the password-free dev login reachable from the network, so use it only on a trusted network), and register the hostname-based callback URLs (e.g. `http://dev.example.com:9000/auth/callback`) with the provider. See [Auth Architecture -- OAuth Callback Hostname Override](../architecture/auth.md#oauth-callback-hostname-override).
+When the dev server is reached by raw IP (e.g. a remote dev box), Google rejects IP-based redirect URIs. To work around this:
+
+1. Set the top-level `oauth_hostname` key in `server_config.json` (e.g. `dev.example.com`).
+2. Add an `/etc/hosts` entry pointing that hostname at the server's IP.
+3. Start the server with `python3 run.py --host 0.0.0.0`. Local mode listens on 127.0.0.1 by default. This option makes the password-free dev login reachable from the network, so use it only on a trusted network.
+4. Browse the app through the hostname.
+5. Register the hostname-based callback URLs (e.g. `http://dev.example.com:9000/auth/callback`) with the provider.
+
+See [Auth Architecture -- OAuth Callback Hostname Override](../architecture/auth.md#oauth-callback-hostname-override).
 Optional sections (configured separately; Slack, GitHub, and Twitter/X can also be set from Settings > Service Credentials, which takes precedence):
 - `slack` -- See [Slack App Setup](../../plugins/slack/docs/slack-app-setup.md)
 - `github` -- See [GitHub App Setup](../../plugins/github/docs/github-app-setup.md)
