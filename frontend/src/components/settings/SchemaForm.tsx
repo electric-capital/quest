@@ -1,4 +1,5 @@
 import { Fragment, useState } from 'react';
+import type { ReactNode } from 'react';
 import type {
   SchemaFormField,
   SchemaFormItem,
@@ -150,7 +151,7 @@ function FieldError({ id, error }: { id: string; error?: string }) {
 
 function FieldLabel({ id, label, optional }: { id: string; label: string; optional: boolean }) {
   return (
-    <label htmlFor={id} className="svc-cred-label">
+    <label htmlFor={id} id={`${id}-label`} className="svc-cred-label">
       {label} {optional && <span className="svc-cred-optional">(optional)</span>}
     </label>
   );
@@ -187,6 +188,7 @@ export function CredentialField({
   readOnly = false,
   disabled = false,
   error,
+  action,
 }: {
   id: string;
   label: string;
@@ -199,6 +201,8 @@ export function CredentialField({
   readOnly?: boolean;
   disabled?: boolean;
   error?: string;
+  /** Optional control shown under the input (e.g. a secret's Remove). */
+  action?: ReactNode;
 }) {
   const errorId = `${id}-error`;
   const helpId = `${id}-help`;
@@ -219,6 +223,7 @@ export function CredentialField({
         aria-invalid={error ? true : undefined}
         aria-describedby={describedByIds(helpId, help, errorId, error)}
       />
+      {action}
       <FieldError id={errorId} error={error} />
     </div>
   );
@@ -422,6 +427,13 @@ export interface SchemaFormProps {
   /** Secret keys that have a stored value: their placeholder says leaving
    * the field blank keeps it. */
   storedSecrets?: readonly string[];
+  /** Optional secret keys that have a stored value and may be removed: each
+   * shows a Remove action. Needs `onRemoveSecret`. */
+  removableSecrets?: readonly string[];
+  /** Secret keys marked for removal on save (shown as pending removal). */
+  pendingRemoval?: readonly string[];
+  /** Called with the secret key and whether it is now marked for removal. */
+  onRemoveSecret?: (key: string, remove: boolean) => void;
   /** Keys shown but not editable (e.g. the account-determining fields when
    * re-entering a connection). Text fields become readOnly, select and
    * bool fields disabled. */
@@ -440,6 +452,9 @@ export function SchemaForm({
   onChange,
   idPrefix,
   storedSecrets = [],
+  removableSecrets = [],
+  pendingRemoval = [],
+  onRemoveSecret,
   readOnlyKeys = [],
   disabled = false,
   errors = {},
@@ -554,6 +569,9 @@ export function SchemaForm({
           );
         }
         const secret = field.type === 'secret';
+        const canRemove =
+          secret && onRemoveSecret !== undefined && removableSecrets.includes(field.key);
+        const removing = canRemove && pendingRemoval.includes(field.key);
         return (
           <CredentialField
             key={field.key}
@@ -562,16 +580,31 @@ export function SchemaForm({
             value={String(values[field.key] ?? '')}
             onChange={(value) => onChange(field.key, value)}
             placeholder={
-              secret
-                ? secretPlaceholder(storedSecrets.includes(field.key), field.placeholder)
-                : field.placeholder
+              removing
+                ? 'Will be removed when you save'
+                : secret
+                  ? secretPlaceholder(storedSecrets.includes(field.key), field.placeholder)
+                  : field.placeholder
             }
             help={field.help}
             secret={secret}
             optional={optional}
             readOnly={readOnly}
-            disabled={disabled}
+            disabled={disabled || removing}
             error={error}
+            action={
+              canRemove && (
+                <button
+                  type="button"
+                  className="svc-cred-secret-remove"
+                  onClick={() => onRemoveSecret(field.key, !removing)}
+                  disabled={disabled}
+                  aria-describedby={`${id}-label`}
+                >
+                  {removing ? 'Keep stored value' : 'Remove'}
+                </button>
+              )
+            }
           />
         );
       })}

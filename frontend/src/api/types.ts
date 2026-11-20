@@ -2973,7 +2973,8 @@ export interface ServiceCredentialsListResponse {
 
 // Generic PUT body: flat {field key: value}. An empty secret value keeps
 // the currently stored one; a list field is sent as its full entry array.
-export type ServiceCredentialUpdate = Record<string, string | boolean | SchemaFormItem[]>;
+// `clear` lists optional secret keys to remove from the stored config.
+export type ServiceCredentialUpdate = Record<string, string | boolean | string[] | SchemaFormItem[]>;
 
 // Admin inference providers (LLM backend credentials/config)
 

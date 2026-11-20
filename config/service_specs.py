@@ -483,21 +483,71 @@ def _resolve_entries(f: CredentialField, raw) -> list[dict]:
     ]
 
 
-def resolve_update(spec: ServiceSpec, values: dict, existing: dict | None) -> dict:
+def _check_clear(spec: ServiceSpec, values: dict, clear) -> frozenset:
+    """Validate the PUT ``clear`` list: the keys of optional secret fields
+    to remove from the stored config. Returns the keys as a set.
+
+    Refused (ValueError): a non-list, a non-string or unknown key, a key
+    that is not a ``secret`` field, a spec with a custom stored shape
+    (``unflatten``), and a key that also carries a non-empty value in the
+    same request. Whether the field is required is checked after the
+    values are resolved, since ``required_if`` depends on them.
+    """
+    if clear is None:
+        return frozenset()
+    if not isinstance(clear, list) or not all(isinstance(k, str) for k in clear):
+        raise ValueError("clear must be a list of field keys.")
+    if not clear:
+        return frozenset()
+    if spec.unflatten:
+        raise ValueError(
+            f"{spec.label} stores its credentials in a custom shape; "
+            "removing a secret is not supported for it.")
+    field_map = {f.key: f for f in spec.fields}
+    unknown = sorted(set(clear) - set(field_map))
+    if unknown:
+        raise ValueError(f"Cannot clear unknown field(s): {', '.join(unknown)}")
+    for key in clear:
+        f = field_map[key]
+        if f.type != "secret":
+            raise ValueError(f"{f.label} is not a secret field and cannot be cleared.")
+        raw = values.get(key)
+        if isinstance(raw, str) and raw.strip():
+            raise ValueError(
+                f"{f.label} cannot be cleared and set in the same request.")
+    return frozenset(clear)
+
+
+def resolve_update(
+    spec: ServiceSpec,
+    values: dict,
+    existing: dict | None,
+    clear=None,
+) -> dict:
     """Validate a generic PUT body and produce the config dict to store.
 
     Applies the schema rules: unknown keys rejected, strings stripped,
     empty secret = keep the stored one, ``required``/``required_if``
     enforcement (per entry too for ``list`` fields, whose value must be a
     JSON array of entry objects), then the spec's ``validate`` hook and
-    stored-shape mapping. Raises ValueError with a user-facing message on
-    rejection.
+    stored-shape mapping. ``clear`` lists optional secret keys to remove
+    from the stored config instead of keeping them (see ``_check_clear``).
+    Raises ValueError with a user-facing message on rejection.
     """
     if not isinstance(values, dict):
         raise ValueError("Expected a JSON object of credential fields.")
+    cleared = _check_clear(spec, values, clear)
     existing = existing or {}
     flat_existing = _flat(spec, existing)
     resolved = _resolve_values(spec.fields, values, flat_existing)
+    for f in spec.fields:
+        if f.key not in cleared:
+            continue
+        required = bool(resolved.get(f.required_if)) if f.required_if else f.required
+        if required:
+            raise ValueError(f"{f.label} is required and cannot be cleared.")
+        # Resolution kept the stored secret; the validate hook sees it gone.
+        resolved[f.key] = ""
 
     if spec.validate:
         resolved = spec.validate(resolved)
@@ -506,9 +556,13 @@ def resolve_update(spec: ServiceSpec, values: dict, existing: dict | None) -> di
         return spec.unflatten(resolved, existing)
 
     # Default stored shape: merge over the existing config so unrecognized
-    # keys survive a save; optional secrets with no value stay absent.
+    # keys survive a save; optional secrets with no value stay absent, and
+    # cleared ones are removed.
     stored = dict(existing)
     for f in spec.fields:
+        if f.key in cleared:
+            stored.pop(f.key, None)
+            continue
         value = resolved.get(f.key)
         if f.type == "secret" and not value:
             continue
