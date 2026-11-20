@@ -6,7 +6,7 @@ Quest development environment setup on a local machine. The application is a Fas
 
 ## Key Files
 
-- `run.py` -- Single-command launcher: builds frontend, installs deps, runs migrations (plus local-mode seeding), starts server. Accepts `--local` (port 9000, default; `--dev` is a deprecated alias), `--staging` (port 8000), or `--prod` (port 8000). See [Run Modes](../architecture/run-modes.md)
+- `run.py` -- Single-command launcher: builds frontend, installs deps, runs migrations (plus local-mode seeding), starts server. Accepts `--local` (port 9000, default; `--dev` is a deprecated alias), `--staging` (port 8000), or `--prod` (port 8000), and `--host ADDR` (or `QUEST_HOST`) to set the listen address: local mode defaults to `127.0.0.1`, staging and prod to `0.0.0.0`. See [Run Modes](../architecture/run-modes.md)
 - `config/environment.py` -- Central run-mode resolution (`local`/`staging`/`prod`) and capability flags (dev login, domain enforcement, cookie name/secure, image suffix). All mode checks go through this module
 - `scripts/seed_local.py` -- Seeds a fresh local-mode database with canned accounts (`admin@quest.local`, `alice@quest.local`, `bob@quest.local`, plus the high-volume `heidi@quest.local` for testing the paged sidebar) and demo data; run automatically by `run.py --local` on a fresh throwaway data dir
 - `server_credentials.json` -- Legacy consolidated server credentials (Google OAuth, Slack, GitHub, CoinGecko). Loaded by `_load_server_credentials()` in `auth/config.py`. Google OAuth, Slack, GitHub, Twitter/X, and CoinGecko are now primarily managed in the admin-only Settings > Service Credentials section (see [Service Credentials](../architecture/service-credentials.md)); this file remains a read fallback. See `server_credentials.example.json` for structure
@@ -121,7 +121,15 @@ All server credentials live in `server_credentials.json` (see `server_credential
 
 - **Google OAuth** (`google_oauth.web`): Client ID and secret from Google Cloud Console. Redirect URIs: `http://localhost:8000/auth/callback` (app login) and `http://localhost:8000/auth/google-services/callback` (Google Services OAuth). Can also be set from the admin-only Settings > Service Credentials section instead of the file; at startup the section is migrated into the per-service store under the data directory, which takes precedence. See [Service Credentials](../architecture/service-credentials.md)
 
-When the dev server is reached by raw IP (e.g. a remote dev box), Google rejects IP-based redirect URIs. Set the top-level `oauth_hostname` key in `server_config.json` (e.g. `dev.example.com`), add an `/etc/hosts` entry pointing that hostname at the server's IP, browse the app through the hostname, and register the hostname-based callback URLs (e.g. `http://dev.example.com:9000/auth/callback`) with the provider. See [Auth Architecture -- OAuth Callback Hostname Override](../architecture/auth.md#oauth-callback-hostname-override).
+When the dev server is reached by raw IP (e.g. a remote dev box), Google rejects IP-based redirect URIs. To work around this:
+
+1. Set the top-level `oauth_hostname` key in `server_config.json` (e.g. `dev.example.com`).
+2. Add an `/etc/hosts` entry pointing that hostname at the server's IP.
+3. Start the server with `python3 run.py --host 0.0.0.0`. Local mode listens on 127.0.0.1 by default. This option makes the password-free dev login reachable from the network, so use it only on a trusted network.
+4. Browse the app through the hostname.
+5. Register the hostname-based callback URLs (e.g. `http://dev.example.com:9000/auth/callback`) with the provider.
+
+See [Auth Architecture -- OAuth Callback Hostname Override](../architecture/auth.md#oauth-callback-hostname-override).
 Optional sections (configured separately; Slack, GitHub, and Twitter/X can also be set from Settings > Service Credentials, which takes precedence):
 - `slack` -- See [Slack App Setup](../../plugins/slack/docs/slack-app-setup.md)
 - `github` -- See [GitHub App Setup](../../plugins/github/docs/github-app-setup.md)
@@ -141,7 +149,7 @@ Session cookie name is mode-dependent: `quest_session_local` (local), `quest_ses
 
 The standard way to run is `python3 run.py` (local mode, port 9000, fresh throwaway seeded DB per run) or `python3 run.py --prod` (port 8000). This handles frontend builds, dependency installation, migrations, local seeding, script-runner image validation, and server startup. Use `--keep-data` to reuse the previous local run's data directory instead of starting fresh. Local mode boots with zero credential files -- missing services show as disconnected and chat is disabled until an LLM credential is configured. See [Run Modes](../architecture/run-modes.md).
 
-For manual backend startup (e.g., debugging): `QUEST_ENV=local uv run uvicorn quest:app --reload --host 0.0.0.0 --port 8000 --log-config logging_config.json`. When starting manually, the frontend must be built first (`cd frontend && npm install && npm run build`) and migrations are not run automatically.
+For manual backend startup (e.g., debugging): `QUEST_ENV=local uv run uvicorn quest:app --reload --host 127.0.0.1 --port 8000 --log-config logging_config.json`. When starting manually, the frontend must be built first (`cd frontend && npm install && npm run build`) and migrations are not run automatically.
 
 Access points:
 - App: `http://localhost:9000/` (local) or `http://localhost:8000/` (staging/prod)
