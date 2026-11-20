@@ -17,6 +17,11 @@ Local-mode options:
   --keep-data [DIR]  Reuse the most recent local run's data directory
                      (or DIR when given) instead of creating a fresh one.
 
+Bind address:
+  Local mode listens on 127.0.0.1 only, because it enables the password-free
+  dev login. Staging and prod listen on 0.0.0.0. --host ADDR (or the
+  QUEST_HOST env var; the flag wins) sets it explicitly in any mode.
+
 Run modes (see config/environment.py for the semantics):
   local    Throwaway per-run database seeded with canned accounts and demo
            data (skipped with --keep-data). No OAuth needed: the sign-in
@@ -788,6 +793,34 @@ def print_local_service_summary(project_root: Path, data_dir: Path) -> None:
     print()
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def resolve_bind_host(mode: str, host_arg: Optional[str] = None, env_host: Optional[str] = None) -> str:
+    """Pick the address uvicorn binds to.
+
+    An explicit --host wins, then QUEST_HOST, then the mode default: local mode
+    stays on loopback (it enables the password-free dev login), staging and
+    prod listen on every interface.
+    """
+    if host_arg:
+        return host_arg
+    if env_host:
+        return env_host
+    return "127.0.0.1" if mode == "local" else "0.0.0.0"
+
+
+def local_mode_network_warning(mode: str, host: str, port: str) -> Optional[str]:
+    """Return a warning when local mode is bound beyond loopback, else None."""
+    if mode != "local" or host.strip("[]").lower() in LOOPBACK_HOSTS:
+        return None
+    return (
+        f"WARNING: local mode is listening on {host}:{port}. The password-free dev login is "
+        "reachable from the network: anyone who can connect can sign in as any account, "
+        "including the admin. Use --host 127.0.0.1 unless you need remote access."
+    )
+
+
 def main() -> None:
     """Run the setup and start the server."""
     parser = argparse.ArgumentParser(description="Start the Quest server.")
@@ -804,6 +837,12 @@ def main() -> None:
         metavar="DIR",
         help="(local mode) reuse the most recent local run's data directory, or DIR when given, instead of creating a fresh throwaway one",
     )
+    parser.add_argument(
+        "--host",
+        default=None,
+        metavar="ADDR",
+        help="address to listen on in any mode (default: 127.0.0.1 in local mode, 0.0.0.0 in staging and prod; QUEST_HOST sets it too, and this flag wins)",
+    )
     args = parser.parse_args()
 
     if args.prod:
@@ -816,6 +855,7 @@ def main() -> None:
             print("Note: --dev is deprecated; use --local (same behavior).")
 
     local_mode = mode == "local"
+    host = resolve_bind_host(mode, args.host, os.environ.get("QUEST_HOST"))
     project_root = Path(__file__).parent.resolve()
 
     # In local mode, check dev_config.json for a custom port
@@ -1008,7 +1048,11 @@ def main() -> None:
     print(f"[6/6] Starting backend server ({mode_label.lower()} mode)...")
     from config.version import describe_release
     print(f"  Release: {describe_release()}")
-    print(f"Server will run on http://0.0.0.0:{port}")
+    print(f"Server will run on http://{host}:{port}")
+    warning = local_mode_network_warning(mode, host, port)
+    if warning:
+        print()
+        print(warning)
     print()
     print("Access points:")
     print(f"  - Chat app: http://localhost:{port}/")
@@ -1042,7 +1086,7 @@ def main() -> None:
 
     uvicorn_cmd = [
         "uv", "run", "uvicorn", "quest:app",
-        "--host", "0.0.0.0",
+        "--host", host,
         "--port", port,
         "--log-config", log_config_path,
     ]

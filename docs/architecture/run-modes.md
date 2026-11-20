@@ -10,6 +10,7 @@ Quest runs in one of three modes, selected by the `QUEST_ENV` environment variab
 |---|---|---|---|
 | Launch | `run.py` / `run.py --local` (default; `--dev` deprecated alias) | `run.py --staging` | `run.py --prod` |
 | Port | 9000 (`dev_config.json` `dev_port` override) | 8000 | 8000 |
+| Listens on | `127.0.0.1` (`--host` or `QUEST_HOST` overrides; a warning prints when it is not loopback) | `0.0.0.0` | `0.0.0.0` |
 | Login | canned-account picker + free email via `/auth/dev-login`; Google OAuth optional | Google OAuth | Google OAuth |
 | Domain restriction | off | on | on |
 | Database / data dir | fresh throwaway per run under `data/local-runs/`, seeded; `--keep-data` reuses the latest | persistent | persistent |
