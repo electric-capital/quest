@@ -541,6 +541,98 @@ def test_admin_put_slack_requires_secret_when_none_stored(admin_routes, slack_pl
     assert exc_info.value.status_code == 400
 
 
+def _put_slack_body(**extra):
+    return {"client_id": "id", "client_secret": "", **extra}
+
+
+def test_admin_put_clear_removes_optional_secret(admin_routes, slack_plugin):
+    sc.write_service_credentials("slack", {**SLACK_CONFIG, "extra": "kept"})
+    detail = _put(admin_routes, "slack", _put_slack_body(clear=["bot_token"]))
+    stored = sc.read_service_credentials("slack")
+    assert "bot_token" not in stored
+    assert stored["socket_mode_token"] == "xapp-token"  # not listed, kept
+    assert stored["client_secret"] == "slack-secret"
+    assert stored["extra"] == "kept"
+    assert detail["credentials"]["bot_token_set"] is False
+    assert detail["credentials"]["socket_mode_token_set"] is True
+
+
+def test_admin_put_clear_both_optional_secrets(admin_routes, slack_plugin):
+    sc.write_service_credentials("slack", SLACK_CONFIG)
+    _put(admin_routes, "slack", _put_slack_body(clear=["bot_token", "socket_mode_token"]))
+    stored = sc.read_service_credentials("slack")
+    assert "bot_token" not in stored and "socket_mode_token" not in stored
+
+
+def test_admin_put_clear_missing_or_empty_keeps_stored_secrets(admin_routes, slack_plugin):
+    sc.write_service_credentials("slack", SLACK_CONFIG)
+    _put(admin_routes, "slack", _put_slack_body())
+    _put(admin_routes, "slack", _put_slack_body(clear=[]))
+    _put(admin_routes, "slack", _put_slack_body(bot_token=None))
+    stored = sc.read_service_credentials("slack")
+    assert stored["bot_token"] == "xoxb-token"
+    assert stored["socket_mode_token"] == "xapp-token"
+
+
+@pytest.mark.parametrize(
+    "clear, message",
+    [
+        (["client_secret"], "required and cannot be cleared"),
+        (["nope"], "unknown field"),
+        (["client_id"], "not a secret field"),
+        ("bot_token", "list of field keys"),
+        ([1], "list of field keys"),
+    ],
+)
+def test_admin_put_clear_refusals_leave_store_untouched(
+    admin_routes, slack_plugin, clear, message
+):
+    sc.write_service_credentials("slack", SLACK_CONFIG)
+    with pytest.raises(HTTPException) as exc_info:
+        _put(admin_routes, "slack", _put_slack_body(clear=clear))
+    assert exc_info.value.status_code == 400
+    assert message in exc_info.value.detail["message"]
+    assert sc.read_service_credentials("slack") == SLACK_CONFIG
+
+
+def test_admin_put_clear_with_value_refused(admin_routes, slack_plugin):
+    sc.write_service_credentials("slack", SLACK_CONFIG)
+    with pytest.raises(HTTPException) as exc_info:
+        _put(admin_routes, "slack", _put_slack_body(bot_token="xoxb-new", clear=["bot_token"]))
+    assert exc_info.value.status_code == 400
+    assert "same request" in exc_info.value.detail["message"]
+    assert sc.read_service_credentials("slack") == SLACK_CONFIG
+
+
+def test_admin_put_clear_refused_for_custom_unflatten_spec(admin_routes):
+    sc.write_service_credentials("google_oauth", {"web": {"client_id": "g", "client_secret": "gs"}})
+    before = sc.read_service_credentials("google_oauth")
+    with pytest.raises(HTTPException) as exc_info:
+        _put(admin_routes, "google_oauth", {"client_id": "g", "clear": ["client_secret"]})
+    assert exc_info.value.status_code == 400
+    assert "custom shape" in exc_info.value.detail["message"]
+    assert sc.read_service_credentials("google_oauth") == before
+
+
+def test_resolve_update_clear_refuses_secret_required_by_toggle():
+    from config.plugin_types import CredentialField
+    from config.service_specs import ServiceSpec, resolve_update
+
+    spec = ServiceSpec(
+        service="demo", label="Demo",
+        fields=(
+            CredentialField(key="use_token", label="Use token", type="bool"),
+            CredentialField(key="token", label="Token", type="secret", required_if="use_token"),
+        ),
+    )
+    existing = {"use_token": True, "token": "t"}
+    with pytest.raises(ValueError, match="required and cannot be cleared"):
+        resolve_update(spec, {"use_token": True}, existing, clear=["token"])
+    # With the toggle off in the same request the secret is optional.
+    stored = resolve_update(spec, {"use_token": False}, existing, clear=["token"])
+    assert stored == {"use_token": False}
+
+
 def test_admin_put_github_and_twitter(admin_routes, github_plugin, twitter_plugin):
     # github's and twitter's cards are plugin-registered but save through
     # the same generic PUT endpoint as the core specs.
@@ -821,3 +913,11 @@ def test_list_field_refused_in_user_connection_forms():
     with pytest.raises(ValueError, match="unknown type 'list'"):
         _validate_fields("x", fields, allow_select=True)
     _validate_fields("x", fields, allow_list=True)
+
+
+def test_field_named_clear_is_reserved():
+    from config.plugin_types import CredentialField
+    from config.service_specs import _validate_fields
+
+    with pytest.raises(ValueError, match="'clear'"):
+        _validate_fields("demo", (CredentialField(key="clear", label="Clear", type="text"),))

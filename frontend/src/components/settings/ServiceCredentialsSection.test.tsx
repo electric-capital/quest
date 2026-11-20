@@ -141,6 +141,75 @@ describe('ServiceCredentialsSection', () => {
   });
 });
 
+describe('ServiceCredentialsSection optional secret removal', () => {
+  const SLACKISH: ServiceCredentialDetail = {
+    service: 'slack',
+    label: 'Slack',
+    configured: true,
+    source: 'store',
+    fields: [
+      { key: 'client_secret', label: 'Client secret', type: 'secret', placeholder: '', required: true, required_if: null, visible_if: null },
+      { key: 'bot_token', label: 'Bot token', type: 'secret', placeholder: 'xoxb-', required: false, required_if: null, visible_if: null },
+      { key: 'app_token', label: 'App token', type: 'secret', placeholder: 'xapp-', required: false, required_if: null, visible_if: null },
+    ],
+    credentials: { client_secret_set: true, bot_token_set: true, app_token_set: false },
+  };
+
+  it('offers Remove only for stored optional secrets and sends their keys in clear', async () => {
+    mocks.fetchServiceCredentials.mockResolvedValue({ services: [SLACKISH] });
+    mocks.updateServiceCredentials.mockResolvedValue(SLACKISH);
+    render(<ServiceCredentialsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    // Only the stored optional secret gets a Remove action: not the required
+    // one, not the unset optional one.
+    expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText(/Bot token/), { target: { value: 'typed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    const bot = screen.getByLabelText(/Bot token/) as HTMLInputElement;
+    expect(bot.disabled).toBe(true);
+    expect(bot.value).toBe('');
+    expect(bot.placeholder).toBe('Will be removed when you save');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(mocks.updateServiceCredentials).toHaveBeenCalledTimes(1));
+    expect(mocks.updateServiceCredentials).toHaveBeenCalledWith('slack', {
+      client_secret: '', bot_token: '', app_token: '', clear: ['bot_token'],
+    });
+  });
+
+  it('undoing a pending removal keeps the stored secret and sends no clear', async () => {
+    mocks.fetchServiceCredentials.mockResolvedValue({ services: [SLACKISH] });
+    mocks.updateServiceCredentials.mockResolvedValue(SLACKISH);
+    render(<ServiceCredentialsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep stored value' }));
+    expect((screen.getByLabelText(/Bot token/) as HTMLInputElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mocks.updateServiceCredentials).toHaveBeenCalledTimes(1));
+    expect(mocks.updateServiceCredentials).toHaveBeenCalledWith('slack', {
+      client_secret: '', bot_token: '', app_token: '',
+    });
+  });
+
+  it('offers no Remove for a secret that required_if can make required', async () => {
+    const detail: ServiceCredentialDetail = {
+      ...SLACKISH,
+      fields: [
+        { key: 'use_token', label: 'Use token', type: 'bool', placeholder: '', required: false, required_if: null, visible_if: null },
+        { key: 'token', label: 'Token', type: 'secret', placeholder: '', required: false, required_if: 'use_token', visible_if: null },
+      ],
+      credentials: { use_token: true, token_set: true },
+    };
+    mocks.fetchServiceCredentials.mockResolvedValue({ services: [detail] });
+    render(<ServiceCredentialsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+});
+
 describe('ServiceCredentialsSection list fields', () => {
   it('summarises the entries and saves the edited entry array', async () => {
     mocks.fetchServiceCredentials.mockResolvedValue({ services: [IMAP] });

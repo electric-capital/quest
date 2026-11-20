@@ -1256,7 +1256,8 @@ export function fetchServiceCredentials(): Promise<ServiceCredentialsListRespons
 /**
  * Generic schema-validated save for any credential service (core or
  * plugin). The body is a flat {field key: value} object; empty secret
- * values keep the stored ones.
+ * values keep the stored ones, and an optional `clear` list of secret keys
+ * removes them.
  */
 export function updateServiceCredentials(
   service: string,
