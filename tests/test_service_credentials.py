@@ -913,3 +913,11 @@ def test_list_field_refused_in_user_connection_forms():
     with pytest.raises(ValueError, match="unknown type 'list'"):
         _validate_fields("x", fields, allow_select=True)
     _validate_fields("x", fields, allow_list=True)
+
+
+def test_field_named_clear_is_reserved():
+    from config.plugin_types import CredentialField
+    from config.service_specs import _validate_fields
+
+    with pytest.raises(ValueError, match="'clear'"):
+        _validate_fields("demo", (CredentialField(key="clear", label="Clear", type="text"),))

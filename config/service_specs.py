@@ -80,6 +80,9 @@ def _validate_fields(
     recursively with the entry rules (``LIST_ITEM_FIELD_TYPES``).
     """
     keys = [f.key for f in fields]
+    if not _context and "clear" in keys:
+        # The PUT body's "clear" list is split off before field validation.
+        raise ValueError(f"Service {service!r} cannot declare a field named 'clear'")
     if len(keys) != len(set(keys)):
         raise ValueError(f"Service {service!r} declares duplicate {_context}field keys")
     bool_keys = {f.key for f in fields if f.type == "bool"}

@@ -76,6 +76,7 @@ def get_plugin() -> QuestPlugin:
             CredentialField(
                 key="socket_mode_token", label="Socket Mode app token", type="secret",
                 placeholder="xapp-...",
+                help="Read at startup: changing or removing it takes effect after a server restart.",
             ),
         ),
         is_configured=slack_is_configured,
