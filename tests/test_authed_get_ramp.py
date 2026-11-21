@@ -17,7 +17,7 @@ All HTTP calls are mocked -- no real network traffic.
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -28,6 +28,7 @@ from chat.gemini_api.authed_get import (
     _load_ramp_credentials,
     _make_authed_request,
 )
+from tests.authed_get_support import mock_httpx_client
 
 
 # ---------------------------------------------------------------------------
@@ -37,34 +38,6 @@ from chat.gemini_api.authed_get import (
 def _run(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
-
-
-def _mock_httpx_client(captured_calls: list, status_code: int = 200, body: dict | None = None):
-    """Patch ``httpx.AsyncClient`` inside authed_get, capturing GET calls."""
-    if body is None:
-        body = {"ok": True}
-    response_text = json.dumps(body)
-
-    response_mock = MagicMock()
-    response_mock.status_code = status_code
-    response_mock.text = response_text
-    response_mock.json = MagicMock(return_value=body)
-
-    async def fake_get(url, headers=None):
-        captured_calls.append((str(url), dict(headers or {})))
-        return response_mock
-
-    client_mock = MagicMock()
-    client_mock.get = AsyncMock(side_effect=fake_get)
-
-    async_ctx = MagicMock()
-    async_ctx.__aenter__ = AsyncMock(return_value=client_mock)
-    async_ctx.__aexit__ = AsyncMock(return_value=None)
-
-    return patch(
-        "chat.gemini_api.authed_get.httpx.AsyncClient",
-        return_value=async_ctx,
-    )
 
 
 def _future_iso(seconds: int = 3600) -> str:
@@ -195,7 +168,7 @@ class TestMakeAuthedRequestRamp:
 
     def test_allowed_request_injects_bearer(self):
         calls: list = []
-        with _mock_httpx_client(calls, body={"data": []}):
+        with mock_httpx_client(calls, body={"data": []}):
             result = _run(_make_authed_request(
                 "https://api.ramp.com/developer/v1/transactions",
                 user=_user_with_ramp(),
@@ -214,7 +187,7 @@ class TestMakeAuthedRequestRamp:
         # allow-list, so the request is rejected before credential loading
         # and any HTTP call (it can never clobber the injected bearer).
         calls: list = []
-        with _mock_httpx_client(calls, body={"ok": True}):
+        with mock_httpx_client(calls, body={"ok": True}):
             result = _run(_make_authed_request(
                 "https://api.ramp.com/developer/v1/business",
                 headers={"Authorization": "Bearer hacker-token"},
@@ -227,7 +200,7 @@ class TestMakeAuthedRequestRamp:
 
     def test_disallowed_path_returns_error_without_http_call(self):
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://api.ramp.com/developer/v1/cards/vault/abc-123",
                 user=_user_with_ramp(),
@@ -241,7 +214,7 @@ class TestMakeAuthedRequestRamp:
 
     def test_missing_credentials_returns_ramp_oauth_required(self):
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://api.ramp.com/developer/v1/transactions",
                 user=USER_WITHOUT_RAMP,

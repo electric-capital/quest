@@ -17,7 +17,6 @@ All HTTP calls are mocked -- no real network traffic.
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -26,6 +25,7 @@ from chat.gemini_api.authed_get import (
     _SERVICE_REGISTRY,
     _make_authed_request,
 )
+from tests.authed_get_support import mock_httpx_client
 
 
 # ---------------------------------------------------------------------------
@@ -35,41 +35,6 @@ from chat.gemini_api.authed_get import (
 def _run(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
-
-
-def _mock_httpx_client(captured_calls: list, status_code: int = 200, body: dict | None = None):
-    """Build a patch target that captures client.get() calls.
-
-    Returns a context manager that patches ``httpx.AsyncClient`` inside
-    ``chat.gemini_api.authed_get`` so every ``client.get(url, headers=...)``
-    is recorded to ``captured_calls`` as ``(url, headers)`` tuples, and
-    returns an ``httpx.Response``-like object with the given status code
-    and body.
-    """
-    if body is None:
-        body = {"ok": True}
-    response_text = json.dumps(body)
-
-    response_mock = MagicMock()
-    response_mock.status_code = status_code
-    response_mock.text = response_text
-    response_mock.json = MagicMock(return_value=body)
-
-    async def fake_get(url, headers=None):
-        captured_calls.append((str(url), dict(headers or {})))
-        return response_mock
-
-    client_mock = MagicMock()
-    client_mock.get = AsyncMock(side_effect=fake_get)
-
-    async_ctx = MagicMock()
-    async_ctx.__aenter__ = AsyncMock(return_value=client_mock)
-    async_ctx.__aexit__ = AsyncMock(return_value=None)
-
-    return patch(
-        "chat.gemini_api.authed_get.httpx.AsyncClient",
-        return_value=async_ctx,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -259,7 +224,7 @@ class TestMakeAuthedRequestGitHub:
 
     def test_allowed_request_injects_default_headers_and_bearer(self):
         calls: list = []
-        with _mock_httpx_client(calls, body={"login": "octocat"}):
+        with mock_httpx_client(calls, body={"login": "octocat"}):
             result = _run(_make_authed_request(
                 "https://api.github.com/user",
                 user=USER_WITH_GITHUB,
@@ -280,7 +245,7 @@ class TestMakeAuthedRequestGitHub:
 
     def test_caller_accept_header_overrides_default_accept(self):
         calls: list = []
-        with _mock_httpx_client(calls, body={"ok": True}):
+        with mock_httpx_client(calls, body={"ok": True}):
             _run(_make_authed_request(
                 "https://api.github.com/user",
                 headers={"Accept": "application/json"},
@@ -298,7 +263,7 @@ class TestMakeAuthedRequestGitHub:
     def test_non_allow_listed_caller_header_is_rejected_without_http_call(self):
         """Only content-negotiation headers may be caller-supplied."""
         calls: list = []
-        with _mock_httpx_client(calls, body={"ok": True}):
+        with mock_httpx_client(calls, body={"ok": True}):
             result = _run(_make_authed_request(
                 "https://api.github.com/user",
                 headers={"Accept": "application/json", "X-Custom": "yes"},
@@ -312,7 +277,7 @@ class TestMakeAuthedRequestGitHub:
     def test_caller_authorization_header_is_rejected_without_http_call(self):
         """A caller Authorization header is rejected outright, never merged."""
         calls: list = []
-        with _mock_httpx_client(calls, body={"ok": True}):
+        with mock_httpx_client(calls, body={"ok": True}):
             result = _run(_make_authed_request(
                 "https://api.github.com/user",
                 headers={"Authorization": "Bearer hacker-token"},
@@ -325,7 +290,7 @@ class TestMakeAuthedRequestGitHub:
 
     def test_disallowed_path_returns_error_without_http_call(self):
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://api.github.com/gists",
                 user=USER_WITH_GITHUB,
@@ -341,7 +306,7 @@ class TestMakeAuthedRequestGitHub:
 
     def test_missing_credentials_returns_github_oauth_required(self):
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://api.github.com/user",
                 user=USER_WITHOUT_GITHUB,
@@ -359,7 +324,7 @@ class TestMakeAuthedRequestGitHub:
 
     def test_contents_root_and_nested_paths_allowed(self):
         calls: list = []
-        with _mock_httpx_client(calls, body=[]):
+        with mock_httpx_client(calls, body=[]):
             _run(_make_authed_request(
                 "https://api.github.com/repos/owner/repo/contents",
                 user=USER_WITH_GITHUB,
@@ -380,7 +345,7 @@ class TestMakeAuthedRequestGitHub:
         reads as a repo with no activity.
         """
         calls: list = []
-        with _mock_httpx_client(calls, status_code=202, body={}):
+        with mock_httpx_client(calls, status_code=202, body={}):
             result = _run(_make_authed_request(
                 "https://api.github.com/repos/owner/repo/stats/commit_activity",
                 user=USER_WITH_GITHUB,
@@ -397,7 +362,7 @@ class TestMakeAuthedRequestGitHub:
     def test_stats_200_passes_body_through(self):
         calls: list = []
         weeks = [{"week": 1760000000, "total": 3, "days": [0, 1, 0, 2, 0, 0, 0]}]
-        with _mock_httpx_client(calls, body=weeks):
+        with mock_httpx_client(calls, body=weeks):
             result = _run(_make_authed_request(
                 "https://api.github.com/repos/owner/repo/stats/commit_activity",
                 user=USER_WITH_GITHUB,
@@ -409,7 +374,7 @@ class TestMakeAuthedRequestGitHub:
         """Traffic needs push access; GitHub's 403 reaches the model as-is."""
         calls: list = []
         body = {"message": "Must have push access to repository"}
-        with _mock_httpx_client(calls, status_code=403, body=body):
+        with mock_httpx_client(calls, status_code=403, body=body):
             result = _run(_make_authed_request(
                 "https://api.github.com/repos/owner/repo/traffic/views",
                 user=USER_WITH_GITHUB,

@@ -25,6 +25,7 @@ from chat.gemini_api.authed_get import (
     handle_authed_get,
     handle_authed_post,
 )
+from tests.authed_get_support import mock_httpx_client
 
 
 _COMPUTE_INSTANCE_URL = (
@@ -37,32 +38,6 @@ _USER = {"id": "u1", "email": "victim@example.com"}
 
 def _run(coro):
     return asyncio.run(coro)
-
-
-def _mock_httpx_client(captured_get: list, captured_post: list):
-    body = {"ok": True}
-    response_mock = MagicMock()
-    response_mock.status_code = 200
-    response_mock.text = json.dumps(body)
-    response_mock.json = MagicMock(return_value=body)
-
-    async def fake_get(url, headers=None):
-        captured_get.append((url, dict(headers or {})))
-        return response_mock
-
-    async def fake_post(url, headers=None, json=None):
-        captured_post.append((url, dict(headers or {}), json))
-        return response_mock
-
-    client_mock = MagicMock()
-    client_mock.get = AsyncMock(side_effect=fake_get)
-    client_mock.post = AsyncMock(side_effect=fake_post)
-    async_ctx = MagicMock()
-    async_ctx.__aenter__ = AsyncMock(return_value=client_mock)
-    async_ctx.__aexit__ = AsyncMock(return_value=None)
-    return patch(
-        "chat.gemini_api.authed_get.httpx.AsyncClient", return_value=async_ctx,
-    )
 
 
 def _mock_credentials_loader():
@@ -107,7 +82,7 @@ class TestGateRunsBeforeIO:
         gets: list = []
         posts: list = []
         creds_patch, loader = _mock_credentials_loader()
-        with creds_patch, _mock_httpx_client(gets, posts):
+        with creds_patch, mock_httpx_client(gets, posts):
             result = _run(handle_authed_get(
                 _COMPUTE_INSTANCE_URL,
                 headers={"X-HTTP-Method-Override": "DELETE"},
@@ -124,7 +99,7 @@ class TestGateRunsBeforeIO:
         gets: list = []
         posts: list = []
         creds_patch, loader = _mock_credentials_loader()
-        with creds_patch, _mock_httpx_client(gets, posts):
+        with creds_patch, mock_httpx_client(gets, posts):
             result = _run(_make_authed_request(
                 "https://compute.googleapis.com/compute/v1/projects/"
                 "attacker-owned-project/zones/us-central1-a/instances",
@@ -141,7 +116,7 @@ class TestGateRunsBeforeIO:
         gets: list = []
         posts: list = []
         creds_patch, loader = _mock_credentials_loader()
-        with creds_patch, _mock_httpx_client(gets, posts):
+        with creds_patch, mock_httpx_client(gets, posts):
             result = _run(handle_authed_post(
                 _LOGGING_ENTRIES_URL,
                 body={"resourceNames": ["projects/p"]},
@@ -159,7 +134,7 @@ class TestGateRunsBeforeIO:
         # the gate sits before path validation so nothing else runs first.
         gets: list = []
         posts: list = []
-        with _mock_httpx_client(gets, posts):
+        with mock_httpx_client(gets, posts):
             result = _run(_make_authed_request(
                 "https://compute.googleapis.com/compute/v1/projects/p/"
                 "zones/z/instances/vm:stop",
@@ -175,7 +150,7 @@ class TestAllowedHeadersStillForwarded:
         gets: list = []
         posts: list = []
         creds_patch, _ = _mock_credentials_loader()
-        with creds_patch, _mock_httpx_client(gets, posts):
+        with creds_patch, mock_httpx_client(gets, posts):
             result = _run(_make_authed_request(
                 _COMPUTE_INSTANCE_URL,
                 headers={"Accept": "application/json", "Accept-Language": "en"},
@@ -194,7 +169,7 @@ class TestAllowedHeadersStillForwarded:
         gets: list = []
         posts: list = []
         creds_patch, _ = _mock_credentials_loader()
-        with creds_patch, _mock_httpx_client(gets, posts):
+        with creds_patch, mock_httpx_client(gets, posts):
             result = _run(_make_authed_request(_COMPUTE_INSTANCE_URL, user=_USER))
         assert json.loads(result) == {"ok": True}
         assert len(gets) == 1
