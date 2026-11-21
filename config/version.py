@@ -124,7 +124,6 @@ def resolve_release_info(project_root: Optional[Path] = None) -> ReleaseInfo:
 # the process even if the working tree moves underneath it (a deploy pulls
 # new commits while the old server is still running).
 RELEASE_INFO = resolve_release_info()
-GIT_COMMIT_HASH = RELEASE_INFO.git_hash
 
 
 def describe_release(info: ReleaseInfo = RELEASE_INFO) -> str:

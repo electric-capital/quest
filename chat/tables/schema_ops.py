@@ -229,13 +229,6 @@ _OP_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 
 _TYPE_CHANGE_OPS = ("change_column_type", "set_type", "set_column_type")
 
-_ENUM_OPS = (
-    "add_enum_option",
-    "rename_enum_option",
-    "remove_enum_option",
-    "set_enum_multiple",
-)
-
 
 class _Batch:
     """Working state while applying one operation list."""

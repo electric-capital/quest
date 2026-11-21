@@ -222,16 +222,6 @@ async def delete_routine(user_id: int, routine_id: str) -> bool:
         return True
 
 
-async def delete_all_project_routines(project_id: str) -> int:
-    """Delete all routines for a project (used when deleting a project)."""
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            delete(Routine).where(Routine.project_id == project_id)
-        )
-        await db.commit()
-        return result.rowcount
-
-
 async def delete_all_user_routines(user_id: int) -> int:
     """Delete all routines for a user (used during account deletion)."""
     async with AsyncSessionLocal() as db:

@@ -492,22 +492,6 @@ async def list_project_conversations_meta(project_id: str, include_archived: boo
         return [_conversation_to_dict(c) for c in conversations]
 
 
-async def get_project_for_conversation(conversation_id: str) -> Optional[str]:
-    """Return the project_id for a conversation, or None if standalone.
-
-    Args:
-        conversation_id: Conversation UUID.
-
-    Returns:
-        project_id string or None.
-    """
-    async with AsyncSessionLocal() as db:
-        conv = await db.get(Conversation, conversation_id)
-        if conv:
-            return conv.project_id
-        return None
-
-
 async def set_conversation_project(
     user_id: int, conversation_id: str, project_id: str
 ) -> Optional[dict]:

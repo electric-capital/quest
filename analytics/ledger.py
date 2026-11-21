@@ -275,10 +275,6 @@ class Ledger:
 _current: Optional[Ledger] = None
 
 
-def get_ledger() -> Optional[Ledger]:
-    return _current
-
-
 def set_ledger(ledger: Optional[Ledger]) -> None:
     """Install (or clear) the process-wide ledger."""
     global _current

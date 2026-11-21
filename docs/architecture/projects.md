@@ -28,7 +28,7 @@ The `Conversation` model in `db/models.py` has optional `project_id` (FK to `pro
 
 `db/project_store.py` provides CRUD operations for projects. All functions are `async` and use `AsyncSessionLocal`. `delete_project()` explicitly deletes project skills first (non-cascading FK on `skills.project_id`), then deletes the project row (CASCADE removes conversation rows). `delete_all_user_projects()` follows the same pattern for bulk deletion during account deletion.
 
-`db/conversation_store.py` provides project-aware conversation functions including `create_conversation()` (accepts optional `project_id` and `routine_id`), `list_project_conversations_meta()`, `get_project_for_conversation()`, and `set_conversation_project()` (attaches a standalone conversation to a project; refuses conversations that already belong to one).
+`db/conversation_store.py` provides project-aware conversation functions including `create_conversation()` (accepts optional `project_id` and `routine_id`), `list_project_conversations_meta()`, and `set_conversation_project()` (attaches a standalone conversation to a project; refuses conversations that already belong to one).
 
 ## Workspace Resolution
 

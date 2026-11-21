@@ -17,7 +17,7 @@ Projects allow users to organize conversations around a shared context. Every co
 | `db/project_store.py` | Project data access layer (CRUD operations); `delete_project()` and `delete_all_user_projects()` explicitly delete project skills (non-cascading FK); the doc-source helpers `list_doc_source_projects()` / `set_doc_source_projects()` (`ProjectDocSourceError`) over the `project_doc_sources` link table |
 | `db/skill_store.py` | Project skill data access layer (CRUD, auto-load management) |
 | `db/models.py` | `Project`, `ProjectDocSource` (`project_doc_sources`, migration `b4d7e2a9c6f1`), `Skill` (with `project_id`), `ProjectSkillAutoload` ORM models, `Conversation.project_id` FK |
-| `db/conversation_store.py` | `create_conversation()` accepts `project_id` and optional `routine_id`, `list_project_conversations_meta()` with `include_archived` filtering, `get_project_for_conversation()`, `set_conversation_project()` (attach a standalone conversation to a project), `archive_conversation()`, `unarchive_conversation()` |
+| `db/conversation_store.py` | `create_conversation()` accepts `project_id` and optional `routine_id`, `list_project_conversations_meta()` with `include_archived` filtering, `set_conversation_project()` (attach a standalone conversation to a project), `archive_conversation()`, `unarchive_conversation()` |
 | `chat/storage.py` | `ChatStorage.create_project_conversation()`, `ChatStorage.create_project_workspace()`, `ChatStorage.delete_project_workspace()`, `ChatStorage.list_project_conversations()`, `ChatStorage.get_project_workspace_root()`, `ChatStorage.set_conversation_flags()` |
 | `quest.py` | Registers `project_router` |
 

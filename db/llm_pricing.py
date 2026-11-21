@@ -79,10 +79,6 @@ set. Instance pricing snapshots keep their retired rates the same way
 from datetime import date, datetime, timezone
 from typing import Optional
 
-# A ``YYYY-MM-DD`` effective_from parses to this time of day: UTC midnight,
-# comparable with the naive-UTC ``created_at`` of the llm_calls_* rows.
-_BASE_PERIOD = datetime.min
-
 # Default per-call context size above which a model's ``long_context`` rates
 # apply (an entry's ``long_context_threshold`` overrides it).
 LONG_CONTEXT_THRESHOLD = 200_000

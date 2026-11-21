@@ -6,9 +6,6 @@ Not routes themselves -- imported by the route submodules that need them.
 import logging
 
 from chat.gemini_api.history import _load_sdk_history, _write_sdk_history_file
-# Re-exported for backward compatibility; the canonical capture lives in
-# config/version.py alongside the release-tag resolution.
-from config.version import GIT_COMMIT_HASH  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
