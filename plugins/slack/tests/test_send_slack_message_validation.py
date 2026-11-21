@@ -2,10 +2,9 @@
 
 These tests pin the channel_id and thread_ts format checks added on top
 of the existing required-field / unknown-key validation. The unknown-
-key behaviour is already covered by
-``tests/test_action_request_unknown_params.py``; this file focuses on
-the new regex/prefix checks so a malformed Slack id surfaces as a
-synchronous ``Invalid parameters: ...`` tool result on the model's same
+key behaviour is covered by ``test_slack_handlers.py``; this file
+focuses on the new regex/prefix checks so a malformed Slack id surfaces
+as a synchronous ``Invalid parameters: ...`` tool result on the model's same
 turn instead of persisting to an action_requests row and exploding
 inside ``execute()`` with an opaque Slack error.
 """
@@ -27,30 +26,18 @@ def test_accepts_channel_prefix():
     assert out == {"channel_id": "C0123456789", "message": "hi"}
 
 
-def test_accepts_user_prefix_no_rewrite():
-    handler = SendSlackMessageHandler()
-    out = handler.validate_params({"channel_id": "U0123456789", "message": "hi"})
+@pytest.mark.parametrize("channel_id", [
     # U-prefix must round-trip exactly; the conversations.open branch
     # inside execute() relies on the leading character.
-    assert out["channel_id"] == "U0123456789"
-
-
-def test_accepts_group_prefix():
+    pytest.param("U0123456789", id="user"),
+    pytest.param("G0123456789", id="group"),
+    pytest.param("D0123456789", id="dm"),
+    pytest.param("W0123456789", id="enterprise-user"),
+])
+def test_accepts_other_prefixes_without_rewrite(channel_id):
     handler = SendSlackMessageHandler()
-    out = handler.validate_params({"channel_id": "G0123456789", "message": "hi"})
-    assert out["channel_id"] == "G0123456789"
-
-
-def test_accepts_dm_prefix():
-    handler = SendSlackMessageHandler()
-    out = handler.validate_params({"channel_id": "D0123456789", "message": "hi"})
-    assert out["channel_id"] == "D0123456789"
-
-
-def test_accepts_enterprise_user_prefix():
-    handler = SendSlackMessageHandler()
-    out = handler.validate_params({"channel_id": "W0123456789", "message": "hi"})
-    assert out["channel_id"] == "W0123456789"
+    out = handler.validate_params({"channel_id": channel_id, "message": "hi"})
+    assert out["channel_id"] == channel_id
 
 
 def test_accepts_thread_ts_canonical_shape():
@@ -101,75 +88,31 @@ def test_message_over_3000_chars_rejected():
         })
 
 
-def test_unknown_top_level_key_rejected():
-    """Regression guard: server-injected keys must not be in the allow-list."""
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="Unknown parameter for send_slack_message") as exc:
-        handler.validate_params({
-            "channel_id": "C0123456789",
-            "message": "hi",
-            "channel_name": "general",
-        })
-    assert "channel_name" in str(exc.value)
-
-
 # ---------------------------------------------------------------------------
 # New channel_id format rejections.
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_hash_channel_alias():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": "#general", "message": "hi"})
-
-
-def test_rejects_at_user_alias():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": "@alice", "message": "hi"})
-
-
-def test_rejects_permalink_url():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({
-            "channel_id": "https://example.slack.com/archives/C0123456/p17279912340002",
-            "message": "hi",
-        })
-
-
-def test_rejects_lowercase_prefix():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": "c01234567", "message": "hi"})
-
-
-def test_rejects_unknown_prefix():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": "X01234567", "message": "hi"})
-
-
-def test_rejects_mixed_case_tail():
-    handler = SendSlackMessageHandler()
-    # `Cabc12345` has the right prefix but the tail mixes lower/upper
-    # case characters which Slack ids never do.
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": "Cabc12345", "message": "hi"})
-
-
-def test_rejects_too_short_id():
-    handler = SendSlackMessageHandler()
+@pytest.mark.parametrize("channel_id", [
+    pytest.param("#general", id="hash-channel-alias"),
+    pytest.param("@alice", id="at-user-alias"),
+    pytest.param(
+        "https://example.slack.com/archives/C0123456/p17279912340002",
+        id="permalink-url",
+    ),
+    pytest.param("c01234567", id="lowercase-prefix"),
+    pytest.param("X01234567", id="unknown-prefix"),
+    # Right prefix, but the tail mixes lower/upper case characters,
+    # which Slack ids never do.
+    pytest.param("Cabc12345", id="mixed-case-tail"),
     # Below the {8,} tail floor.
-    with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": "C1234", "message": "hi"})
-
-
-def test_rejects_raw_integer_channel_id():
+    pytest.param("C1234", id="too-short"),
+    pytest.param(1234567, id="raw-integer"),
+])
+def test_rejects_malformed_channel_id(channel_id):
     handler = SendSlackMessageHandler()
     with pytest.raises(ValueError, match="channel_id"):
-        handler.validate_params({"channel_id": 1234567, "message": "hi"})
+        handler.validate_params({"channel_id": channel_id, "message": "hi"})
 
 
 def test_error_message_truncates_long_offending_value():
@@ -187,31 +130,16 @@ def test_error_message_truncates_long_offending_value():
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_thread_ts_without_dot():
+@pytest.mark.parametrize("thread_ts", [
+    pytest.param("1727991234", id="without-dot"),
+    pytest.param("p1727991234000200", id="permalink-style"),
+    pytest.param("1727991234.0002ab", id="non-digit-microseconds"),
+])
+def test_rejects_malformed_thread_ts(thread_ts):
     handler = SendSlackMessageHandler()
     with pytest.raises(ValueError, match="thread_ts"):
         handler.validate_params({
             "channel_id": "C01234567",
             "message": "hi",
-            "thread_ts": "1727991234",
-        })
-
-
-def test_rejects_thread_ts_permalink_style():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="thread_ts"):
-        handler.validate_params({
-            "channel_id": "C01234567",
-            "message": "hi",
-            "thread_ts": "p1727991234000200",
-        })
-
-
-def test_rejects_thread_ts_non_digit_microseconds():
-    handler = SendSlackMessageHandler()
-    with pytest.raises(ValueError, match="thread_ts"):
-        handler.validate_params({
-            "channel_id": "C01234567",
-            "message": "hi",
-            "thread_ts": "1727991234.0002ab",
+            "thread_ts": thread_ts,
         })

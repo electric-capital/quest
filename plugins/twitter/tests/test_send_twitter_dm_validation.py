@@ -111,45 +111,20 @@ def test_unknown_top_level_key_rejected():
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_participant_id_with_at_handle():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="participant_id"):
-        handler.validate_params({"participant_id": "@alice", "message": "hi"})
-
-
-def test_rejects_participant_id_url():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="participant_id"):
-        handler.validate_params({
-            "participant_id": "https://twitter.com/alice",
-            "message": "hi",
-        })
-
-
-def test_rejects_participant_id_with_dash():
-    handler = SendTwitterDmHandler()
+@pytest.mark.parametrize("participant_id", [
+    pytest.param("@alice", id="at-handle"),
+    pytest.param("https://twitter.com/alice", id="url"),
     # A `<smaller>-<larger>` shape is a dm_conversation_id, not a
     # participant_id; the model confusing the two is a real failure mode.
-    with pytest.raises(ValueError, match="participant_id"):
-        handler.validate_params({"participant_id": "123-456", "message": "hi"})
-
-
-def test_rejects_participant_id_negative_sign():
+    pytest.param("123-456", id="with-dash"),
+    pytest.param("+1234567890", id="sign"),
+    pytest.param("1" * 21, id="too-many-digits"),
+    pytest.param("1234abc567", id="letters"),
+])
+def test_rejects_malformed_participant_id(participant_id):
     handler = SendTwitterDmHandler()
     with pytest.raises(ValueError, match="participant_id"):
-        handler.validate_params({"participant_id": "+1234567890", "message": "hi"})
-
-
-def test_rejects_participant_id_too_many_digits():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="participant_id"):
-        handler.validate_params({"participant_id": "1" * 21, "message": "hi"})
-
-
-def test_rejects_participant_id_letters():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="participant_id"):
-        handler.validate_params({"participant_id": "1234abc567", "message": "hi"})
+        handler.validate_params({"participant_id": participant_id, "message": "hi"})
 
 
 # ---------------------------------------------------------------------------
@@ -157,39 +132,21 @@ def test_rejects_participant_id_letters():
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_dm_conversation_id_url():
+@pytest.mark.parametrize("dm_conversation_id", [
+    pytest.param("https://twitter.com/messages/123-456", id="url"),
+    pytest.param("@alice", id="at-handle"),
+    pytest.param("abc-456", id="letters"),
+    pytest.param("12-34-56", id="three-segments"),
+    pytest.param("-456", id="empty-first-segment"),
+    pytest.param("123-", id="empty-second-segment"),
+])
+def test_rejects_malformed_dm_conversation_id(dm_conversation_id):
     handler = SendTwitterDmHandler()
     with pytest.raises(ValueError, match="dm_conversation_id"):
         handler.validate_params({
-            "dm_conversation_id": "https://twitter.com/messages/123-456",
+            "dm_conversation_id": dm_conversation_id,
             "message": "hi",
         })
-
-
-def test_rejects_dm_conversation_id_at_handle():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="dm_conversation_id"):
-        handler.validate_params({"dm_conversation_id": "@alice", "message": "hi"})
-
-
-def test_rejects_dm_conversation_id_letters():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="dm_conversation_id"):
-        handler.validate_params({"dm_conversation_id": "abc-456", "message": "hi"})
-
-
-def test_rejects_dm_conversation_id_three_segments():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="dm_conversation_id"):
-        handler.validate_params({"dm_conversation_id": "12-34-56", "message": "hi"})
-
-
-def test_rejects_dm_conversation_id_empty_segment():
-    handler = SendTwitterDmHandler()
-    with pytest.raises(ValueError, match="dm_conversation_id"):
-        handler.validate_params({"dm_conversation_id": "-456", "message": "hi"})
-    with pytest.raises(ValueError, match="dm_conversation_id"):
-        handler.validate_params({"dm_conversation_id": "123-", "message": "hi"})
 
 
 # ---------------------------------------------------------------------------
