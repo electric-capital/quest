@@ -31,12 +31,12 @@ Task reads use `authed_get` with the Google Tasks API v1 at `tasks.googleapis.co
 
 ## System Instructions Integration
 
-When a user has connected Google Services, the Tasks API documentation is conditionally included in the system instructions sent to the LLM:
+When a user has connected Google Services, the model can reach the Tasks API documentation:
 
 - `get_instructions()` function in `api/tasks.py` generates Tasks API documentation section
 - `get_user_connected_services()` in `api/instructions.py` checks for `google_services_oauth` in user dict
-- `get_instructions_content()` in `api/instructions.py` includes Tasks docs (along with other Google service docs) when `connected_services["google_services"]` is True
-- System prompts in `chat/gemini_api/system_prompt.py` (`get_system_prompt()`, `get_sub_agent_system_prompt()`) use filtered instructions
+- The system prompt carries a one-line Tasks entry in its service list (`_preamble_instructions()` in `api/instructions.py`) when `connected_services["google_services"]` is True
+- The full documentation is the `system:tasks` skill in `chat/system_skills/catalog.py` (`requires="google_services"`), which the model loads on demand
 
 ## Design Decisions
 

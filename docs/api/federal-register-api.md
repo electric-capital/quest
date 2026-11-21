@@ -16,7 +16,7 @@ The backend documentation is carried in the ungated `system:federal_register` sy
 |------|-------------|
 | `api/federal_register.py` | `get_instructions(base_url)` for the `system:federal_register` skill content (base URL constant `FEDERAL_REGISTER_API_BASE`, key-paths table, documents-search query params, the title-case `conditions[type][]` gotcha, size-gate / `fields[]` / `output_file` guidance, example tool calls); no endpoint functions -- reads use `authed_get` |
 | `chat/gemini_api/authed_get.py` | `handle_authed_get()` handler with the `www.federalregister.gov/api/v1` entry in `_SERVICE_REGISTRY` (`path_prefix`, `allowed_endpoints` regexes, `default_headers`); `_load_federal_register_credentials()` (sync, no-arg, returns `None`) and `_inject_no_auth()` (no-op injector) model the no-auth service |
-| `chat/system_skills/catalog.py` | Registers `system:federal_register` as an ungated (`requires=None`) `SystemSkill`, placed after `system:github`; delegates `content_builder` to `api.federal_register.get_instructions` |
+| `chat/system_skills/catalog.py` | Registers `system:federal_register` as an ungated (`requires=None`) `SystemSkill`; delegates `content_builder` to `api.federal_register.get_instructions` |
 | `chat/llm/tool_schemas.py` | The `authed_get` tool description lists "Federal Register" among supported hosts and `system:federal_register` in the `system:*` skill id list (endpoints not inlined -- the skill carries the detail) |
 | `chat/gemini_api/system_prompt.py` | "Federal Register" added to the prose lines enumerating `authed_get` backends |
 
