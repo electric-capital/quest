@@ -34,6 +34,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from config.plugin_tool_helpers import arg_str as _arg_str
 from config.plugin_types import PluginTool
 
 from plugins.google_admin import meet
@@ -90,13 +91,6 @@ _SORTABLE_FIELDS = ("duration_seconds", "end_of_call_rating")
 
 def _error(code: str, message: str) -> str:
     return json.dumps({"error": code, "message": message})
-
-
-def _arg_str(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _arg_bool(value: Any, default: bool) -> bool:

@@ -37,6 +37,7 @@ The Slack-*driven* conversation machinery (Socket Mode worker, `slack_conversati
 ## Key Files
 
 - `config/plugin_types.py` — the manifest dataclasses (`QuestPlugin`, `CredentialField`, `UserConnectionSpec`, `VerifyResult`, `HelpLink`, `PluginTool`); stdlib-only so manifests import without FastAPI
+- `config/plugin_tool_helpers.py` — small stdlib-only helpers for a plugin's `tools.py`: `intent_param()` (the `intent_message` parameter schema), `arg_str()` / `arg_int()` (coerce a model-supplied argument) and `tool_error()` (the `{"error", "message"}` JSON result)
 - `config/user_connections.py` — `resolve_connection()`, the one mapping from a tool call's optional `connection` argument to a credential row, plus the Connected accounts prompt paragraph (see [User Connections](user-connections.md))
 - `auth/connections.py` — the generic per-connection routes (`/auth/connections/{service}[/{id}]`) serving every multi-connection plugin
 - `config/plugins.py` — filesystem discovery (`plugins/*/plugin.py`), validation, registry fan-out (`load_plugins()`, `get_loaded_plugins()`, `plugin_server_available()`, `plugin_is_connectionless()` / `connectionless_plugin_ids()`)

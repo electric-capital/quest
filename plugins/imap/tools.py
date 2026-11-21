@@ -51,6 +51,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
+from config.plugin_tool_helpers import intent_param as _intent_param
 from config.plugin_types import PluginTool
 from config.user_connections import (
     ConnectionNotFound,
@@ -1056,16 +1057,6 @@ async def _handle_save_attachment(ctx, args: dict) -> str:
 
 
 # -- tool specs -----------------------------------------------------------
-
-
-def _intent_param(example: str) -> dict:
-    return {
-        "type": "string",
-        "description": (
-            "A brief, user-friendly summary of your intent "
-            f"(max 50 characters). Example: '{example}'."
-        ),
-    }
 
 
 _CONNECTION_PARAM = {

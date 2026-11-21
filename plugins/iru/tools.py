@@ -21,6 +21,12 @@ from __future__ import annotations
 import json
 import logging
 
+from config.plugin_tool_helpers import (
+    arg_int as _arg_int,
+    arg_str as _arg_str,
+    intent_param as _intent,
+    tool_error as _error,
+)
 from config.plugin_types import PluginTool
 
 from plugins.iru import fleet
@@ -58,10 +64,6 @@ DEVICE_PLATFORMS = ("Mac", "iPhone", "iPad", "AppleTV", "Android", "Windows")
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _error(code: str, message: str, **extra) -> str:
-    return json.dumps({"error": code, "message": message, **extra})
-
-
 def _iru_error(exc: IruError) -> str:
     extra: dict = {"status_code": exc.status_code}
     if isinstance(exc, fleet.IruLookupError) and exc.candidates:
@@ -69,13 +71,6 @@ def _iru_error(exc: IruError) -> str:
     if exc.retry_after is not None:
         extra["retry_after_seconds"] = exc.retry_after
     return _error(exc.code, str(exc), **extra)
-
-
-def _arg_str(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _arg_bool(value) -> bool | None:
@@ -89,14 +84,6 @@ def _arg_bool(value) -> bool | None:
         if low in ("false", "no", "0"):
             return False
     return None
-
-
-def _arg_int(value, default: int, *, lo: int, hi: int) -> int:
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, number))
 
 
 def _arg_csv(value) -> str | None:
@@ -771,16 +758,6 @@ async def _tool_list_ade_devices(ctx, args: dict) -> str:
 # ---------------------------------------------------------------------------
 # Tool specs
 # ---------------------------------------------------------------------------
-
-def _intent(example: str) -> dict:
-    return {
-        "type": "string",
-        "description": (
-            "A brief, user-friendly summary of your intent (max 50 characters). "
-            f"Example: '{example}'."
-        ),
-    }
-
 
 def _tool(name: str, description: str, properties: dict, required: list[str],
           handler) -> PluginTool:

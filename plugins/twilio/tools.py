@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 
+from config.plugin_tool_helpers import arg_str as _arg_str
 from config.plugin_types import PluginTool
 
 from plugins.twilio.templates import find_template, get_configured_templates
@@ -32,13 +33,6 @@ from plugins.twilio.upstream import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _arg_str(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _load_config_or_error() -> tuple[dict | None, str | None]:
