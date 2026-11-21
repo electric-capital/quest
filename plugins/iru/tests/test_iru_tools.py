@@ -533,6 +533,25 @@ class TestSecurity:
         out = _call(tools_mod._tool_get_vulnerability, _ctx(), {"cve_id": "CVE-1999-0001"})
         assert out["error"] == "iru_not_found"
 
+    @pytest.mark.parametrize("cve_id", [
+        "CVE-/../../devices",
+        "CVE-2024-24795/../../../devices",
+        "CVE-2024-24795?x=1",
+        "CVE-2024-24795#frag",
+        "CVE-2024-24795/devices",
+        "CVE-2024-24795 x",
+        "CVE-2024-24795\n/devices",
+        "CVE-2024-",
+        "CVE-24-24795",
+    ])
+    def test_get_vulnerability_rejects_ids_that_are_not_a_cve(self, tenant, cve_id):
+        """The id is interpolated into the request path: nothing but a
+        well-formed CVE id may reach the tenant."""
+        tenant.last_params.clear()
+        out = _call(tools_mod._tool_get_vulnerability, _ctx(), {"cve_id": cve_id})
+        assert out["error"] == "invalid_arguments"
+        assert tenant.last_params == {}
+
 
 class TestAuditAndAde:
     def test_audit_events_cursor_and_compaction(self, tenant):

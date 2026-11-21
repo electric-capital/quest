@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from config.plugin_tool_helpers import (
     arg_int as _arg_int,
@@ -656,14 +657,19 @@ async def _tool_list_vulnerabilities(ctx, args: dict) -> str:
     }, default=str)
 
 
+_CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,}")
+
+
 async def _tool_get_vulnerability(ctx, args: dict) -> str:
     client, error = _client(ctx)
     if error:
         return error
-    cve_id = _arg_str(args.get("cve_id"))
-    if not cve_id or not cve_id.upper().startswith("CVE-"):
+    # The id becomes a URL path segment, so it must be exactly a CVE id:
+    # a prefix check alone would let "CVE-/../.." or "CVE-1?x" steer the
+    # request to another path of the tenant API.
+    cve_id = (_arg_str(args.get("cve_id")) or "").upper()
+    if not _CVE_ID_RE.fullmatch(cve_id):
         return _error("invalid_arguments", "cve_id (e.g. CVE-2024-24795) is required.")
-    cve_id = cve_id.upper()
     page = _arg_int(args.get("page"), 1, lo=1, hi=10**6)
     size = _arg_int(args.get("size"), VULN_PAGE_MAX, lo=1, hi=VULN_PAGE_MAX)
     base = f"{API_PREFIX}/vulnerability-management/vulnerabilities/{cve_id}"
