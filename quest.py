@@ -487,6 +487,11 @@ app = FastAPI(
 # (one audit line per request / WebSocket connection; auth/session.py).
 app.add_middleware(ImpersonationAuditMiddleware)
 
+# nosniff and no-framing headers on every HTTP response (chat/security_headers.py).
+from chat.security_headers import SecurityHeadersMiddleware
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # Database-backed user data access
 from db.user_store import update_user_field
 
