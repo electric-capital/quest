@@ -204,3 +204,40 @@
   color: rgba(255, 150, 150, 0.9);
   font-size: 0.75rem;
 }
+
+/* Projects / AutoProjects sections: a count column with an optional detail
+   line under the figure (routine runs, failed updates). */
+.col-count {
+  width: 11%;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.75rem;
+}
+
+.count-detail {
+  display: block;
+  font-size: 0.6875rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* "public" / "archived" marker after a project or AutoProject name. */
+.scope-badge {
+  margin-left: 0.4em;
+  padding: 0 0.35em;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  font-size: 0.625rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Without the context and model columns the name can take their room. */
+.latest-active-groups .col-title {
+  width: 26%;
+}
+
+.latest-active-groups .col-user {
+  width: 17%;
+}

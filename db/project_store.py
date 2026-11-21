@@ -13,7 +13,7 @@ from typing import Optional
 from sqlalchemy import select, delete, func, case
 
 from db.engine import AsyncSessionLocal
-from db.models import Project, ProjectDocSource, Conversation, Skill
+from db.models import Project, ProjectDocSource, Conversation, Skill, User
 
 
 # Maximum project name length
@@ -371,6 +371,64 @@ async def set_doc_source_projects(
         return [
             _project_to_dict(source)
             for source in sorted(sources, key=lambda row: (row.name, row.id))
+        ]
+
+
+async def list_latest_active_projects(limit: int = 20) -> list[dict]:
+    """Return the most recently active projects across all users.
+
+    Admin-only callers use this for System Reports. A project's activity is
+    the newest ``last_message_at`` among its conversations (routine runs
+    and archived conversations included), so a project without a
+    conversation has none and is not listed. Sorted newest first and joined
+    to ``users`` for the owner identity; each row also carries the number
+    of conversations the project holds and how many of them a routine
+    created. Archived projects are listed (flagged), since their spend is
+    still the instance's.
+    """
+    activity = (
+        select(
+            Conversation.project_id.label("project_id"),
+            func.max(Conversation.last_message_at).label("last_message_at"),
+            func.count(Conversation.id).label("conversation_count"),
+            func.sum(
+                case((Conversation.routine_id.isnot(None), 1), else_=0)
+            ).label("routine_conversation_count"),
+        )
+        .where(Conversation.project_id.isnot(None))
+        .group_by(Conversation.project_id)
+        .subquery()
+    )
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                Project,
+                User.email,
+                User.name,
+                activity.c.last_message_at,
+                activity.c.conversation_count,
+                activity.c.routine_conversation_count,
+            )
+            .join(User, Project.user_id == User.id)
+            .join(activity, activity.c.project_id == Project.id)
+            .order_by(activity.c.last_message_at.desc(), Project.id)
+            .limit(limit)
+        )
+        return [
+            {
+                "id": project.id,
+                "name": project.name,
+                "public": bool(project.public),
+                "archived": bool(project.archived),
+                "user_id": project.user_id,
+                "user_email": email,
+                "user_name": name or "",
+                "last_message_at": last_message_at.isoformat() if last_message_at else None,
+                "conversation_count": int(conversation_count or 0),
+                "routine_conversation_count": int(routine_conversation_count or 0),
+            }
+            for project, email, name, last_message_at, conversation_count,
+            routine_conversation_count in result.all()
         ]
 
 

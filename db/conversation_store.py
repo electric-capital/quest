@@ -875,6 +875,56 @@ async def list_routine_conversation_rows(routine_id: str) -> list[dict]:
         ]
 
 
+def group_conversation_ids_query(
+    *, project_ids: Optional[list[str]] = None,
+    autoproject_ids: Optional[list[str]] = None,
+) -> Select:
+    """Single-column ``SELECT id`` of every conversation of the given
+    projects or AutoProjects (pass exactly one of the two lists).
+
+    The ``IN (subquery)`` companion of ``list_group_conversation_rows`` for
+    the grouped usage aggregation
+    (``get_usage_by_conversation_group`` in db/llm_call_store.py), for the
+    reason given at ``routine_conversation_ids_query``.
+    """
+    if project_ids is not None:
+        return select(Conversation.id).where(Conversation.project_id.in_(project_ids))
+    return select(Conversation.id).where(
+        Conversation.autoproject_id.in_(autoproject_ids or [])
+    )
+
+
+async def list_group_conversation_rows(
+    *, project_ids: Optional[list[str]] = None,
+    autoproject_ids: Optional[list[str]] = None,
+) -> list[dict]:
+    """Return ``{id, group_id, routine_id}`` for every conversation of the
+    given projects or AutoProjects (pass exactly one of the two lists).
+
+    Admin System Reports companion to ``group_conversation_ids_query``:
+    ``group_id`` is the conversation's ``project_id`` or ``autoproject_id``,
+    which is what folds per-conversation usage into per-project rows, and
+    ``routine_id`` tells routine runs apart from conversations a person
+    held. Not owner-scoped.
+    """
+    group_col = (
+        Conversation.project_id if project_ids is not None
+        else Conversation.autoproject_id
+    )
+    ids = project_ids if project_ids is not None else (autoproject_ids or [])
+    if not ids:
+        return []
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Conversation.id, group_col, Conversation.routine_id)
+            .where(group_col.in_(ids))
+        )
+        return [
+            {"id": conv_id, "group_id": group_id, "routine_id": routine_id}
+            for conv_id, group_id, routine_id in result.all()
+        ]
+
+
 async def list_conversation_activity_rows() -> list[dict]:
     """Return a minimal owner/routine/activity projection of ALL conversations.
 

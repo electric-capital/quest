@@ -11,6 +11,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { LatestActiveConversationsTable } from '../components/LatestActiveConversationsTable';
+import { LatestProjectsTable } from '../components/LatestProjectsTable';
+import { LatestAutoProjectsTable } from '../components/LatestAutoProjectsTable';
 import { TotalUsageReport } from '../components/TotalUsageReport';
 import { TopConversationsTable } from '../components/TopConversationsTable';
 import { UsersReportTable } from '../components/UsersReportTable';
@@ -28,6 +30,16 @@ const SECTIONS = [
     key: 'latest',
     label: 'Latest Conversations',
     component: LatestActiveConversationsTable,
+  },
+  {
+    key: 'projects',
+    label: 'Projects',
+    component: LatestProjectsTable,
+  },
+  {
+    key: 'autoprojects',
+    label: 'AutoProjects',
+    component: LatestAutoProjectsTable,
   },
   {
     key: 'usage',

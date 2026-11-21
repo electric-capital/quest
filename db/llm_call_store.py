@@ -408,6 +408,96 @@ async def get_usage_by_model_for_conversation_query(
     return _group_buckets_by_conversation(by_key)
 
 
+async def get_usage_by_conversation_group(
+    conversation_id_select: Select,
+    group_by_conversation: dict[str, str],
+) -> dict[str, dict]:
+    """Return lifetime per-model usage folded over groups of conversations.
+
+    The aggregation behind the Projects and AutoProjects sections of System
+    Reports: ``conversation_id_select`` is a single-column ``SELECT`` naming
+    every conversation of the displayed groups (applied as an
+    ``IN (subquery)``, so a project with thousands of routine runs never
+    becomes a bind-parameter list) and ``group_by_conversation`` maps each of
+    those conversation ids to its group (a project or AutoProject id -- the
+    store has no knowledge of either). Conversations absent from the mapping
+    are skipped. The same tier-bucketed (conversation, model) buckets as
+    ``get_usage_by_model_for_conversations`` are merged per group, which is
+    exact because the tier split happened per call upstream.
+
+    Only surviving conversations can be named by the select, so the calls of
+    a conversation deleted from its project are not part of the group's
+    figures.
+
+    Returns:
+        Mapping of group id -> {
+            "models": [...],  # get_usage_by_model_for_conversations entry
+                              # shape, one merged entry per model across
+                              # the group's conversations, heaviest first
+            "total": {...},   # same coarse total shape/None convention
+        }
+        Groups without a recorded call do not appear.
+    """
+    by_key, _user_ids = await _collect_usage_buckets(
+        conversation_id_select=conversation_id_select
+    )
+
+    by_group: dict[str, dict] = {}
+    for (conv_id, _model), model_entry in by_key.items():
+        group_id = group_by_conversation.get(conv_id)
+        if group_id is None:
+            continue
+        entry = by_group.setdefault(
+            group_id,
+            {
+                "models_by_name": {},
+                "total": {
+                    "call_count": 0,
+                    "total_tokens": 0,
+                    "estimated_cost_usd": 0.0,
+                    "cost_source": None,
+                },
+            },
+        )
+        cost = model_entry["estimated_cost_usd"]
+        source = model_entry["cost_source"]
+        merged = entry["models_by_name"].get(model_entry["model"])
+        if merged is None:
+            entry["models_by_name"][model_entry["model"]] = {
+                **model_entry,
+                "metrics": dict(model_entry["metrics"]),
+            }
+        else:
+            merged["call_count"] += model_entry["call_count"]
+            merged["total_tokens"] += model_entry["total_tokens"]
+            for field, value in model_entry["metrics"].items():
+                merged["metrics"][field] += value
+            add_cost(merged, "estimated_cost_usd", "cost_source", cost, source)
+
+        total = entry["total"]
+        total["call_count"] += model_entry["call_count"]
+        total["total_tokens"] += model_entry["total_tokens"]
+        add_cost(total, "estimated_cost_usd", "cost_source", cost, source)
+
+    result: dict[str, dict] = {}
+    for group_id, entry in by_group.items():
+        models = sorted(
+            entry["models_by_name"].values(),
+            key=lambda m: m["total_tokens"],
+            reverse=True,
+        )
+        for model_entry in models:
+            if model_entry["estimated_cost_usd"] is not None:
+                model_entry["estimated_cost_usd"] = round(
+                    model_entry["estimated_cost_usd"], 6
+                )
+        total = entry["total"]
+        if total["estimated_cost_usd"] is not None:
+            total["estimated_cost_usd"] = round(total["estimated_cost_usd"], 6)
+        result[group_id] = {"models": models, "total": total}
+    return result
+
+
 async def get_most_expensive_conversations(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
