@@ -273,6 +273,49 @@ class TestHandlerGuards:
         ))
         assert "return_to_caller" in json.loads(result)["error"]
 
+    def test_create_action_request_blocked_in_inference_runs(self):
+        ctx, _ = _make_ctx(is_inference_api=True)
+        result = _run(_handle_create_action_request(
+            ctx, _call("create_action_request", {"request_type": "x"}),
+            TurnState(),
+        ))
+        assert "return_final_response" in json.loads(result)["error"]
+
+    @pytest.mark.parametrize("origin_flag, label", [
+        ("is_user_subagent", "cross-user subagent"),
+        ("is_inference_api", "inference API"),
+    ])
+    @pytest.mark.parametrize("name, args", [
+        ("agent_task", {"name": "A", "prompt": "p"}),
+        ("agent_task_parallel", {"tasks": [{"name": "A", "prompt": "p"}]}),
+        ("agent_task_parallel_template", {
+            "prompt_template": "p {x}", "agents": [{"name": "A", "x": "1"}],
+        }),
+    ])
+    def test_spawners_unavailable_in_subagent_and_inference_runs(
+        self, monkeypatch, origin_flag, label, name, args,
+    ):
+        """The agent_task* tools are not part of these run kinds; the
+        handlers answer with a structured error and spawn nothing."""
+        from chat.gemini_api import turn_tools
+
+        spawned: list = []
+
+        async def _spawn(*a, **k):
+            spawned.append((a, k))
+            return "{}"
+
+        monkeypatch.setattr(turn_tools, "_run_spawn_arm", _spawn)
+        ctx, events = _make_ctx(**{origin_flag: True})
+        turn = TurnState()
+        result = _run(TURN_TOOL_HANDLERS[name](ctx, _call(name, args), turn))
+        payload = json.loads(result)
+        assert name in payload["error"]
+        assert label in payload["error"]
+        assert spawned == []
+        assert events == []
+        assert turn.agent_task_calls == 0
+
     def test_create_action_request_rejects_unknown_type(self):
         ctx, _ = _make_ctx()
         result = _run(_handle_create_action_request(
