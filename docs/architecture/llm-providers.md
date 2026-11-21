@@ -250,10 +250,10 @@ JSON Schema is the de facto standard for function signatures across LLM provider
 **Why Vertex AI for Anthropic instead of the direct Anthropic API?**
 The deployment environment already has Google Cloud infrastructure and credentials. Using Vertex AI avoids managing a separate Anthropic API key and allows billing to be consolidated through Google Cloud.
 
-**Why a per-model backend flag on `GeminiProvider` instead of a second provider class?**
-The two `google-genai` transports (developer endpoint vs Vertex) emit identical message shapes -- both produce SDK `Content` objects with the same `parts` structure -- so the on-disk history envelope, the `_active_chats` cache key (`provider: "gemini"`), and the frontend provider-lock all behave the same across backends.
+**Why is `GeminiApiProvider` a subclass of `GeminiProvider` instead of a separate provider?**
+The two `google-genai` transports (developer endpoint vs Vertex) emit identical message shapes -- both produce SDK `Content` objects with the same `parts` structure -- so the on-disk history envelope and the `_active_chats` cache key (`provider: "gemini"`) behave the same across backends.
 
-A separate `GeminiVertexProvider` class would have forced cross-provider semantics on a backend swap: discarded in-memory history, a segmented model dropdown, and a new branch in `_provider_name()` in `chat/gemini_api/history.py`. The backend flag in `MODEL_REGISTRY` keeps the swap localized to client construction and file-upload transport, and the older Gemini models stay on the developer API unchanged.
+A separate provider would have needed its own history handling and a new branch in `_provider_name()` in `chat/gemini_api/history.py`. The subclass keeps the difference localized to client construction and file-upload transport.
 
 **Why inline `Part.from_bytes` for Vertex file uploads instead of the File Upload API?**
 The `client.aio.files.upload()` endpoint is part of the developer Gen AI API surface and is not available on Vertex. Vertex Gemini accepts inline base64 parts directly on the request, capped at a few MB per part. `GeminiProvider.upload_file()` reads the file inline and returns `types.Part.from_bytes(...)`; `make_file_part()` short-circuits when handed a fully-formed `Part`. The MIME allow-list mirrors the Anthropic provider for consistency, and the per-part cap comes from `chat/llm/file_limits.py` (see [Attachment Size Limits](#attachment-size-limits)). Audio/video are not on the allow-list today even though Vertex supports them inline -- revisit if needed.

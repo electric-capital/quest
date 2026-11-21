@@ -246,9 +246,9 @@ The `render_preview()` method is responsible for generating human-readable previ
 
 The `params` allow-list is `_MESSAGE_ALLOWED_PARAMS` in `plugins/slack/handlers.py`; the `message` cap is the literal in `validate_params()`, sized to Slack's section-block text limit, and the format checks are in the type list above.
 
-The handler's `render_preview()` method resolves channel names via `_resolve_slack_channel_name()` in `plugins/slack/handlers.py`, which calls `conversations.info` for channel/group IDs and `users.info` for user IDs, producing human-readable names (e.g., #general, @alice).
+The handler's `enrich_params_for_preview()` hook resolves channel names via `_resolve_slack_channel_name()` in `plugins/slack/handlers.py`, which calls `conversations.info` for channel/group IDs and `users.info` for user IDs, producing human-readable names (e.g., #general, @alice).
 
-When `thread_ts` is present, `render_preview()` fetches thread context via `_fetch_slack_thread_context()` in `plugins/slack/handlers.py`, which calls Slack's `conversations.replies` API to retrieve the parent message and the latest few replies (the count is the slice literal in that function; sender names resolved via `_resolve_slack_user_name()`). The thread context is included in the preview fields.
+When `thread_ts` is present, it fetches thread context via `_fetch_slack_thread_context()` in `plugins/slack/handlers.py`, which calls Slack's `conversations.replies` API to retrieve the parent message and the latest few replies (the count is the slice literal in that function; sender names resolved via `_resolve_slack_user_name()`). The thread context is included in the preview fields.
 
 When executing the approved request, the handler passes `thread_ts` through to Slack's `chat.postMessage` API to post the reply in the thread.
 
@@ -332,7 +332,7 @@ After resolving the DB rows on either branch, the endpoint also calls `ChatStora
 
 Action requests are rendered inline in the chat conversation via the `ActionRequestMessage` component in `frontend/src/components/ActionRequestMessage.tsx`. Key behaviours:
 
-- **Composer locked while pending**: The chat input is disabled on the suspended conversation whenever a `kind="action_request"` wait handle is still `pending`. `useConversation` exposes `hasPendingWait` and `pendingWaitKind`, which `ChatPanel` ORs into `inputDisabled` (also gating paste); the textarea placeholder switches to the pending-request wording in `Composer.tsx` (singular / plural by `pendingWaitCount`).
+- **Composer locked while pending**: The chat input is disabled on the suspended conversation whenever a `kind="action_request"` wait handle is still `pending`. `useConversation` exposes `hasPendingWait` and `pendingWaitKind`, which `Composer` ORs into `inputDisabled` (also gating paste); the textarea placeholder switches to the pending-request wording in `Composer.tsx` (singular / plural by `pendingWaitCount`).
   - This holds across reloads, tab switches, and the Requests-pane round trip because the gate is driven by the `pending_wait_handles` field on `GET /conversations/{id}` and by `wait_handle_resolved` events on the persistent WebSocket, not by per-tab streaming state. See [Wait Handles -- Composer Sync](wait-handles.md#composer-sync). The user can still start a new conversation or open the cross-conversation Requests pane while the suspended run waits.
 - **Persistent state**: Status is stored in the database, so it survives reloads and conversation switches.
 - **Server-rendered previews**: Preview rendering is driven by `preview_fields` (a list of `{key, value}` dicts) provided by the server. The frontend generically loops over these fields to render key-value rows, rather than containing type-specific rendering logic.

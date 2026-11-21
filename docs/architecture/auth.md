@@ -10,7 +10,7 @@ The `auth/` submodule handles Google OAuth (app login and Google Services), Airt
 
 The main app in `quest.py` registers the routers from the auth submodule:
 
-1. `google_login_router` -- App login endpoints (`/auth/`, `/auth/login`, `/auth/callback`, `/auth/login-url`, `/auth/logout`)
+1. `google_login_router` -- App login endpoints (`/auth/`, `/auth/callback`, `/auth/login-url`, `/auth/logout`)
 2. `google_services_router` -- Google Services OAuth (`/auth/google-services`, `/auth/google-services/callback`)
 3. `airtable_router` -- Airtable token management (`/auth/airtable/save-token`, `/auth/airtable/remove-token`)
 4. `ramp_router` -- Ramp OAuth (`/auth/ramp`, see [Ramp API](../api/ramp-api.md))
@@ -32,7 +32,7 @@ Enforcement of "one method at a time": every `/auth/password/*` route 404s `pass
 
 **Accounts are the same `users` rows under both methods, keyed by email.** The Google login callback already looks users up by email, so after a switch everyone signs in with the Google account of the same address and keeps their conversations, projects and connections; `google_sub` is filled in on that first Google login. Password hashes stay in place after a switch (unused), so reverting only takes a config edit.
 
-**Switching.** Admin Settings > Sign-in (`frontend/src/components/settings/SignInSection.tsx`) calls `PUT /app/api/admin/sign-in/login-method` (`chat/routes/admin.py`), which only accepts `"google"`, refuses until the Google OAuth client is configured (`_google_login_configured()`), and writes the key via `update_server_config()` in `config/server_config.py` (atomic temp-file + rename, other keys preserved). Password sessions -- including the admin's own -- end immediately. Going back to password sign-in is deliberately a hand edit of `server_config.json` (`"login_method": "password"`); Google-issued sessions (no `pw` field) stay valid then, and users without a password can set one in Settings > Password without a current password.
+**Switching.** Admin Settings > Sign-in (`frontend/src/components/settings/SignInSection.tsx`) calls `PUT /app/api/admin/sign-in/login-method` (`chat/routes/admin.py`), which only accepts `"google"`, refuses until the Google OAuth client is configured (`google_login_configured()` in `auth/config.py`), and writes the key via `update_server_config()` in `config/server_config.py` (atomic temp-file + rename, other keys preserved). Password sessions -- including the admin's own -- end immediately. Going back to password sign-in is deliberately a hand edit of `server_config.json` (`"login_method": "password"`); Google-issued sessions (no `pw` field) stay valid then, and users without a password can set one in Settings > Password without a current password.
 
 ### Email/password flow
 
@@ -109,7 +109,7 @@ Local mode only (`environment.allow_dev_login()`; 404 in staging and prod, hidin
 The domain is resolved by `allowed_login_domain()`:
 
 - local mode only, `QUEST_ALLOWED_LOGIN_DOMAIN` (pre-baked by `run.py` from the shared parent-directory `dev-config.json`, so a real Google sign-in with a test account can complete; ignored in staging/prod);
-- then the `allowed_login_domain` key in `server_config.json` in all modes (written by the prod bootstrap wizard so a deployment for another organization can admit its own domain);
+- then the `allowed_login_domain` key in `server_config.json` in all modes (written by first-run setup so a deployment for another organization can admit its own domain);
 - then the hardcoded `ALLOWED_DOMAIN`.
 
 Outside local mode, `require_user_allowed()` in `chat/auth.py` raises 403
@@ -171,10 +171,10 @@ A counter on the `users` row the cookie check already loads gives server-side re
 Running both would give every account two independent credentials with different recovery paths and make "who may sign in" depend on which door someone used. A single switch also makes the Google transition a clean cutover: password sessions end, and the Google callback resolves the same rows by email.
 
 **Why are passwords only set through one-time links, never at sign-up?**
-Without a link that proves control of the address, anyone could register an allowed-domain email before its owner -- including an address in `admin_emails`. Admin-issued links (and the bootstrap wizard for the first admins) work without any email setup; self-service links rely on SMTP delivery for the ownership proof.
+Without a link that proves control of the address, anyone could register an allowed-domain email before its owner -- including an address in `admin_emails`. Admin-issued links (and first-run setup for the first admins) work without any email setup; self-service links rely on SMTP delivery for the ownership proof.
 
 **Why scrypt from `hashlib` instead of a password-hashing package?**
-The bootstrap wizard must hash the first admin password before any dependency is installed (it is stdlib-only like `run.py`), and the app must verify the same format. `hashlib.scrypt` is memory-hard and available everywhere Python links OpenSSL.
+`hashlib.scrypt` is memory-hard and available everywhere Python links OpenSSL, so hashing and verifying passwords needs no extra dependency.
 
 ## Constraints
 

@@ -92,7 +92,7 @@ A report is a grouped query over one ledger (`query_*` in `analytics/reports.py`
 
 - **No out-of-process access while the server runs.** Ad hoc queries wait for a stop, or go through a report. A scheduled Parquet export is the intended way to open that up; it does not exist yet.
 - **Backups copy the file (and its `.wal`) with the server stopped**, like `quest.db`.
-- **The `duckdb` version is pinned** in `pyproject.toml`. A newer library reads an older file; the reverse is not guaranteed, so a version bump is a one-way deploy step. Because the server is the only opener, two versions never meet on one file.
+- **The `duckdb` version is bounded** in `pyproject.toml` (and pinned in `uv.lock`). A newer library reads an older file; the reverse is not guaranteed, so a version bump is a one-way deploy step. Because the server is the only opener, two versions never meet on one file.
 - **Not everything is rebuildable.** `skill_loads` rows can be re-derived from transcripts and sidecars and most `tool_calls` rows from transcripts, but script calls and anything a future ledger records at a point no file captures exist nowhere else. Migrations stay non-destructive.
 
 ## Design Decisions

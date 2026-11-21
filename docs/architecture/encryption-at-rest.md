@@ -75,7 +75,7 @@ the DEK from process memory or the password from the process environment.
   into every envelope; a value from a different key file raises
   `KeyMismatchError` with a clear message instead of a bare tag failure.
 - **`users.api_key`** cannot be hash-only (it is returned in plaintext by
-  `GET /me` and rendered into the model-facing proxy preamble), so it is
+  the deprecated `GET /app/api/user` and rendered into the model-facing proxy preamble), so it is
   encrypted and looked up through the SHA-256 `api_key_hash` column.
   Sandbox containers no longer receive it: their `QUEST_API_KEY` is an
   in-memory per-run token (`chat/sandbox_tokens.py`) that is never stored.
@@ -172,7 +172,7 @@ dependency.
 table rebuild (and the FK-cascade hazard of batch mode), pure data migration
 that is idempotent by inspection of the `qenc1:` prefix.
 
-**Why keep `users.api_key` encrypted rather than hashed?** `GET /me` and the
+**Why keep `users.api_key` encrypted rather than hashed?** `GET /app/api/user` and the
 proxy preamble still hand out the plaintext, so a hash-only scheme would
 force a regenerate-on-view flow. (The sandbox bridge, the original reason,
 now mints its own ephemeral tokens.) The hash column gives O(1) lookup

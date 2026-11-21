@@ -21,7 +21,7 @@ Admins (users whose email is in the `admin_emails` list in `server_config.json`)
 - `frontend/src/components/AdminOpsMenu.tsx` -- The admin menu hosting the user picker and the end-impersonation action; rendered inline in the sidebar's `UserInfoBar.tsx`, or floating on the System Reports page, which has no sidebar
 - `frontend/src/contexts/AuthContext.tsx` -- `isImpersonating`, `impersonatorEmail`, `impersonatorName` state values
 - `frontend/src/api/client.ts` -- `fetchAdminUsers()`, `impersonateUser()`, `stopImpersonation()`
-- `frontend/src/api/types.ts` -- `is_impersonating`, `impersonator_email`, `impersonator_name` on the `/me` response type
+- `frontend/src/utils/auth.ts` -- `is_impersonating`, `impersonator_email`, `impersonator_name` on the `/me` response type (`checkSession()`)
 
 ## Impersonation Flow
 
