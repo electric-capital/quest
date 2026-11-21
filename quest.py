@@ -766,4 +766,10 @@ async def serve_chat_static(filename: str):
 if __name__ == "__main__":
     import uvicorn
     from chat.logging_config import get_log_config
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=get_log_config())
+    from config.environment import get_quest_env, resolve_bind_host
+    uvicorn.run(
+        app,
+        host=resolve_bind_host(get_quest_env(), None, os.environ.get("QUEST_HOST")),
+        port=8000,
+        log_config=get_log_config(),
+    )
