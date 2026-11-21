@@ -7,13 +7,38 @@
 # inside the container maps to a sub-UID on the host, not actual host root.
 #
 # Steps:
-#   1. Start socat forwarder (localhost:<port> -> 10.0.2.2:<port>)
+#   1. Start socat forwarder in the background
+#      (localhost:<port> -> 10.0.2.2:<port>)
 #   2. Load iptables rules (one atomic iptables-restore) allowing ONLY the sandbox tool-API port on the
 #      slirp gateway, and REJECT every other private / link-local
 #      destination; REJECT all IPv6 (fail closed if iptables/ip6tables
 #      are unavailable)
 #   3. Remove execute permission from iptables binaries
-#   4. Drop all capabilities and switch to the target user via setpriv
+#   4. Wait (bounded) for socat to listen; fail closed if it does not
+#   5. Drop all capabilities and switch to the target user via setpriv
+
+# wait_for_port_listen PORT PID PROC_NET_TCP
+# Return 0 once PROC_NET_TCP lists 127.0.0.1:PORT in LISTEN state (0A).
+# Return 1 as soon as PID (the socat process) has exited, or after 200
+# checks 5 ms apart (~1 s). The kernel prints addresses as uppercase hex
+# with the port zero-padded to 4 digits.
+wait_for_port_listen() {
+    local want addr state _
+    printf -v want '0100007F:%04X' "$1"
+    for _ in {1..200}; do
+        while read -r _ addr _ state _; do
+            if [[ "$addr" == "$want" && "$state" == "0A" ]]; then
+                return 0
+            fi
+        done < "$3"
+        kill -0 "$2" 2>/dev/null || return 1
+        sleep 0.005
+    done
+    return 1
+}
+
+# When sourced (by tests) stop here: only the function above is wanted.
+[[ "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 
 PORT="${QUEST_PORT:-8000}"
 RUN_UID="${QUEST_RUN_UID:-1000}"
@@ -21,9 +46,6 @@ RUN_GID="${QUEST_RUN_GID:-1000}"
 
 socat "TCP-LISTEN:${PORT},fork,reuseaddr,bind=127.0.0.1" "TCP:10.0.2.2:${PORT}" &
 SOCAT_PID=$!
-
-# Give socat a moment to bind the port
-sleep 0.05
 
 # Lock down host access: the ONLY permitted destination is the sandbox
 # tool-API port on the slirp gateway. Everything else -- including the host
@@ -78,6 +100,15 @@ fi
 # Remove execute permission from iptables binaries so the user's script
 # cannot call them even if capabilities were somehow retained.
 chmod 0 /usr/sbin/xtables-nft-multi /usr/sbin/xtables-legacy-multi 2>/dev/null
+
+# socat has been binding while the rules above loaded, so this usually
+# passes on its first check. Ordering is safe: nothing can connect to the
+# bridge before the user's command starts below, and by then the ACCEPT
+# rule for the tool-API port is in place.
+if ! wait_for_port_listen "$PORT" "$SOCAT_PID" /proc/net/tcp; then
+    echo "restricted sandbox: socat bridge did not start, refusing to start" >&2
+    exit 1
+fi
 
 # Drop to the target user with all capabilities cleared and no-new-privs set.
 # --reuid/--regid: switch to the unprivileged user that owns the workspace
