@@ -871,13 +871,6 @@ class AnthropicProvider(LLMProvider):
         """Deserialize saved history for Anthropic session restoration."""
         return data
 
-    def get_pending_tool_uses(self, session: Any) -> list[tuple[str, str]]:
-        """Return pending tool_use blocks on the last assistant message."""
-        return [
-            (tid, tname)
-            for tid, tname, _args in self.get_pending_tool_use_args(session)
-        ]
-
     def get_pending_tool_use_args(self, session: Any) -> list[tuple[str, str, dict]]:
         """Return pending tool_use blocks with their input args."""
         messages = getattr(session, "messages", None) or []

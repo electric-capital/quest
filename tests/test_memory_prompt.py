@@ -342,7 +342,6 @@ def _fake_provider():
     provider = MagicMock()
     provider.create_session = lambda *a, **kw: object()
     provider.repair_session_history = lambda _s: 0
-    provider.get_pending_tool_uses = lambda _s: []
     provider.get_usage = lambda _s: MagicMock(
         input_tokens=0, output_tokens=0, cached_tokens=0, total_tokens=0,
     )

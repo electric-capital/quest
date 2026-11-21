@@ -291,7 +291,10 @@ def test_ollama_stream_text_tool_calls_and_usage(ollama):
     last = session.messages[-1]
     assert last["role"] == "assistant" and last["content"] == "Let me check."
     assert last["tool_calls"][0]["function"]["arguments"] == "{\"city\": \"Paris\"}"
-    assert provider.get_pending_tool_uses(session) == [("call_abc", "get_weather"), (events[3].tool_id, "get_time")]
+    assert provider.get_pending_tool_use_args(session) == [
+        ("call_abc", "get_weather", {"city": "Paris"}),
+        (events[3].tool_id, "get_time", {}),
+    ]
 
     usage = provider.get_usage(session)
     assert (usage.input_tokens, usage.output_tokens, usage.cached_tokens) == (150, 12, 20)

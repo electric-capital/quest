@@ -466,13 +466,6 @@ class GeminiProvider(LLMProvider):
         """
         return data
 
-    def get_pending_tool_uses(self, session: Any) -> list[tuple[str, str]]:
-        """Return pending function_call parts on the unanswered model turn(s)."""
-        return [
-            (tid, tname)
-            for tid, tname, _args in self.get_pending_tool_use_args(session)
-        ]
-
     def get_pending_tool_use_args(self, session: Any) -> list[tuple[str, str, dict]]:
         """Return pending function_call parts with their args."""
         try:
