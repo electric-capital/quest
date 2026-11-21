@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+from config.plugin_tool_helpers import intent_param as _intent
 from config.plugin_types import PluginTool
 
 from plugins.telegram.upstream import get_me, get_messages, list_contacts, list_dialogs
@@ -112,16 +113,6 @@ async def _tool_list_contacts(ctx, args: dict) -> str:
 # ---------------------------------------------------------------------------
 # Tool specs
 # ---------------------------------------------------------------------------
-
-def _intent(example: str) -> dict:
-    return {
-        "type": "string",
-        "description": (
-            "A brief, user-friendly summary of your intent "
-            f"(max 50 characters). Example: '{example}'."
-        ),
-    }
-
 
 GET_ME_TOOL = PluginTool(
     spec={

@@ -27,6 +27,12 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from config.plugin_tool_helpers import (
+    arg_int as _arg_int,
+    arg_str as _arg_str,
+    intent_param as _intent,
+    tool_error as _error,
+)
 from config.plugin_types import PluginTool
 
 from plugins.unifi import network as net
@@ -57,31 +63,12 @@ _FILENAME_CLEAN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _error(code: str, message: str, **extra) -> str:
-    return json.dumps({"error": code, "message": message, **extra})
-
-
 def _unifi_error(exc: UnifiError) -> str:
     return _error(exc.code, str(exc), status_code=exc.status_code)
 
 
-def _arg_str(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
 def _arg_bool(value) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() == "true")
-
-
-def _arg_int(value, default: int, *, lo: int, hi: int) -> int:
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, number))
 
 
 def _load_config_or_error() -> tuple[dict | None, str | None]:
@@ -603,16 +590,6 @@ async def _tool_list_protect_devices(ctx, args: dict) -> str:
 # ---------------------------------------------------------------------------
 # Tool specs
 # ---------------------------------------------------------------------------
-
-def _intent(example: str) -> dict:
-    return {
-        "type": "string",
-        "description": (
-            "A brief, user-friendly summary of your intent (max 50 characters). "
-            f"Example: '{example}'."
-        ),
-    }
-
 
 _SITE_PARAM = {
     "type": "string",

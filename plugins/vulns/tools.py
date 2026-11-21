@@ -21,6 +21,12 @@ from __future__ import annotations
 import json
 import re
 
+from config.plugin_tool_helpers import (
+    arg_int as _arg_int,
+    arg_str as _arg_str,
+    intent_param as _intent,
+    tool_error as _error,
+)
 from config.plugin_types import PluginTool
 
 from plugins.vulns import osv
@@ -65,22 +71,11 @@ _REFERENCE_ORDER = {"ADVISORY": 0, "FIX": 1, "REPORT": 2, "WEB": 3, "ARTICLE": 4
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _error(code: str, message: str, **extra) -> str:
-    return json.dumps({"error": code, "message": message, **extra})
-
-
 def _upstream_error(exc: VulnsError) -> str:
     extra: dict = {"source": exc.source}
     if exc.status_code is not None:
         extra["status_code"] = exc.status_code
     return _error(exc.code, str(exc), **extra)
-
-
-def _arg_str(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _arg_bool(value) -> bool | None:
@@ -94,14 +89,6 @@ def _arg_bool(value) -> bool | None:
         if low in ("false", "no", "0"):
             return False
     return None
-
-
-def _arg_int(value, default: int, *, lo: int, hi: int) -> int:
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, number))
 
 
 def _arg_list(value) -> list[str]:
@@ -596,16 +583,6 @@ async def _tool_get_epss(ctx, args: dict) -> str:
 # ---------------------------------------------------------------------------
 # Specs
 # ---------------------------------------------------------------------------
-
-def _intent(example: str) -> dict:
-    return {
-        "type": "string",
-        "description": (
-            "A brief, user-friendly summary of your intent (max 50 characters). "
-            f"Example: '{example}'."
-        ),
-    }
-
 
 def _tool(name: str, description: str, properties: dict, required: list[str],
           handler) -> PluginTool:

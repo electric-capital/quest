@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 
+from config.plugin_tool_helpers import arg_str as _arg_str
 from config.plugin_types import PluginTool
 
 from plugins.slack import upstream
@@ -47,14 +48,6 @@ def _arg_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def _arg_str(value) -> str | None:
-    """Coerce a model-supplied optional string argument (None/empty -> None)."""
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _arg_bool(value) -> bool:

@@ -32,6 +32,7 @@ from pathlib import Path
 
 import httpx
 
+from config.plugin_tool_helpers import intent_param as _intent_param
 from config.plugin_types import PluginTool
 
 from plugins.m365.render import (
@@ -906,16 +907,6 @@ async def _handle_save_mail_attachment(ctx, args: dict) -> str:
 # ---------------------------------------------------------------------------
 # Tool specs
 # ---------------------------------------------------------------------------
-
-def _intent_param(example: str) -> dict:
-    return {
-        "type": "string",
-        "description": (
-            "A brief, user-friendly summary of your intent "
-            f"(max 50 characters). Example: '{example}'."
-        ),
-    }
-
 
 GET_MAIL_MESSAGES_TOOL = PluginTool(
     spec={
