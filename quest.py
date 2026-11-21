@@ -685,8 +685,14 @@ if FRONTEND_BUILD_DIR.exists():
 @app.get("/chat/")
 @app.get("/chat/{rest:path}")
 async def redirect_chat_to_root(rest: str = ""):
-    """Redirect old /chat URLs to root for backward compatibility."""
-    return RedirectResponse(f"/{rest}" if rest else "/", status_code=301)
+    """Redirect old /chat URLs to root for backward compatibility.
+
+    The target is always a path on this origin: leading slashes and
+    backslashes are dropped from ``rest``, because ``/chat//host`` would
+    otherwise produce ``Location: //host``, which browsers read as another
+    site (an open redirect).
+    """
+    return RedirectResponse("/" + rest.lstrip("/\\"), status_code=301)
 
 @app.get("/")
 async def serve_chat_app(request: Request):
