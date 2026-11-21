@@ -46,8 +46,9 @@ By default every conversation is **private**: the agent can use the user's conne
 sources, but it has no path to the open internet. There is no generic "fetch this URL" tool, and
 scripts run in a no-egress sandbox. A [public project](docs/architecture/public-projects.md)
 inverts the posture: its conversations get an internet-enabled sandbox but are cut off from
-every internal resource -- no skills, memories, connectors, action requests, sub-agents, or
-authed APIs -- enforced at three independent layers (tool tier, dispatch-time allow-list, and a
+every internal resource -- no user skills, personal memories, connectors, sub-agents, or authed
+APIs, and no action requests beyond the ones that change the project's own public docs and
+tables -- enforced at three independent layers (tool tier, dispatch-time allow-list, and a
 separate credential-free container image). No conversation ever holds sensitive data and an open
 channel to the internet at the same time.
 
@@ -88,8 +89,8 @@ startup -- no packaging, no entry points, no edits to core files, and no fronten
 (plugin configuration UI is schema-rendered). A manifest can declare an admin credential schema,
 a per-user connection (API key or OAuth), `authed_get` service entries with endpoint
 allow-lists, system skills, tools, and action-request handlers. Plugins inherit the security
-model: they cannot mount LLM-reachable HTTP routes, and public projects always block plugin
-tools and services.
+model: they cannot mount LLM-reachable HTTP routes, and a plugin cannot open its tools or
+services to public projects.
 
 Reference plugins prove the surface: the in-tree `plugins/github/` (OAuth kind) and
 `plugins/twitter/` (OAuth kind), plus external plugin roots loaded via `QUEST_PLUGIN_PATH`.
@@ -137,7 +138,7 @@ OpenRouter so you can start chatting:
 Setting up a new machine (Debian packages, Google OAuth, Vertex AI)? Follow the
 [Installation Guide](INSTALL.md).
 
-1. Install prerequisites: Python 3.11+, Node.js 18+, [uv](https://github.com/astral-sh/uv),
+1. Install prerequisites: Python 3.11+, Node.js 24, [uv](https://github.com/astral-sh/uv),
    and Podman (optional in local mode; needed for the script sandbox)
 2. Run `python3 run.py` -- local mode builds the frontend, installs dependencies, runs
    migrations, seeds a throwaway data directory with canned accounts, and starts the server on
