@@ -91,6 +91,13 @@ The persistent WebSocket re-validates its cookie and admission on a heartbeat
 (`_revalidate_auth()` in `chat/realtime/socket.py`); control messages also check
 current admission before dispatch. See [Realtime](realtime.md#heartbeat-and-auth).
 
+**Response headers.** `SecurityHeadersMiddleware` in `chat/security_headers.py` (installed in
+`quest.py`) adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'` to every HTTP response that does not already set
+them. The session cookie is `SameSite=Lax`, which keeps it out of frames on other sites but not
+out of a frame on a sibling subdomain or another port of the same host; refusing to be framed at
+all closes that gap for the approval cards. Nothing in Quest embeds the app in a frame.
+
 ## Dev Login
 
 Local mode only (`environment.allow_dev_login()`; 404 in staging and prod, hiding the endpoints): `GET /auth/dev-accounts` returns the account roster for the sign-in screen's canned-account picker, and `POST /auth/dev-login` signs in any email, creating the user with a deterministic name from the `FIRST_NAMES` / `LAST_NAMES` lists in `auth/dev_login.py` and a `dev-`-prefixed fake Google sub. It sets the same versioned session cookie as the Google login. A user who already has `google_oauth` credentials gets 403 and must use Google sign-in. The sign-in flow is described in [Run Modes](run-modes.md).
