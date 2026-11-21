@@ -300,7 +300,7 @@ Older rows fell back to the coalesced columns: exact for Gemini (the coalesced v
 
 All store modules are async, use `AsyncSessionLocal` from `db/engine.py`, and follow the same pattern: each function opens a fresh session, performs its operation, and returns plain dicts. Callers must `await` every store call. Queries use SQLAlchemy 2.0-style `select()` and `delete()` with `await db.execute()`.
 
-Each store module provides a `_*_to_dict()` helper that converts ORM instances to plain dicts.
+Most store modules provide a `_*_to_dict()` helper that converts ORM instances to plain dicts.
 
 **`db/user_store.py`** -- User CRUD. `update_user_settings()` performs a partial merge into the existing settings JSON. `search_users()` provides case-insensitive substring matching for the skill sharing type-ahead.
 
@@ -348,7 +348,7 @@ The long-context flag (per-call context above the model's tier threshold -- `LON
 
 ### Sync Engine
 
-Used by Alembic migrations only; every store module uses the async engine.
+Not used by the app: every store module uses the async engine, and Alembic builds its own engine in `alembic/env.py`.
 
 - **`engine`**: `create_engine("sqlite:///...")` with `check_same_thread=False` (required for FastAPI's threaded request handling)
 - **Connect PRAGMAs**: `@event.listens_for(engine, "connect")` (`_set_sqlite_pragma`) runs the per-connection PRAGMAs described in [Connection PRAGMAs](#connection-pragmas) on every new DBAPI connection
@@ -418,7 +418,7 @@ SQLite has no `ALTER COLUMN`, so a type or nullability change takes `batch_alter
 
 **Creating a new migration**: `uv run alembic revision --autogenerate -m "description"`
 
-**Production**: `run.py` runs `uv run alembic upgrade head` as step 3 before starting the server, ensuring the database schema is always up to date.
+**Production**: `run.py` runs `uv run alembic upgrade head` before starting the server, ensuring the database schema is always up to date.
 
 ## Design Decisions
 
@@ -426,7 +426,7 @@ SQLite has no `ALTER COLUMN`, so a type or nullability change takes `batch_alter
 SQLite requires no separate database server, fits the single-server deployment model, and the database file lives alongside the rest of the `data/` directory. The user table is small (tens of users for an internal tool) so SQLite's write lock is not a concern. If the project scales to multiple servers, PostgreSQL can be swapped by changing `DATABASE_URL` in `db/engine.py` and `alembic.ini`.
 
 **Why a dual sync/async engine even though all stores are async?**
-The async engine (`sqlite+aiosqlite`) avoids blocking the asyncio event loop during database I/O, which matters for stores called from FastAPI async endpoints and from the conversation loop. Every `db/*_store.py` module uses `AsyncSessionLocal`. The sync engine (`SessionLocal`) is retained solely for Alembic migrations, which only support sync engines. Both engines share the same database file and the same `PRAGMA foreign_keys=ON` enforcement.
+The async engine (`sqlite+aiosqlite`) avoids blocking the asyncio event loop during database I/O, which matters for stores called from FastAPI async endpoints and from the conversation loop. Every `db/*_store.py` module uses `AsyncSessionLocal`. Alembic, which only supports sync engines, creates its own in `alembic/env.py` and sets the pragma there. Both `db/engine.py` engines share the same database file and the same `PRAGMA foreign_keys=ON` enforcement.
 
 **Why SQLAlchemy ORM instead of raw SQL?**
 The ORM provides type-safe column definitions, automatic JSON serialization for token columns, and a clean migration path via Alembic autogenerate. The `User` model serves as the single source of truth for the schema.
@@ -456,7 +456,7 @@ Archiving provides a soft-delete mechanism that lets users recover memories. The
 With the integer primary key on the `users` table, a proper FK constraint with `ON DELETE CASCADE` is used. This ensures referential integrity and automatic cleanup of orphaned memories when a user is deleted.
 
 **Why enable `PRAGMA foreign_keys=ON` on every connection?**
-SQLite does not enforce foreign key constraints by default -- `ON DELETE CASCADE`, `ON DELETE SET NULL`, and referential integrity checks are silently ignored unless `PRAGMA foreign_keys=ON` is set. This pragma must be issued per-connection (it is not a persistent database setting). The `@event.listens_for(engine, "connect")` handler in `db/engine.py` ensures every application connection has enforcement enabled.
+SQLite does not enforce foreign key constraints by default -- `ON DELETE CASCADE`, `ON DELETE SET NULL`, and referential integrity checks are silently ignored unless `PRAGMA foreign_keys=ON` is set. This pragma must be issued per-connection (it is not a persistent database setting). The connect listeners in `db/engine.py` ensure every application connection has enforcement enabled.
 
 Without it, deleting a user would leave orphaned rows in every table whose FK to `users.id` is declared `ON DELETE CASCADE` (most per-user tables in `db/models.py`) instead of cascading, and `skills.creator_id` would not be set to NULL. The same pragma is set in `alembic/env.py` (`run_migrations_online()`) so that any DELETE operations within migration scripts also respect cascade constraints.
 

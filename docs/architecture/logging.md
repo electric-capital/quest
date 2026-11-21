@@ -43,7 +43,7 @@ All user-driven activity log entries include the user's email address using the 
 - `chat/gemini_api/` submodules -- `user=<email>` on sub-agent spawn/completion/failure (in `sub_agent.py`), sub-agent tool calls, sub-agent turn limit warnings, sub-agent context window warnings, and top-level errors (in `conversation.py`)
 - `chat/realtime/socket.py` -- `user_id=<id>` (the persistent WS authenticates by user_id) on heartbeat / queue-overflow / auth-revalidation events; `chat/realtime/socket.py:_run_send_message` logs cancellation, interrupted markers, and run failures with the conversation id
 - `auth/*` modules and plugin login routers -- `user=<email>` on OAuth events (token refresh, login, service authorization), service key saves, Telegram login events (`plugins/telegram/auth.py`), and service token operations
-- `quest.py` -- `user=<email>` on API key resets and instruction endpoint requests
+- `quest.py` -- `user=<email>` on API key resets
 
 This makes it straightforward to filter logs for a specific user by searching for `user=someone@example.com`.
 
@@ -64,14 +64,10 @@ In the browser, `useTable` and `useTableRows` (`frontend/src/hooks/`) log `[tabl
 
 The background scheduler daemon (`chat/scheduler.py`) produces structured log output at INFO level for every poll cycle. All scheduler log lines use the `[scheduler]` prefix. See [Scheduling Architecture](scheduling.md) for full details on the scheduler daemon.
 
-**Per-routine decisions**: Each enabled schedule gets an INFO log line showing whether it fired or was skipped, with a human-readable reason:
+**Per-routine decisions**: A schedule gets an INFO log line only when something happens to it, with a human-readable reason; a schedule that is not due logs nothing, and there is no per-poll summary line (see [Scheduling -- Decision Logging](scheduling.md#decision-logging)):
 
-- `[scheduler] <routine_name>: FIRE -- <reason> (schedule=<id>, type=<type>)`
-- `[scheduler] <routine_name>: skip -- <reason> (schedule=<id>, type=<type>)`
-
-**Poll cycle summary**: After all schedules are checked, a summary line reports totals (only when enabled schedules exist):
-
-- `[scheduler] Poll complete: checked <N> schedule(s), fired <N> (now=<HH:MM:SS> UTC)`
+- `[scheduler] <routine_name>: FIRE -- <reason> (schedule=<id>)` (also `FIRE (catch-up)`)
+- `[scheduler] <routine_name>: SKIPPED ...`, `MISSED ...` and `RETRY ...` lines for occurrences that were not run on time
 
 **Execution lifecycle**: Each scheduled run logs start, completion, and failure:
 
@@ -118,7 +114,7 @@ Tool call results that exceed 2048 bytes are captured to a dedicated log file fo
 - `chat/gemini_api/conversation.py` -- once per loop-handled arm (the `TURN_TOOL_HANDLERS` registry in `chat/gemini_api/turn_tools.py`: sub-agent tasks, parallel sub-agents, action requests, wait handles) after the handler returns
 
 **Directory creation**: The log directory (`LOG_DIR` from `config/paths.py`, defaults to `data/logs/`) is created automatically in two places to handle both startup paths:
-- At import time in `chat/logging_config.py` (covers programmatic startup via `quest.py`)
+- In the `quest.py` lifespan at startup (covers programmatic startup via `quest.py`)
 - In `run.py` before launching the uvicorn subprocess (covers CLI-based startup where `logging_config.json` is applied)
 
 ## Dev Mode Debug Logging
@@ -126,7 +122,6 @@ Tool call results that exceed 2048 bytes are captured to a dedicated log file fo
 When `run.py` starts in dev mode (the default, or with `--dev`), the `chat`, `auth`, and `quest` loggers are promoted to DEBUG level. This is done by loading `logging_config.json`, patching the logger levels in memory, writing the modified config to a temporary JSON file, and passing that file to uvicorn's `--log-config` flag. The original `logging_config.json` is not modified. In production mode (`--prod`), loggers remain at their default INFO level.
 
 DEBUG-level output includes:
-- Verbose Docker-mode streaming lines in `chat/routes/_helpers.py` (raw stream JSON, parsed JSON, tool_use/tool_result forwarding) when Docker chat mode is configured
 - Persistent-WS publish failures in `chat/realtime/socket.py` and `chat/storage.py:_publish_appended_to_bus` (queue overflow, transient publish errors)
 - Anthropic prompt cache statistics in `chat/llm/anthropic_provider.py` (input, cache_read, cache_creation, and output token counts after each API call)
 
@@ -136,7 +131,7 @@ There are two paths for applying the logging configuration, depending on how uvi
 
 1. **Programmatic** (`quest.py` main block) -- Calls `get_log_config()` from `chat/logging_config.py` and passes the dict directly to `uvicorn.run(log_config=...)`. Used when running the app via `uv run python quest.py`.
 
-2. **CLI-based** (`run.py`) -- Passes `--log-config logging_config.json` to the uvicorn command. The JSON file contains the same configuration as the Python dict. Used by `run.py` for both development and production.
+2. **CLI-based** (`run.py`) -- Loads `logging_config.json`, patches the large-tool-results file path to the resolved data directory (and the app loggers to DEBUG in local mode), writes the result to a temp file and passes that to uvicorn's `--log-config`. The JSON file contains the same configuration as the Python dict. Used by `run.py` for both development and production.
 
 Both paths produce identical output. The JSON file exists because uvicorn's CLI `--log-config` flag requires a file path, not a Python dict.
 
@@ -152,16 +147,13 @@ Uvicorn's `DefaultFormatter` and `AccessFormatter` provide colored level labels 
 The Python dict config (`get_log_config()`) is used when starting uvicorn programmatically. The JSON file (`logging_config.json`) is the equivalent for CLI-based invocations where only a file path can be passed. Both are kept in sync manually.
 
 **Why convert print() to logger calls in chat/routes/, auth/ modules, and quest.py?**
-`print()` calls in the chat routes package (WebSocket streaming and stop handling) and auth modules (OAuth flow events, now in `auth/` submodule) were converted to `logger.*()` calls so they participate in the unified format with timestamps and level labels. This also allows verbose WebSocket streaming output to be placed at DEBUG level (see `chat/routes/_helpers.py`), keeping INFO-level logs focused on meaningful events rather than per-chunk streaming noise.
+`print()` calls in the chat routes package (WebSocket streaming and stop handling) and auth modules (OAuth flow events, now in `auth/` submodule) were converted to `logger.*()` calls so they participate in the unified format with timestamps and level labels.
 
 **Why include user=\<email\> in all user-driven log entries?**
 When multiple users are active simultaneously, log entries without user identification make it difficult to trace a specific user's request through the system. The `user=<email>` convention, established in `chat/route_dispatch.py` and adopted across `chat/routes/` submodules, `chat/gemini_api/` submodules, `auth/*` modules, and `quest.py`, allows filtering all logs for a single user's session. The pattern uses a simple `user=value` format rather than structured logging fields, keeping log messages human-readable while remaining easy to `grep`.
 
 **Why a separate file-based logger for large tool results?**
 Large tool call results (e.g., full API responses, file contents) can be thousands of bytes and would overwhelm the main application log if included inline. Writing them to a dedicated rotating log file keeps the stderr logs clean while preserving the full result data for debugging and analysis. The 2048-byte threshold balances capturing meaningful large results without logging every small tool response.
-
-**Why use DEBUG level for verbose WebSocket streaming output?**
-The per-chunk streaming lines in `chat/routes/_helpers.py` (raw stream JSON, parsed JSON, tool_use/tool_result forwarding) are useful for debugging protocol issues but produce high volume during normal operation. Placing them at DEBUG level keeps the default INFO output clean while still making them available when needed via log level configuration.
 
 **Why automatically enable DEBUG in dev mode?**
 DEBUG-level output (WebSocket streaming details, Anthropic cache stats) is essential during development but too noisy for production. Rather than requiring developers to manually configure log levels, `run.py` patches the config automatically in dev mode via a temporary file, keeping the committed `logging_config.json` clean at INFO level for production use.

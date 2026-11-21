@@ -58,7 +58,7 @@ Every publisher is a best-effort `bus.publish_to_user(...)` wrapped in try/excep
   - the `subscribed` map, which counts holders per conversation: every `subscribe` adds one, every `unsubscribe` takes one away, and the wire `unsubscribe` goes out only when the last holder leaves (`resubscribe` re-sends without a new hold),
   - and `onReconnect` handlers, fired on every open after the first, because per-user globals published while no socket was open are not replayed; views fed by globals (the AutoProject hooks, `FileBrowser`) re-fetch there.
   - The public surface is the class's public methods (connect / disconnect, subscribe / unsubscribe / resubscribe, `send`, the global, per-conversation and reconnect handler registrations, and the last-seq accessors); all the constants above sit at the top of the file.
-- `frontend/src/services/WebSocketManager.ts` -- thin compatibility shim over `persistentWebSocket`. Translates per-conversation transient events (`text_delta`, `sub_agent_*`, `tool_started`) into the existing `streamingMessages` UI contract, bundles streaming text deltas into a synthetic `text` message at the next `message_appended` flush boundary, handles `subscription_expired` by clearing the streaming buffer for that conversation (so the next durable `message_appended` boundary triggers a tail fetch and rebuilds canonical state), and forwards `sendMessage` / `stopStreaming` to the persistent socket.
+- `frontend/src/services/WebSocketManager.ts` -- thin compatibility shim over `persistentWebSocket`. Translates per-conversation transient events (`text_delta`, `sub_agent_*`) into the existing `streamingMessages` UI contract, bundles streaming text deltas into a synthetic `text` message at the next `message_appended` flush boundary, handles `subscription_expired` by clearing the streaming buffer for that conversation (so the next durable `message_appended` boundary triggers a tail fetch and rebuilds canonical state), and forwards `sendMessage` / `stopStreaming` to the persistent socket.
 - `frontend/src/api/config.ts` -- `endpoints.persistentStream()` builds the `WS /app/api/stream` URL (with `ws://` / `wss://` protocol picked from `window.location.protocol`).
 - `frontend/src/api/client.ts` -- `fetchConversationTail(conversationId, afterSeq)` hits `GET /conversations/{id}/tail?after_seq=N`.
 - `frontend/src/contexts/AuthContext.tsx` -- calls `persistentWebSocket.connect()` once when `isAuthenticated` becomes true and `disconnect()` on logout / account-delete.
@@ -102,12 +102,13 @@ Every mode also carries the conversation's unread seqs ([Conversation Unread Sta
 Live envelopes the server emits on a subscribed channel:
 
 - Durable: `message_appended {conversation_id, seq}`. The client's `lastSeqByConversation` map is updated on receipt and the new tail is fetched via REST.
-- Transient: `text_delta {conversation_id, content}`, `sub_agent_tool_use`, `sub_agent_tool_result`, `sub_agent_finished`, `tool_started`, plus run-lifecycle envelopes:
+- Transient: `text_delta {conversation_id, content}`, `sub_agent_tool_use`, `sub_agent_tool_result`, `sub_agent_finished`, plus run-lifecycle envelopes:
   - `send_message_accepted {conversation_id, seq, client_send_id?}` (sent ONLY to the sending connection right after the user row is appended and before the run task starts; the sender's delivery receipt -- see [Delivery Receipt and Failed Sends](#delivery-receipt-and-failed-sends)),
   - `resume_started {conversation_id}` (a headless wait-handle resume began streaming on this conversation; the FE enters the same streaming/stop composer state as a local send until the paired `send_message_finished` arrives -- see [Wait Handles](wait-handles.md#suspend--resume)),
   - `send_message_finished {interrupted, error}` (published by both the WS send path and the headless resume; `error: true` when the run raised; the durable error bubble arrives separately as a persisted `{"type": "error"}` message via `message_appended` -- see [Conversation Loop -- Error Surfacing](gemini-api.md#error-surfacing) -- and the FE uses the flag to skip the success desktop notification),
   - `send_message_rejected {reason}`, where `reason` is
     - `"already_running"` for the per-conversation send-lock,
+    - `"read_only_conversation"` for subagent and inference API conversations,
     - `"attachments_unsupported_during_resume"` when a composer-paste send lands on a conversation whose saved SDK history still has a dangling tool_use (see [Message Attachments](#message-attachments)),
     - `"user_not_found"` when the user row no longer exists at the fresh per-turn re-read (see [Fresh User Per Turn](#fresh-user-per-turn)),
     - `"expensive_resume_unacknowledged"` when a non-first-message send into a flagged long-idle/long-context conversation lacks the `expensive_resume_acknowledged: true` envelope field (see [Expensive-Resume Warning](expensive-resume.md)),
@@ -136,7 +137,7 @@ Both server registries drop a run in the same event-loop step that publishes its
 
 ## Subscription TTL and Refresh
 
-A subscription is a per-`(connection, conversation)` server-side deadline rather than a lifecycle-bound resource. Each `subscribe` op writes `now + SUBSCRIPTION_TTL_SECONDS` into the connection's deadline map (replacing any prior value, so re-subscribing simply pushes the deadline forward). `_subscription_sweep_loop` runs every `SUBSCRIPTION_SWEEP_INTERVAL_SECONDS`; for each entry whose deadline has passed it calls `bus.unsubscribe_conversation(...)` and emits a transient `{op: "subscription_expired", conversation_id}` envelope to that connection.
+A subscription is a per-`(connection, conversation)` server-side deadline rather than a lifecycle-bound resource. Each `subscribe` op writes `now + SUBSCRIPTION_TTL_SECONDS` into the connection's deadline map (replacing any prior value, so re-subscribing simply pushes the deadline forward). `_subscription_sweep_loop` runs every `SUBSCRIPTION_SWEEP_INTERVAL_SECONDS`; for each entry whose deadline has passed it calls `bus.unsubscribe_conversation(...)` and emits a transient `{type: "subscription_expired", conversation_id}` envelope to that connection.
 
 The frontend keeps an interested subscription alive by re-issuing `subscribe` every `SUBSCRIPTION_REFRESH_INTERVAL_MS` (`frontend/src/services/PersistentWebSocket.ts`) for every conversation in `PersistentWebSocket`'s `subscribed` map, regardless of which conversation the user is currently viewing. The refresh interval is deliberately shorter than the server's `SUBSCRIPTION_TTL_SECONDS` so a healthy client never lets a subscription lapse. The React lifecycle does NOT fire `unsubscribe` on tab switch / unmount: the cleanup only detaches the per-conversation event handler, so transient `text_delta` events on the away-conversation keep landing while the user is briefly elsewhere.
 
@@ -195,7 +196,7 @@ This is a correctness invariant, not an optimization: credential/connection-gate
 
 Without it, a service connected after the tab's WebSocket opened would stay invisible to the model until a page reload, although Settings > Data Connections (which reads the user fresh) shows it connected.
 
-Failure handling: a missing user row (deleted account) rejects the send with `{type: "send_message_rejected", reason: "user_not_found"}`. A transient DB error falls back to the cached `conn.user` snapshot with a logged warning rather than dropping the send.
+Failure handling: a missing user row (deleted account) rejects the send with `{type: "send_message_rejected", reason: "user_not_found"}`. A failed lookup closes the connection as `auth_revoked`.
 
 ## Heartbeat and Auth
 
@@ -240,7 +241,7 @@ The user-message bubble is rendered optimistically by `useConversation.sendMessa
 
 ## Streaming-to-Finalized Swap
 
-On the primary tab (the one driving the run), `WebSocketManager.handleMessageAppended` calls `conversationStore.finalizeStreamingTextInPlace(conversationId, seq)` whenever a `message_appended` event carries a `seq`. If `partialResponse` is non-empty -- i.e. an assistant text bubble was streaming -- this synthesises a persisted text row at the event's `seq`, marks it `synthetic`, inserts it at the seq-ordered position, and clears `partialResponse` in a single store update.
+On the primary tab (the one driving the run), `WebSocketManager.handlePersistentEvent` calls `conversationStore.finalizeStreamingTextInPlace(conversationId, seq)` whenever a `message_appended` event carries a `seq`. If `partialResponse` is non-empty -- i.e. an assistant text bubble was streaming -- this synthesises a persisted text row at the event's `seq`, marks it `synthetic`, inserts it at the seq-ordered position, and clears `partialResponse` in a single store update.
 
 When the tail-fetch lands, `insertMessagesBySeq` replaces the synthetic entry in place at the same `seq` (preserving array index, React key, and DOM node) so React reconciles the canonical row's timestamp and metadata into the existing bubble instead of unmount + remount. Tool boundaries (where `partialResponse` is empty) and subscribed (non-primary) tabs (which never accumulate `partialResponse`) take the plain canonical-insert path with no synthetic.
 

@@ -21,7 +21,7 @@ All data-directory path constants are centralized in `config/paths.py`. Modules 
 
 ## Data Directory Resolution
 
-The data directory defaults to `PROJECT_ROOT / "data"` but can be overridden by setting the `data_dir` key in `server_config.json`. Relative values are resolved against `PROJECT_ROOT`; absolute values are used as-is. The resolution logic is in `_resolve_data_dir()` in `config/paths.py`.
+The data directory defaults to `PROJECT_ROOT / "data"` but can be overridden by the `QUEST_DATA_DIR` environment variable (highest precedence; `run.py` sets it in local mode) or the `data_dir` key in `server_config.json`. Relative values are resolved against `PROJECT_ROOT`; absolute values are used as-is. The resolution logic is in `_resolve_data_dir()` in `config/paths.py`.
 
 `run.py` has an independent `get_data_dir()` function that mirrors the same resolution logic using only the standard library, because it runs before heavyweight packages are imported.
 

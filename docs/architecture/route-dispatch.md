@@ -37,7 +37,7 @@ The full tool call flow is orchestrated by `execute_tool_call()` in `chat/route_
 
 All functions are in `chat/route_dispatch.py`. See the source file for full signatures and parameter details.
 
-**`validate_url(url)`** -- Parses and validates a tool call URL. Enforces that the host is `localhost`, the port is `8000`, the configured proxy port from `get_proxy_port()`, or the sandbox tool API port from `get_sandbox_port()` (the model sees the sandbox port in the script-sandbox docs and may echo it), and the path starts with `/api/`. Returns the URL path and parsed query parameters.
+**`validate_url(url)`** -- Parses and validates a tool call URL. Enforces that the host is `localhost` or `127.0.0.1`, the port is omitted, `8000`, the configured proxy port from `get_proxy_port()`, or the sandbox tool API port from `get_sandbox_port()` (the model sees the sandbox port in the script-sandbox docs and may echo it), and the path starts with `/api/`. Returns the URL path and parsed query parameters.
 
 **`iter_app_routes(app)`** (in `chat/route_table.py`) -- The flat view of the app's route table, in registration order. Since FastAPI 0.137 `include_router` appends a node holding the router instead of copying its path operations, so `app.routes` is a tree; this wraps FastAPI's `iter_route_contexts`, whose `RouteContext` items carry `path`, `methods`, `endpoint`, `matches()` and `dependant` as they take effect (include-time prefixes and dependencies merged in), and `original_route` for the `APIRoute` as declared. Anything that introspects the route table (the dispatcher, the route-table tests) goes through it rather than looping over `app.routes`.
 
@@ -45,7 +45,7 @@ All functions are in `chat/route_dispatch.py`. See the source file for full sign
 
 **`build_handler_kwargs(endpoint, ...)`** -- Introspects the handler's signature using `inspect.signature()` and resolves each parameter from path params, query params, `Depends` injection, Pydantic body models, or defaults. Unwraps FastAPI `FieldInfo` metadata objects (e.g., `Query()`, `Path()`) to extract actual default values. Supports `conversation_id` auto-injection into Pydantic body models and scalar parameters.
 
-**`execute_tool_call(app, user, tool_name, tool_args, conversation_id=None)`** -- The main entry point for the conversation loop. Orchestrates the full dispatch pipeline and always returns a tuple of `(result_string, notices)`. Never raises exceptions -- all errors are caught and returned as JSON error strings. When a route handler returns a `ToolResultWithNotices` wrapper (from `chat/tool_notices.py`), the notices are extracted and returned separately. See [ToolResultWithNotices Pattern](#toolresultwithnotices-pattern) below.
+**`execute_tool_call(app, user, tool_name, tool_args, conversation_id=None, block_mutating=False)`** -- The main entry point for the conversation loop. Orchestrates the full dispatch pipeline and always returns a tuple of `(result_string, notices)`. Never raises exceptions -- all errors are caught and returned as JSON error strings. When a route handler returns a `ToolResultWithNotices` wrapper (from `chat/tool_notices.py`), the notices are extracted and returned separately. See [ToolResultWithNotices Pattern](#toolresultwithnotices-pattern) below.
 
 ## Blocked Proxy Paths
 
@@ -58,6 +58,7 @@ Currently blocked:
 | `/api/authed-get` | Must be accessed via the `authed_get` tool call (for LLM use) or direct HTTP from sandbox scripts (for `run_script`/`run_python` use). Blocking prevents the LLM from bypassing the `tool_call` dispatch path. See [Gemini API Integration - Proxy Endpoint](gemini-api.md#proxy-endpoint-post-apiauthed-get) |
 | `/api/authed-post` | Same as `/api/authed-get`, for the POST-capable sibling `authed_post` tool |
 | `/api/tool-call` | The script tool-call bridge is for sandbox code only (ephemeral `QUEST_API_KEY` sandbox-token auth); the LLM invokes dynamic tools natively via the `tool_call` meta tool. See [Gemini API -- Script Tool-Call Bridge](gemini-api.md#script-tool-call-bridge-post-apitool-call) |
+| `/api/inference` | The one-shot inference API is for external applications; a run calling it through `curl_proxy_*` could recurse without bound |
 | `/api/slack`, `/api/slack-simple` | Slack is dedicated dynamic tools only (`list_slack_conversations`, `send_slack_dm_to_self`, etc.) with no HTTP routes; the blocked prefixes give cached sessions that still emit `curl_proxy_*` a "use the dedicated tool" error instead of a bare no-route error (`/api/slack-simple` needs its own entry because prefix matching is segment-bounded) |
 | `/api/twitter` | Twitter/X reads moved to the twitter plugin's `api.twitter.com` `authed_get` service entry; same cached-session pointer rationale |
 | `/api/telegram` | Telegram reads are dedicated dynamic tools only (`telegram_get_me`, `telegram_list_dialogs`, `telegram_get_messages`, `telegram_list_contacts`) with no HTTP routes, registered by the `plugins/telegram` plugin; sandbox scripts use the `/api/tool-call` bridge. See [Telegram API](../../plugins/telegram/docs/telegram-api.md) |
@@ -65,7 +66,7 @@ Currently blocked:
 
 ## Edge Cases Handled
 
-**Fake Request objects**: Some handlers accept a `request: Request` parameter (e.g., `batch_request`, `get_instructions`). The dispatcher builds a minimal Starlette `Request` with the correct method, path, headers, and body via `_build_fake_request()`. The fake request supports `.body()`, `.headers`, and `.base_url`.
+**Fake Request objects**: Some handlers accept a `request: Request` parameter (e.g., `batch_request`). The dispatcher builds a minimal Starlette `Request` with the correct method, path, headers, and body via `_build_fake_request()`. The fake request supports `.body()`, `.headers`, and `.base_url`.
 
 **Pydantic body models**: POST handlers like `create_draft` accept typed Pydantic body parameters (e.g., `CreateDraftRequest` in `api/gmail/models.py`). The dispatcher detects `BaseModel` subclass annotations and parses the body string via `model_validate_json()`.
 
@@ -81,7 +82,7 @@ Used by Gmail Simple API GET handlers (`get_message_simple()`, `get_messages_bat
 
 **FastAPI FieldInfo defaults (Query, Path, Header, etc.)**: When a handler declares `param: Optional[int] = Query(None)`, `inspect.signature()` returns the `Query()` object (a Pydantic `FieldInfo` instance) as the parameter's default, not the actual value `None`.
 
-Without unwrapping, these `FieldInfo` objects would be passed as literal default values -- producing garbage strings like `"annotation=nonetype required=false..."` when coerced to string. This caused `400: Invalid Value` errors on Google Docs endpoints (e.g., `get_document_raw()`) when users omitted optional query parameters like `includeTabsContent`.
+Without unwrapping, these `FieldInfo` objects would be passed as literal default values -- producing garbage strings like `"annotation=nonetype required=false..."` when coerced to string.
 
 The unwrapping step in `build_handler_kwargs()` uses `isinstance(default, FieldInfo)` to detect these objects and extracts the real default via `FieldInfo.default`, with a special case for `PydanticUndefined` (from `Query(...)`) which indicates a required parameter.
 

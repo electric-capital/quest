@@ -5,7 +5,7 @@ This document describes the OAuth popup flow used by connector buttons (Google S
 ## Popup Flow Overview
 
 1. User clicks a Connect/Reconnect button in the Data Connections section of the Settings panel
-2. `DataConnectionsSection` calls `handleOAuthConnect(url, service)` with the `?popup=1` query parameter appended
+2. `DataConnectionsSection` calls `handleOAuthConnect(url)` with the connector's server-supplied `connect_url`, which already carries `?popup=1`
 3. `openOAuthPopup()` in `frontend/src/utils/oauthPopup.ts` opens a centered 600x700 popup window
 4. The popup navigates through the OAuth provider's consent flow (Google, Slack, or Telegram's multi-step auth)
 5. On completion, the backend callback returns an HTML page (instead of redirecting to `/`) that calls `window.opener.postMessage()` and closes itself
@@ -46,9 +46,9 @@ There is no popup flag to carry through -- the page always posts `oauth_callback
 
 ### Twitter/X
 
-The popup flag is stored alongside the CSRF token and PKCE code verifier in the `twitter_oauth_state` cookie as JSON: `{"csrf": "<token>", "code_verifier": "<verifier>", "popup": true}`. This cookie is also used for PKCE security in the OAuth 2.0 PKCE flow.
+The popup flag rides in the same kind of signed state cookie as Google Services (`mint_oauth_state()` in `auth/oauth_state.py`), with the PKCE code verifier carried beside it in the payload's `extra`.
 
-**Flow**: `?popup=1` on `/auth/twitter` --> JSON cookie `{"csrf": "...", "code_verifier": "...", "popup": true}` --> Twitter OAuth redirect (PKCE) --> callback reads cookie, parses JSON, checks `popup` field
+**Flow**: `?popup=1` on `/auth/twitter` --> `mint_oauth_state(..., popup=True, extra={"code_verifier": ...})` sets the signed cookie --> Twitter OAuth redirect (PKCE) --> callback `verify_oauth_state()` returns the payload, checks `popup` field
 
 **Key code**: `auth_twitter()` and `auth_twitter_callback()` in `plugins/twitter/oauth.py` (the Twitter/X plugin's `oauth_router`, mounted under `/auth/twitter` by `mount_plugin_oauth_routers()`)
 
@@ -109,8 +109,8 @@ OAuth flows navigate to external providers (Google, Slack) or multi-step interna
 **Why `postMessage` instead of polling an API?**
 `postMessage` provides immediate, event-driven notification when the OAuth flow completes. The alternative -- polling the connector status API until it changes -- would introduce latency, unnecessary network traffic, and race conditions. The popup page knows exactly when the flow finishes and can notify the opener instantly.
 
-**Why encode the popup flag in the OAuth state parameter for Google Services?**
-Google Services uses a standard OAuth redirect flow where the only way to pass data from the initiation to the callback is the `state` parameter. The state is signed to prevent tampering. This avoids adding a new cookie just for the popup flag.
+**Why carry the popup flag in the signed state cookie for Google Services?**
+The flow already needs a signed, session-bound state cookie to vouch for the `state` nonce, so the popup flag rides in its payload. This avoids adding a cookie just for the popup flag.
 
 **Why use the existing state cookie for Slack?**
 Slack already uses a `slack_oauth_state` cookie for CSRF protection. Adding the popup flag to the same JSON structure avoids creating an additional cookie and keeps the state management centralized.

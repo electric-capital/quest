@@ -40,7 +40,7 @@ The context the next turn re-reads is approximately what the previous top-level 
 Vertex model naming schemes change over time; a prefix could silently start (or stop) matching new ids. Each covered model is listed explicitly, kept in sync with `MODEL_REGISTRY` in `chat/llm/config.py`.
 
 **Why a DB-free pre-check?**
-`candidate_rules` decides from `meta` alone (model prefix, idle time, first-message state) whether the `llm_calls_*` query is worth running, keeping the common send path free of any analytics-table read.
+`candidate_rules` decides from `meta` alone (model id, idle time, first-message state) whether the `llm_calls_*` query is worth running, keeping the common send path free of any analytics-table read.
 
 **Why don't project conversations warn?**
 Both alternatives on the card are wrong there: Duplicate Workspace copies only the conversation's own workspace into a new standalone conversation, outside the project (no project instructions, skills or Project Files), and `POST /projects/from-conversation` rejects conversations already in a project. The cheap in-project alternative -- a new conversation in the same project, which reaches the shared project workspace through `proj://` -- is already the product's recommended pattern; a project-aware variant of the warning could add that option later.
