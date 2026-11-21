@@ -21,6 +21,12 @@ from typing import Any, Optional
 
 import httpx
 
+from config.oauth_tokens import (
+    current_or_refreshed_token,
+    get_user_oauth_blob,
+    store_user_oauth_blob,
+)
+
 logger = logging.getLogger(__name__)
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
@@ -34,9 +40,6 @@ M365_SCOPES = ("User.Read", "Mail.ReadWrite", "Mail.Send")
 
 # The literal scope parameter sent on the authorize/token/refresh requests.
 M365_SCOPE_REQUEST = "offline_access " + " ".join(M365_SCOPES)
-
-# Safety margin: refresh the token if it expires within 5 minutes.
-_REFRESH_MARGIN_SECONDS = 300
 
 _HTTP_TIMEOUT = 30.0
 
@@ -95,8 +98,7 @@ def validate_m365_credentials(values: dict) -> dict:
 
 def get_user_m365_oauth(user: dict) -> Optional[dict]:
     """The user's stored Microsoft 365 OAuth blob, or None when not connected."""
-    rows = user.get("service_credentials") or {}
-    return (rows.get("m365") or {}).get("oauth_blob")
+    return get_user_oauth_blob(user, "m365")
 
 
 def m365_connected(row: dict) -> bool:
@@ -147,26 +149,6 @@ def m365_needs_reauth(row: dict) -> bool:
     granted_set = normalize_scopes(granted)
     required = {s.lower() for s in M365_SCOPES}
     return not required.issubset(granted_set)
-
-
-def token_expires_within(blob: dict, margin_seconds: int = _REFRESH_MARGIN_SECONDS) -> bool:
-    """Whether the blob's access token expires within ``margin_seconds``.
-
-    An unparseable or missing ``expires_at`` reads as expired: Microsoft
-    access tokens always expire, so with no usable expiry the safe move is
-    to refresh rather than send a possibly-dead token.
-    """
-    expires_at_str = blob.get("expires_at")
-    if not expires_at_str:
-        return True
-    try:
-        expires_at = datetime.fromisoformat(expires_at_str)
-    except (TypeError, ValueError):
-        return True
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    return (expires_at - now).total_seconds() < margin_seconds
 
 
 def build_token_blob(
@@ -253,14 +235,9 @@ async def _refresh_m365_token(user: dict, blob: dict) -> Optional[str]:
 
     new_blob = build_token_blob(token_data, previous=blob)
 
-    from db.user_service_credential_store import upsert_credential
-    await upsert_credential(user["id"], "m365", oauth_blob=new_blob)
-
-    # Mutate the in-memory user dict so later calls in the same turn see
-    # the fresh token without a DB re-read.
-    rows = user.setdefault("service_credentials", {})
-    row = rows.setdefault("m365", {})
-    row["oauth_blob"] = new_blob
+    # Persist, and update the in-memory user dict so later calls in the
+    # same turn see the fresh token without a DB re-read.
+    await store_user_oauth_blob(user, "m365", new_blob)
 
     logger.info("[M365] Refreshed access token for %s", user.get("email", "unknown"))
     return new_blob["access_token"]
@@ -272,20 +249,9 @@ async def get_m365_token(user: dict, force_refresh: bool = False) -> Optional[st
     Returns None when Microsoft 365 is not connected or the refresh fails,
     so callers surface an actionable reconnect message.
     """
-    blob = get_user_m365_oauth(user)
-    if not blob or not blob.get("access_token"):
-        return None
-
-    if not force_refresh and not token_expires_within(blob):
-        return blob["access_token"]
-
-    lock = _refresh_locks.setdefault(user.get("id"), asyncio.Lock())
-    async with lock:
-        # Another coroutine may have refreshed while we waited on the lock.
-        blob = get_user_m365_oauth(user) or blob
-        if not force_refresh and not token_expires_within(blob):
-            return blob.get("access_token")
-        return await _refresh_m365_token(user, blob)
+    return await current_or_refreshed_token(
+        user, "m365", _refresh_m365_token, _refresh_locks, force_refresh=force_refresh,
+    )
 
 
 MISSING_CREDENTIALS_ERROR = {

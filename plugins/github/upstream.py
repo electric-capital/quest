@@ -31,6 +31,14 @@ from typing import Any, Optional
 
 import httpx
 
+from config.oauth_tokens import (
+    REFRESH_MARGIN_SECONDS,
+    get_user_oauth_blob,
+    set_user_oauth_blob,
+    store_user_oauth_blob,
+    token_expires_within as _token_expires_within,
+)
+
 logger = logging.getLogger(__name__)
 
 # OAuth scopes requested from GitHub. ``repo`` is required for private
@@ -40,9 +48,6 @@ GITHUB_SCOPES = ("repo", "read:org")
 
 # Code exchange and refresh share one endpoint.
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
-
-# Safety margin: refresh the token if it expires within 5 minutes.
-_REFRESH_MARGIN_SECONDS = 300
 
 _HTTP_TIMEOUT = 30.0
 
@@ -102,8 +107,7 @@ def get_user_github_oauth(user: dict) -> Optional[dict]:
     Reads the ``user_service_credentials`` row attached to the user dict
     by db/user_store.py (service key ``github``).
     """
-    rows = user.get("service_credentials") or {}
-    return (rows.get("github") or {}).get("oauth_blob")
+    return get_user_oauth_blob(user, "github")
 
 
 def github_connected(row: dict) -> bool:
@@ -138,24 +142,14 @@ def github_needs_reauth(row: dict) -> bool:
     return not set(GITHUB_SCOPES).issubset(granted_set)
 
 
-def token_expires_within(blob: dict, margin_seconds: int = _REFRESH_MARGIN_SECONDS) -> bool:
+def token_expires_within(blob: dict, margin_seconds: int = REFRESH_MARGIN_SECONDS) -> bool:
     """Whether the blob's access token expires within ``margin_seconds``.
 
     A blob without ``expires_at`` never expires (classic OAuth App tokens,
     and GitHub App tokens with expiration opted out). An unparseable
     timestamp reads as expired so a refresh is attempted.
     """
-    expires_at_str = blob.get("expires_at")
-    if not expires_at_str:
-        return False
-    try:
-        expires_at = datetime.fromisoformat(expires_at_str)
-    except (TypeError, ValueError):
-        return True
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    return (expires_at - now).total_seconds() < margin_seconds
+    return _token_expires_within(blob, margin_seconds, missing_means_expired=False)
 
 
 def build_token_blob(token_data: dict, *, previous: Optional[dict] = None) -> dict:
@@ -194,13 +188,6 @@ def build_token_blob(token_data: dict, *, previous: Optional[dict] = None) -> di
     return blob
 
 
-def _set_user_blob(user: dict, blob: dict) -> None:
-    """Point the in-memory user dict at ``blob`` so later calls in the
-    same turn see it without a DB read."""
-    rows = user.setdefault("service_credentials", {})
-    rows.setdefault("github", {})["oauth_blob"] = blob
-
-
 async def _load_stored_blob(user: dict) -> Optional[dict]:
     """Re-read the user's stored GitHub blob (None once disconnected)."""
     from db.user_service_credential_store import get_credential
@@ -208,7 +195,7 @@ async def _load_stored_blob(user: dict) -> Optional[dict]:
     row = await get_credential(user["id"], "github")
     blob = (row or {}).get("oauth_blob")
     if blob:
-        _set_user_blob(user, blob)
+        set_user_oauth_blob(user, "github", blob)
     return blob
 
 
@@ -264,9 +251,7 @@ async def _refresh_github_token(user: dict, blob: dict) -> Optional[str]:
 
     new_blob = build_token_blob(token_data, previous=blob)
 
-    from db.user_service_credential_store import upsert_credential
-    await upsert_credential(user["id"], "github", oauth_blob=new_blob)
-    _set_user_blob(user, new_blob)
+    await store_user_oauth_blob(user, "github", new_blob)
 
     logger.info("[GitHub] Refreshed access token for %s", email)
     return new_blob["access_token"]

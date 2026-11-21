@@ -7,6 +7,7 @@ token-blob construction (refresh-token rotation carry-over).
 
 from datetime import datetime, timedelta, timezone
 
+from config.oauth_tokens import token_expires_within
 from plugins.m365.upstream import (
     M365_SCOPES,
     build_token_blob,
@@ -14,7 +15,6 @@ from plugins.m365.upstream import (
     m365_is_configured,
     m365_needs_reauth,
     normalize_scopes,
-    token_expires_within,
     validate_m365_credentials,
 )
 
