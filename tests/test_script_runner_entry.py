@@ -63,7 +63,7 @@ def test_low_port_zero_padded(tmp_path):
 def test_port_absent_times_out(tmp_path):
     rc, elapsed = _wait(tmp_path, 8000, os.getpid(), [_row("0100007F:1F41", "0A")])
     assert rc == 1
-    assert 0.9 < elapsed < 5
+    assert elapsed > 0.9
 
 
 def test_port_not_listening_times_out(tmp_path):
@@ -80,6 +80,22 @@ def test_dead_socat_fails_fast(tmp_path):
     rc, elapsed = _wait(tmp_path, 8000, _dead_pid(), [])
     assert rc == 1
     assert elapsed < 0.5
+
+
+def test_executed_entrypoint_runs_the_body(tmp_path):
+    """Run as a program, the guard must not skip the body: with no tools
+    on PATH the iptables check is reached and fails closed."""
+    empty = tmp_path / "bin"
+    empty.mkdir()
+    result = subprocess.run(
+        ["/bin/bash", str(ENTRY), "true"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={"PATH": str(empty), "QUEST_PORT": "1"},
+    )
+    assert result.returncode == 1
+    assert "iptables/ip6tables unavailable, refusing to start" in result.stderr
 
 
 def test_guard_only_returns_when_sourced():

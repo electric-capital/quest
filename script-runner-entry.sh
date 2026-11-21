@@ -20,8 +20,9 @@
 # wait_for_port_listen PORT PID PROC_NET_TCP
 # Return 0 once PROC_NET_TCP lists 127.0.0.1:PORT in LISTEN state (0A).
 # Return 1 as soon as PID (the socat process) has exited, or after 200
-# checks 5 ms apart (~1 s). The kernel prints addresses as uppercase hex
-# with the port zero-padded to 4 digits.
+# checks 5 ms apart (at least 1 s; more with the per-check sleep fork).
+# The kernel prints addresses as uppercase hex with the port zero-padded
+# to 4 digits; 0100007F is 127.0.0.1 as printed on little-endian hosts.
 wait_for_port_listen() {
     local want addr state _
     printf -v want '0100007F:%04X' "$1"
