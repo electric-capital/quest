@@ -40,19 +40,23 @@ Tested on Debian 12 (bookworm) and Debian 13 (trixie). Requirements:
 | Software | Minimum version | Purpose |
 |----------|-----------------|---------|
 | Python   | 3.11+           | Backend runtime |
-| Node.js  | 18+             | Frontend build (Vite) |
-| npm      | 9+              | Frontend package manager |
+| Node.js  | 24.x            | Frontend build (Vite); the range is `engines` in `frontend/package.json` |
+| npm      | 11.x            | Frontend package manager (bundled with Node 24) |
 | Podman   | 4+              | Rootless script-runner sandbox |
 | uv       | latest          | Python package/venv manager |
 
-Debian 12 ships Python 3.11, Node 18, npm 9, Podman 4.3; Debian 13 ships Python 3.13, Node 20,
-Podman 5.4 -- both meet the minimums from the distro archive, no third-party apt repos needed.
+Debian 12 ships Python 3.11 and Podman 4.3; Debian 13 ships Python 3.13 and Podman 5.4 -- both
+meet those minimums from the distro archive. Node is the exception: Debian 12 ships Node 18 and
+Debian 13 ships Node 20, both older than the frontend's `engines` range, so Node 24 comes from
+[NodeSource](https://github.com/nodesource/distributions) (or any other source of Node 24).
 
 ### Packages
 
 ```bash
 sudo apt update
-sudo apt install -y git curl python3 python3-venv nodejs npm podman uidmap slirp4netns
+sudo apt install -y git curl python3 python3-venv podman uidmap slirp4netns
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt install -y nodejs
 ```
 
 Notes:
@@ -216,9 +220,9 @@ The relevant `server_config.json` keys (documented in `server_config.example.jso
 
 ### 3.3 Verify
 
-Start the server and check the startup log: `run.py` prints a credentials checklist ("Anthropic
-on Vertex", "Gemini on Vertex", "Google OAuth", ...) and warns if the key file's `project_id`
-disagrees with the configured Vertex project. Then sign in as an admin and open
+Start the server and check the startup log: the server warns (`[vertex-config]` lines) if the
+key file's `project_id` disagrees with the configured Vertex project, and in local mode `run.py`
+also prints a credentials checklist. Then sign in as an admin and open
 **Settings > Inference Providers**: each model card shows a live health verdict (a minimal real
 inference call per model) with a **Recheck** button, which catches Model-Garden-not-enabled and
 quota errors with the provider's error text inline.
@@ -238,4 +242,5 @@ For a permanent deployment, front the server with a reverse proxy for HTTPS (Web
 headers, >=5 min read timeout, large client body size for uploads) and manage the process with
 systemd -- details in [docs/setup/production.md](docs/setup/production.md). Optional connectors
 (Slack, GitHub, Twitter/X, Ramp, Telegram) are configured after first login in
-**Settings > Service Credentials**; per-connector guides are under [docs/setup/](docs/setup/).
+**Settings > Service Credentials**; the per-connector setup guides are listed in
+[docs/index.md](docs/index.md) (each plugin's guide lives in its `plugins/<id>/docs/` directory).

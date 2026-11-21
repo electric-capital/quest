@@ -18,7 +18,7 @@ Quest production deployment architecture: a single FastAPI server on port 8000 s
 
 ## Environment Constraints
 
-- Python 3.11+, Node.js 18+, Podman 4+ (script runner), uv
+- Python 3.11+, Node.js 24 (`engines` in `frontend/package.json`), Podman 4+ (script runner), uv
 - Single port: 8000 (all traffic), plain HTTP -- put an HTTPS front in front of it; most OAuth providers reject non-HTTPS callback URLs (see Serving over HTTPS)
 - `QUEST_ENV=prod` (set automatically by `run.py --prod`): uses `quest_session` cookie, "Quest" branding, domain restriction enforced, dev login disabled
 - `data/` directory must exist and be writable by the server process. The data directory can be relocated by setting `data_dir` in `server_config.json` (see [Data Paths](../architecture/data-paths.md))
@@ -105,11 +105,11 @@ later switch to Google sign-in from Settings > Sign-in).
 
 Routes are registered in this order in `quest.py` (highest priority first):
 
-1. `/assets/*` -- StaticFiles mount to `frontend/dist/assets/` (no auth)
-2. `/app/api/*` -- REST and WebSocket endpoints (dual auth: cookie or API key)
-3. `/` -- Serves `frontend/dist/index.html` (React handles auth state client-side)
-4. `/{filename}` -- Root-level static files from `frontend/dist/` (no auth)
-5. `/chat*` -- 301 redirect to `/*` (backward compatibility)
+1. `/app/api/*` -- REST and WebSocket endpoints (dual auth: cookie or API key)
+2. `/assets/*` -- StaticFiles mount to `frontend/dist/assets/` (no auth)
+3. `/chat*` -- 301 redirect to `/*` (backward compatibility)
+4. `/` -- Serves `frontend/dist/index.html` (React handles auth state client-side)
+5. `/{filename}` -- Root-level static files from `frontend/dist/` (no auth)
 
 ## Authentication Flow
 
@@ -126,7 +126,7 @@ Static assets (`/assets/*`, `/vite.svg`): no authentication.
 - `allowed_login_domain`: email domain allowed to sign in (default: the built-in company domain -- see `allowed_login_domain()` in `auth/config.py`). Set by first-run setup so deployments for other organizations can admit their own domain
 - `allowed_login_emails`: optional list of individual email addresses allowed to sign in in addition to the domain (see `is_login_allowed()` in `auth/config.py`), for accounts outside any single domain -- e.g. personal `@gmail.com` users on a family deployment. Also asked by first-run setup, and appended to by admin invite links on password deployments
 - `login_method`: `"password"` (email + password accounts) or `"google"` (Google OAuth; also what an absent key means). Exactly one method is active. Written by first-run setup and by the admin switch to Google sign-in; see [Sign-in Methods](../architecture/auth.md#sign-in-methods)
-- `model`, `anthropic.*`, `gemini_vertex.*`: same as development. See [Development Setup](development.md) for details
+- `gemini.model`, `anthropic.*`, `gemini_vertex.*`: same as development. See [Development Setup](development.md) for details
 
 Production-specific: use a service account with Vertex AI API access for ADC (rather than `gcloud auth application-default login`). The same ADC credentials serve both Anthropic Vertex AI and Vertex-backed Gemini models. A key file at `<data_dir>/vertex-service-account.json` (written by first-run setup) is exported as `GOOGLE_APPLICATION_CREDENTIALS` automatically by `run.py` in staging/prod; an externally-set env var wins.
 
@@ -170,7 +170,7 @@ EOF
 
 **Configuration Options**:
 - `admin_emails`: Array of email addresses for admin users (default: empty list). Admin users see the AdminOpsMenu in the frontend and can trigger server operations like graceful shutdown. The check is case-insensitive (see `is_admin()` in `chat/auth.py`).
-- `model`: Default model. Valid values are the keys of `MODEL_REGISTRY` in `chat/llm/config.py`; the schema default in `config/server_config.py` is a deprecated model (still runnable but hidden from the picker), so set a current one.
+- `gemini.model`: Default model. Valid values are the keys of `MODEL_REGISTRY` in `chat/llm/config.py`; the schema default in `config/server_config.py` is a deprecated model (still runnable but hidden from the picker), so set a current one.
 - `anthropic.vertex_project_id`: Google Cloud project ID for Anthropic Claude on Vertex AI (required only if Claude models are used).
 - `anthropic.vertex_region`: Default Google Cloud region for the Vertex AI endpoint (default: `us-east5`). Individual models can override this via a per-model `vertex_region` in `MODEL_REGISTRY`; the newer Claude models are pinned to `global` because Vertex serves them only on the global endpoint (a regional request 429s). See [LLM Provider Abstraction -- Per-Model Vertex Region](../architecture/llm-providers.md#per-model-vertex-region).
 - `gemini_vertex.vertex_project_id`: Google Cloud project ID for the Vertex-backed Gemini models (every `provider: "gemini"` registry entry). Falls back to `anthropic.vertex_project_id` if omitted.
@@ -232,7 +232,7 @@ The backend serves all frontend files using FastAPI's StaticFiles:
 ```
 Client Request                 FastAPI Handler
 ─────────────────              ───────────────
-GET /                       → serve index.html (with auth check)
+GET /                       → serve index.html (no auth; React handles auth state)
 GET /chats/<uuid>           → serve index.html (SPA catch-all for deep links)
 GET /projects/<pid>/<uuid>  → serve index.html (SPA catch-all for deep links)
 GET /admin/system-monitor   → serve index.html (SPA catch-all for deep links)
@@ -240,19 +240,19 @@ GET /assets/index.js        → StaticFiles mount (no auth)
 GET /vite.svg               → serve static file (no auth)
 GET /chat/*                 → 301 redirect to /* (backward compatibility)
 GET /app/api/conversations → REST API endpoint (dual auth: cookie or API key)
-WS  /app/api/.../message   → WebSocket endpoint (dual auth: cookie or API key)
+WS  /app/api/stream        → persistent WebSocket (dual auth: cookie or API key)
 ```
 
 ### Route Priority
 
 Routes are registered in this order (highest priority first):
 
-1. **Assets mount**: `/assets/*` → `frontend/dist/assets/`
-2. **API routes**: `/app/api/*` → REST and WebSocket endpoints
-3. **HTML entry**: `/` → `frontend/dist/index.html`
-4. **SPA catch-all**: the `serve_spa_*` handlers in `quest.py`, one per client-side URL prefix → `frontend/dist/index.html` (enables deep links for URL-based routing; admin API routes are unaffected since they live under `/app/api/admin/...`)
-5. **Static files**: `/{filename}` → `frontend/dist/{filename}`
-6. **Backward compatibility**: `/chat*` → 301 redirect to `/*`
+1. **API routes**: `/app/api/*` → REST and WebSocket endpoints
+2. **Assets mount**: `/assets/*` → `frontend/dist/assets/`
+3. **Backward compatibility**: `/chat*` → 301 redirect to `/*`
+4. **HTML entry**: `/` → `frontend/dist/index.html`
+5. **SPA catch-all**: the `serve_spa_*` handlers in `quest.py`, one per client-side URL prefix → `frontend/dist/index.html` (enables deep links for URL-based routing; admin API routes are unaffected since they live under `/app/api/admin/...`)
+6. **Static files**: `/{filename}` → `frontend/dist/{filename}`
 
 This ordering is critical to prevent route conflicts.
 

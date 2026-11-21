@@ -25,8 +25,8 @@ Quest development environment setup on a local machine. The application is a Fas
 | Software | Minimum Version | Purpose |
 |----------|----------------|---------|
 | Python | 3.11+ | Backend runtime |
-| Node.js | 18+ | Frontend build tools |
-| npm | 9+ | Frontend package manager |
+| Node.js | 24.x | Frontend build tools (`engines` in `frontend/package.json`; CI uses the same major) |
+| npm | 11.x | Frontend package manager |
 | Podman | 4+ | Script runner containerization (rootless) |
 | uv | Latest | Python package manager |
 
@@ -61,7 +61,6 @@ data/
 | `QUEST_ENCRYPTION_KEY_FILE` | `<data_dir>/encryption_key.json` | Overrides the key file location (used by the test suite) |
 | `GEMINI_VERTEX_PROJECT_ID` | From `server_config.json` (or `anthropic.vertex_project_id` fallback) | Google Cloud project id for Gemini models (all served via Vertex AI) |
 | `GEMINI_VERTEX_REGION` | `global` | Vertex location for Gemini. Gemini 3.x requires the `global` endpoint -- regional endpoints return 404 |
-| `PORT` | 8000 | Backend server port |
 
 Configuration priority: environment variables > `server_config.json` > built-in defaults.
 
@@ -69,7 +68,7 @@ Configuration priority: environment variables > `server_config.json` > built-in 
 
 Model settings are in `server_config.json`, loaded by `load_server_config()` in `config/server_config.py`.
 
-- `model`: Default model name. Valid values are the keys of `MODEL_REGISTRY` in `chat/llm/config.py` (prefer one without the `deprecated` flag: deprecated models still run but are hidden from the model picker)
+- `gemini.model`: Default model name. Valid values are the keys of `MODEL_REGISTRY` in `chat/llm/config.py` (prefer one without the `deprecated` flag: deprecated models still run but are hidden from the model picker)
 
 ### Anthropic Vertex AI
 
@@ -151,11 +150,11 @@ Access points:
 ## Static File Serving
 
 The backend serves all frontend files. Route priority (see `quest.py`):
-1. `/assets/*` -- FastAPI StaticFiles mount to `frontend/dist/assets/`
-2. `/app/api/*` -- REST and WebSocket endpoints
-3. `/` -- Serves `frontend/dist/index.html`
-4. `/{filename}` -- Root-level static files from `frontend/dist/`
-5. `/chat*` -- 301 redirect to `/*` (backward compatibility)
+1. `/app/api/*` -- REST and WebSocket endpoints
+2. `/assets/*` -- FastAPI StaticFiles mount to `frontend/dist/assets/`
+3. `/chat*` -- 301 redirect to `/*` (backward compatibility)
+4. `/` -- Serves `frontend/dist/index.html`
+5. `/{filename}` -- Root-level static files from `frontend/dist/`
 
 Vite config uses `base: '/'` in `frontend/vite.config.ts`.
 
@@ -163,7 +162,7 @@ Vite config uses `base: '/'` in `frontend/vite.config.ts`.
 
 **Route Handlers**:
 1. `/assets/*` → FastAPI StaticFiles mount to `frontend/dist/assets/`
-2. `/` → Serves `frontend/dist/index.html` (requires auth)
+2. `/` → Serves `frontend/dist/index.html` (no auth; the React app handles auth state)
 3. `/chats/*`, `/projects/*`, `/admin/*` → SPA catch-all routes serving `index.html` (deep link support for URL-based routing)
 4. `/{filename}` → Serves root-level static files from `frontend/dist/`
 5. `/chat*` → 301 redirect to `/*` (backward compatibility)
