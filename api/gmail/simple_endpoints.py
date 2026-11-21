@@ -65,8 +65,8 @@ async def get_message_simple(
             instead of the markdown conversion (default: False)
         include_urls: If True, keep original full URLs instead of replacing them
             with short numeric identifiers (default: False)
-        conversation_id: Auto-injected by route dispatch (dispatch-only, never
-            from query params)
+        conversation_id: Auto-injected by route dispatch; a client-supplied
+            value must name a conversation the caller owns
 
     Returns:
         PlainTextResponse containing a markdown document that includes the
@@ -84,6 +84,11 @@ async def get_message_simple(
                 "message": "Google services authorization required. Please visit /auth/ and connect Google Services."
             }
         )
+
+    # ``conversation_id`` is scoped to the caller's own conversations,
+    # like the URL-lookup routes below.
+    if conversation_id is not None:
+        await require_owned_conversation(user["id"], conversation_id)
 
     url = f"{GMAIL_API_BASE}/users/me/messages/{message_id}"
     async with httpx.AsyncClient(timeout=_GMAIL_HTTP_TIMEOUT) as client:
@@ -127,8 +132,8 @@ async def get_messages_batch(
             instead of the markdown conversion (default: False)
         include_urls: If True, keep original full URLs instead of replacing them
             with short numeric identifiers (default: False)
-        conversation_id: Auto-injected by route dispatch (dispatch-only, never
-            from query params)
+        conversation_id: Auto-injected by route dispatch; a client-supplied
+            value must name a conversation the caller owns
 
     Returns:
         PlainTextResponse containing a markdown document with a top-level
@@ -146,6 +151,11 @@ async def get_messages_batch(
                 "message": "Google services authorization required. Please visit /auth/ and connect Google Services."
             }
         )
+
+    # ``conversation_id`` is scoped to the caller's own conversations,
+    # like the URL-lookup routes below.
+    if conversation_id is not None:
+        await require_owned_conversation(user["id"], conversation_id)
 
     # Parse and validate IDs
     message_ids = [id.strip() for id in ids.split(',') if id.strip()]

@@ -151,3 +151,76 @@ def test_lookup_succeeds_for_owned_conversation(tmp_path, monkeypatch):
     )
     assert response.status_code == 200, response.text
     assert response.json()["urls"] == {"1": "https://ok/url"}
+
+
+# ---------------------------------------------------------------------------
+# The message routes scope conversation_id like the lookup routes
+# ---------------------------------------------------------------------------
+
+
+def _stub_gmail(monkeypatch):
+    """Serve one message with a link from a fake Gmail upstream."""
+    import base64
+
+    import httpx
+
+    import api.gmail.simple_endpoints as simple
+
+    async def creds(user):
+        return object()
+
+    body = base64.urlsafe_b64encode(
+        b'<p><a href="https://link.example/' + b"x" * 120 + b'">open</a></p>'
+    ).decode()
+
+    async def upstream(client, user, method, url, **kwargs):
+        message_id = url.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={
+            "id": message_id,
+            "threadId": "t1",
+            "labelIds": [],
+            "snippet": "",
+            "payload": {
+                "mimeType": "text/html",
+                "headers": [{"name": "Subject", "value": "s"}],
+                "body": {"data": body},
+            },
+        })
+
+    monkeypatch.setattr(simple, "get_valid_service_credentials", creds)
+    monkeypatch.setattr(simple, "make_authenticated_request", upstream)
+
+
+_MESSAGE_ROUTES = [
+    ("/api/gmail-simple/messages/m1", {}),
+    ("/api/gmail-simple/messages", {"ids": "m1"}),
+]
+
+
+@pytest.mark.parametrize("path, params", _MESSAGE_ROUTES)
+def test_message_routes_require_owned_conversation(tmp_path, monkeypatch, path, params):
+    """conversation_id must name one of the caller's own conversations."""
+    client, chats_dir = _build_client(monkeypatch, tmp_path, owned_ids={"mine"})
+    _stub_gmail(monkeypatch)
+
+    for foreign in ("someone-elses", "no-such-conversation"):
+        response = client.get(path, params={**params, "conversation_id": foreign})
+        assert response.status_code == 404, response.text
+        assert not (chats_dir / foreign).exists()
+
+
+@pytest.mark.parametrize("path, params", _MESSAGE_ROUTES)
+def test_message_routes_still_serve_owned_and_absent_conversation(
+    tmp_path, monkeypatch, path, params,
+):
+    client, chats_dir = _build_client(monkeypatch, tmp_path, owned_ids={"mine"})
+    _stub_gmail(monkeypatch)
+
+    response = client.get(path, params={**params, "conversation_id": "mine"})
+    assert response.status_code == 200, response.text
+    # The stubbed message carries a long link, so the cache is written.
+    assert any((chats_dir / "mine").rglob("url_mappings.sqlite"))
+
+    # No conversation at all (direct HTTP without the parameter) still works.
+    response = client.get(path, params=params)
+    assert response.status_code == 200, response.text
