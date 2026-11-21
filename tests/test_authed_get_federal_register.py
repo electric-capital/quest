@@ -21,7 +21,6 @@ All HTTP calls are mocked -- no real network traffic.
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -30,6 +29,7 @@ from chat.gemini_api.authed_get import (
     _find_service,
     _make_authed_request,
 )
+from tests.authed_get_support import mock_httpx_client
 
 
 _FR_KEY = "www.federalregister.gov/api/v1"
@@ -42,40 +42,6 @@ _FR_KEY = "www.federalregister.gov/api/v1"
 def _run(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
-
-
-def _mock_httpx_client(captured_calls: list, status_code: int = 200, body: dict | None = None):
-    """Build a patch target that captures client.get() calls.
-
-    Patches ``httpx.AsyncClient`` inside ``chat.gemini_api.authed_get`` so each
-    ``client.get(url, headers=...)`` is recorded to ``captured_calls`` as
-    ``(url, headers)`` tuples and returns an ``httpx.Response``-like object with
-    the given status code and body.
-    """
-    if body is None:
-        body = {"ok": True}
-    response_text = json.dumps(body)
-
-    response_mock = MagicMock()
-    response_mock.status_code = status_code
-    response_mock.text = response_text
-    response_mock.json = MagicMock(return_value=body)
-
-    async def fake_get(url, headers=None):
-        captured_calls.append((str(url), dict(headers or {})))
-        return response_mock
-
-    client_mock = MagicMock()
-    client_mock.get = AsyncMock(side_effect=fake_get)
-
-    async_ctx = MagicMock()
-    async_ctx.__aenter__ = AsyncMock(return_value=client_mock)
-    async_ctx.__aexit__ = AsyncMock(return_value=None)
-
-    return patch(
-        "chat.gemini_api.authed_get.httpx.AsyncClient",
-        return_value=async_ctx,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +154,7 @@ class TestMakeAuthedRequestFederalRegister:
     def test_allowed_request_injects_no_auth_but_has_user_agent(self):
         calls: list = []
         body = {"count": 1, "results": [{"document_number": "2026-10606"}]}
-        with _mock_httpx_client(calls, body=body):
+        with mock_httpx_client(calls, body=body):
             result = _run(_make_authed_request(
                 "https://www.federalregister.gov/api/v1/documents.json"
                 "?per_page=1&fields%5B%5D=document_number",
@@ -212,7 +178,7 @@ class TestMakeAuthedRequestFederalRegister:
     def test_works_without_user_context(self):
         """A no-auth service must not require a user dict."""
         calls: list = []
-        with _mock_httpx_client(calls, body={"name": "EPA"}):
+        with mock_httpx_client(calls, body={"name": "EPA"}):
             result = _run(_make_authed_request(
                 "https://www.federalregister.gov/api/v1/agencies/"
                 "environmental-protection-agency",
@@ -226,7 +192,7 @@ class TestMakeAuthedRequestFederalRegister:
 
     def test_disallowed_path_returns_error_without_http_call(self):
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://www.federalregister.gov/api/v1/images/abc123",
             ))
@@ -239,7 +205,7 @@ class TestMakeAuthedRequestFederalRegister:
     def test_non_api_path_returns_unknown_host_error(self):
         """Human-website paths are not a known service -> unknown-host error."""
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://www.federalregister.gov/documents/2026/05/28/some-rule",
             ))
@@ -250,7 +216,7 @@ class TestMakeAuthedRequestFederalRegister:
 
     def test_multiple_allowed_paths_each_make_one_call(self):
         calls: list = []
-        with _mock_httpx_client(calls, body={"ok": True}):
+        with mock_httpx_client(calls, body={"ok": True}):
             _run(_make_authed_request(
                 "https://www.federalregister.gov/api/v1/documents/facets/daily",
             ))

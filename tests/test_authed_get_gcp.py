@@ -45,6 +45,7 @@ from chat.gemini_api.authed_get import (
     _load_google_services_credentials,
     _make_authed_request,
 )
+from tests.authed_get_support import mock_httpx_client
 
 
 _RM_KEY = "cloudresourcemanager.googleapis.com"
@@ -67,45 +68,6 @@ def _run(coro):
 
 def _matches(compiled, path: str) -> bool:
     return any(pat.match(path) for pat in compiled)
-
-
-def _mock_httpx_client(captured_get: list, captured_post: list,
-                       status_code: int = 200, body: dict | None = None):
-    """Patch ``httpx.AsyncClient`` capturing both get() and post() calls.
-
-    ``client.get(url, headers=...)`` -> appends ``(url, headers)`` to
-    ``captured_get``; ``client.post(url, headers=..., json=...)`` -> appends
-    ``(url, headers, json)`` to ``captured_post``.
-    """
-    if body is None:
-        body = {"ok": True}
-    response_text = json.dumps(body)
-
-    response_mock = MagicMock()
-    response_mock.status_code = status_code
-    response_mock.text = response_text
-    response_mock.json = MagicMock(return_value=body)
-
-    async def fake_get(url, headers=None):
-        captured_get.append((str(url), dict(headers or {})))
-        return response_mock
-
-    async def fake_post(url, headers=None, json=None):
-        captured_post.append((str(url), dict(headers or {}), json))
-        return response_mock
-
-    client_mock = MagicMock()
-    client_mock.get = AsyncMock(side_effect=fake_get)
-    client_mock.post = AsyncMock(side_effect=fake_post)
-
-    async_ctx = MagicMock()
-    async_ctx.__aenter__ = AsyncMock(return_value=client_mock)
-    async_ctx.__aexit__ = AsyncMock(return_value=None)
-
-    return patch(
-        "chat.gemini_api.authed_get.httpx.AsyncClient",
-        return_value=async_ctx,
-    )
 
 
 def _mock_credentials_loader(token: str | None = "ya29.test-token"):
@@ -382,7 +344,7 @@ class TestMakeAuthedRequestGcp:
         post_calls: list = []
         body = {"projects": [{"projectId": "p1"}]}
         with _mock_credentials_loader("ya29.live"), \
-                _mock_httpx_client(get_calls, post_calls, body=body):
+                mock_httpx_client(get_calls, post_calls, body=body):
             result = _run(_make_authed_request(
                 "https://cloudresourcemanager.googleapis.com/v1/projects",
                 user={"email": "user@example.com"},
@@ -399,7 +361,7 @@ class TestMakeAuthedRequestGcp:
         req_body = {"resourceNames": ["projects/p"], "filter": "severity>=ERROR"}
         resp_body = {"entries": []}
         with _mock_credentials_loader("ya29.logtoken"), \
-                _mock_httpx_client(get_calls, post_calls, body=resp_body):
+                mock_httpx_client(get_calls, post_calls, body=resp_body):
             result = _run(_make_authed_request(
                 "https://logging.googleapis.com/v2/entries:list",
                 user={"email": "user@example.com"},
@@ -418,7 +380,7 @@ class TestMakeAuthedRequestGcp:
         get_calls: list = []
         post_calls: list = []
         with _mock_credentials_loader("ya29.org"), \
-                _mock_httpx_client(get_calls, post_calls, body={"organizations": []}):
+                mock_httpx_client(get_calls, post_calls, body={"organizations": []}):
             result = _run(_make_authed_request(
                 "https://cloudresourcemanager.googleapis.com/v1/organizations:search",
                 user={"email": "user@example.com"},
@@ -433,7 +395,7 @@ class TestMakeAuthedRequestGcp:
         get_calls: list = []
         post_calls: list = []
         with _mock_credentials_loader(), \
-                _mock_httpx_client(get_calls, post_calls):
+                mock_httpx_client(get_calls, post_calls):
             result = _run(_make_authed_request(
                 "https://logging.googleapis.com/v2/entries:write",
                 user={"email": "user@example.com"},
@@ -449,7 +411,7 @@ class TestMakeAuthedRequestGcp:
         post_calls: list = []
         resp_body = {"bindings": [{"role": "roles/billing.admin", "members": ["user:a@example.com"]}]}
         with _mock_credentials_loader("ya29.billing"), \
-                _mock_httpx_client(get_calls, post_calls, body=resp_body):
+                mock_httpx_client(get_calls, post_calls, body=resp_body):
             result = _run(_make_authed_request(
                 "https://cloudbilling.googleapis.com/v1/billingAccounts/012345-6789AB-CDEF01:getIamPolicy",
                 user={"email": "user@example.com"},
@@ -468,7 +430,7 @@ class TestMakeAuthedRequestGcp:
         get_calls: list = []
         post_calls: list = []
         with _mock_credentials_loader(), \
-                _mock_httpx_client(get_calls, post_calls):
+                mock_httpx_client(get_calls, post_calls):
             result = _run(_make_authed_request(
                 "https://cloudbilling.googleapis.com/v1/billingAccounts/012345-6789AB-CDEF01:setIamPolicy",
                 user={"email": "user@example.com"},
@@ -483,7 +445,7 @@ class TestMakeAuthedRequestGcp:
         get_calls: list = []
         post_calls: list = []
         with _mock_credentials_loader(), \
-                _mock_httpx_client(get_calls, post_calls):
+                mock_httpx_client(get_calls, post_calls):
             result = _run(_make_authed_request(
                 "https://compute.googleapis.com/compute/v1/projects/p/zones",
                 user={"email": "user@example.com"},
@@ -500,7 +462,7 @@ class TestMakeAuthedRequestGcp:
         get_calls: list = []
         post_calls: list = []
         with _mock_credentials_loader(), \
-                _mock_httpx_client(get_calls, post_calls):
+                mock_httpx_client(get_calls, post_calls):
             result = _run(_make_authed_request(
                 "https://logging.googleapis.com/v2/entries:list",
                 user={"email": "user@example.com"},

@@ -34,7 +34,6 @@ All HTTP calls are mocked -- no real network traffic.
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -49,6 +48,7 @@ from plugins.sec_edgar.manifest import (
     inject_no_auth,
     load_sec_edgar_credentials,
 )
+from tests.authed_get_support import mock_httpx_client
 
 
 _SEC_KEY = DATA_HOST
@@ -68,40 +68,6 @@ def _register_plugin(sec_edgar_plugin):
 def _run(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
-
-
-def _mock_httpx_client(captured_calls: list, status_code: int = 200, body: dict | None = None):
-    """Build a patch target that captures client.get() calls.
-
-    Patches ``httpx.AsyncClient`` inside ``chat.gemini_api.authed_get`` so each
-    ``client.get(url, headers=...)`` is recorded to ``captured_calls`` as
-    ``(url, headers)`` tuples and returns an ``httpx.Response``-like object with
-    the given status code and body.
-    """
-    if body is None:
-        body = {"ok": True}
-    response_text = json.dumps(body)
-
-    response_mock = MagicMock()
-    response_mock.status_code = status_code
-    response_mock.text = response_text
-    response_mock.json = MagicMock(return_value=body)
-
-    async def fake_get(url, headers=None):
-        captured_calls.append((str(url), dict(headers or {})))
-        return response_mock
-
-    client_mock = MagicMock()
-    client_mock.get = AsyncMock(side_effect=fake_get)
-
-    async_ctx = MagicMock()
-    async_ctx.__aenter__ = AsyncMock(return_value=client_mock)
-    async_ctx.__aexit__ = AsyncMock(return_value=None)
-
-    return patch(
-        "chat.gemini_api.authed_get.httpx.AsyncClient",
-        return_value=async_ctx,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +276,7 @@ class TestMakeAuthedRequestSecEdgar:
     def test_allowed_request_injects_no_auth_but_has_user_agent(self):
         calls: list = []
         body = {"cik": "320193", "name": "Apple Inc."}
-        with _mock_httpx_client(calls, body=body):
+        with mock_httpx_client(calls, body=body):
             result = _run(_make_authed_request(
                 "https://data.sec.gov/submissions/CIK0000320193.json",
                 # No user supplied -- the API needs none.
@@ -332,7 +298,7 @@ class TestMakeAuthedRequestSecEdgar:
     def test_works_without_user_context(self):
         """A no-auth service must not require a user dict."""
         calls: list = []
-        with _mock_httpx_client(calls, body={"taxonomy": "us-gaap"}):
+        with mock_httpx_client(calls, body={"taxonomy": "us-gaap"}):
             result = _run(_make_authed_request(
                 "https://data.sec.gov/api/xbrl/companyconcept/"
                 "CIK0000320193/us-gaap/Revenues.json",
@@ -346,7 +312,7 @@ class TestMakeAuthedRequestSecEdgar:
 
     def test_disallowed_path_returns_error_without_http_call(self):
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://data.sec.gov/submissions/CIK320193.json",  # not zero-padded
             ))
@@ -360,7 +326,7 @@ class TestMakeAuthedRequestSecEdgar:
         """The www.sec.gov ticker->CIK map file is reachable, no-auth, with a UA."""
         calls: list = []
         body = {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}
-        with _mock_httpx_client(calls, body=body):
+        with mock_httpx_client(calls, body=body):
             result = _run(_make_authed_request(
                 "https://www.sec.gov/files/company_tickers.json",
             ))
@@ -376,7 +342,7 @@ class TestMakeAuthedRequestSecEdgar:
     def test_www_unrelated_path_denied_without_http_call(self):
         """An unrelated www.sec.gov path is rejected without an HTTP call."""
         calls: list = []
-        with _mock_httpx_client(calls):
+        with mock_httpx_client(calls):
             result = _run(_make_authed_request(
                 "https://www.sec.gov/files/something_else.json",
             ))
@@ -387,7 +353,7 @@ class TestMakeAuthedRequestSecEdgar:
 
     def test_multiple_allowed_paths_each_make_one_call(self):
         calls: list = []
-        with _mock_httpx_client(calls, body={"ok": True}):
+        with mock_httpx_client(calls, body={"ok": True}):
             _run(_make_authed_request(
                 "https://data.sec.gov/submissions/CIK0000320193.json",
             ))
