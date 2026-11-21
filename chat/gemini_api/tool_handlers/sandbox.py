@@ -16,6 +16,12 @@ from chat.gemini_api.constants import (
     SCRIPT_RUNNER_MAX_OUTPUT,
     get_sandbox_port,
 )
+from chat.gemini_api.sandbox_containers import (
+    remove_container,
+    sandbox_container_name,
+    sandbox_instance_label,
+    schedule_removal,
+)
 from chat.gemini_api.sandbox_runtime import get_sandbox_runtime
 from chat.gemini_api.sandbox_seccomp import get_sandbox_seccomp_profile_path
 from chat.sandbox_tokens import TOKEN_GRACE_SECONDS, sandbox_token_lease
@@ -37,8 +43,15 @@ def _build_script_podman_cmd(
     interactive: bool = False,
     project_dir=None,
     autoproject_dir=None,
+    container_name: str | None = None,
 ) -> list[str]:
     """Build the ``podman run`` argv for a sandboxed script execution.
+
+    With ``container_name`` the container is named and labelled with this
+    server instance (chat/gemini_api/sandbox_containers.py) and NOT run with
+    ``--rm``: the caller removes it after ``podman run`` returns, so teardown
+    is off the call's critical path. Without one the container runs with
+    ``--rm``.
 
     Mounts: the conversation workspace at ``/workspace`` (``:Z``, private
     SELinux relabel -- only this conversation's containers use it; also the
@@ -110,7 +123,13 @@ def _build_script_podman_cmd(
     runtime = get_sandbox_runtime()
     if runtime:
         cmd += ["--runtime", runtime]
-    cmd += ["run", "--rm"]
+    if container_name is not None:
+        cmd += [
+            "run", "--name", container_name,
+            "--label", sandbox_instance_label(),
+        ]
+    else:
+        cmd += ["run", "--rm"]
     if interactive:
         cmd.append("-i")
 
@@ -187,6 +206,46 @@ def _build_script_podman_cmd(
         *exec_cmd,
     ]
     return cmd
+
+
+async def _run_sandbox_container(
+    podman_cmd: list[str],
+    container_name: str,
+    timeout: float,
+    stdin: bytes | None = None,
+) -> tuple[bytes, bytes, int | None, bool]:
+    """Run a named sandbox container to completion and return
+    ``(stdout, stderr, exit code, timed_out)``.
+
+    Returns as soon as ``podman run`` exits and removes the container in the
+    background. On timeout the client is killed and the container is
+    force-removed before returning: killing only the client would leave the
+    script running inside it. A cancelled call (the run was stopped) does
+    the same, with the removal in the background. ``FileNotFoundError``
+    (no podman) propagates.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *podman_cmd,
+        **({"stdin": asyncio.subprocess.PIPE} if stdin is not None else {}),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(input=stdin), timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        await remove_container(container_name)
+        return b"", b"", process.returncode, True
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            process.kill()
+        schedule_removal(container_name, process)
+        raise
+    schedule_removal(container_name)
+    return stdout_bytes, stderr_bytes, process.returncode, False
 
 
 def _publish_mount_changes(
@@ -349,7 +408,6 @@ async def _handle_run_script(
         # the container exits -- see chat/sandbox_tokens.py. The public
         # profile never injects it (see _build_script_podman_cmd) but the
         # lease is harmless there and keeps the two paths identical.
-        timed_out = False
         with sandbox_token_lease(
             user_id,
             ttl_seconds=clamped_timeout + TOKEN_GRACE_SECONDS,
@@ -363,25 +421,18 @@ async def _handle_run_script(
             # Build the Podman command (see _build_script_podman_cmd for
             # the full networking / privilege-drop rationale of both
             # profiles).
+            container_name = sandbox_container_name()
             podman_cmd = _build_script_podman_cmd(
                 workspace_dir, exec_cmd, sandbox_token, public=public,
                 project_dir=project_dir, autoproject_dir=autoproject_dir,
+                container_name=container_name,
             )
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *podman_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                (
+                    stdout_bytes, stderr_bytes, exit_code, timed_out,
+                ) = await _run_sandbox_container(
+                    podman_cmd, container_name, clamped_timeout,
                 )
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    process.communicate(), timeout=clamped_timeout
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                timed_out = True
-                stdout_bytes = b""
-                stderr_bytes = b""
             except FileNotFoundError:
                 return json.dumps({
                     "error": "Podman not found. The 'podman' command is not available on this system."
@@ -398,8 +449,6 @@ async def _handle_run_script(
         if len(stderr_str) > SCRIPT_RUNNER_MAX_OUTPUT:
             stderr_str = stderr_str[:SCRIPT_RUNNER_MAX_OUTPUT] + "\n... [output truncated at 256KB]"
             truncated = True
-
-        exit_code = process.returncode
 
         # Check if the image was not found (exit code 125 with specific error)
         if exit_code == 125 and "image not known" in stderr_str.lower():
@@ -492,7 +541,6 @@ async def _handle_run_python(
 
         # Execute the container with stdin piping, under the same
         # per-run sandbox token lease as _handle_run_script.
-        timed_out = False
         with sandbox_token_lease(
             user_id,
             ttl_seconds=clamped_timeout + TOKEN_GRACE_SECONDS,
@@ -505,28 +553,20 @@ async def _handle_run_python(
         ) as sandbox_token:
             # Build the Podman command (identical flags to
             # _handle_run_script, plus -i for stdin piping)
+            container_name = sandbox_container_name()
             podman_cmd = _build_script_podman_cmd(
                 workspace_dir, exec_cmd, sandbox_token, public=public,
                 interactive=True, project_dir=project_dir,
                 autoproject_dir=autoproject_dir,
+                container_name=container_name,
             )
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *podman_cmd,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                (
+                    stdout_bytes, stderr_bytes, exit_code, timed_out,
+                ) = await _run_sandbox_container(
+                    podman_cmd, container_name, clamped_timeout,
+                    stdin=script.encode("utf-8"),
                 )
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    process.communicate(input=script.encode("utf-8")),
-                    timeout=clamped_timeout,
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                timed_out = True
-                stdout_bytes = b""
-                stderr_bytes = b""
             except FileNotFoundError:
                 return json.dumps({
                     "error": "Podman not found. The 'podman' command is not available on this system."
@@ -543,8 +583,6 @@ async def _handle_run_python(
         if len(stderr_str) > SCRIPT_RUNNER_MAX_OUTPUT:
             stderr_str = stderr_str[:SCRIPT_RUNNER_MAX_OUTPUT] + "\n... [output truncated at 256KB]"
             truncated = True
-
-        exit_code = process.returncode
 
         # Check if the image was not found (exit code 125 with specific error)
         if exit_code == 125 and "image not known" in stderr_str.lower():

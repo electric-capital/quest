@@ -40,6 +40,21 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _no_real_sandbox_container_removal(monkeypatch):
+    """Sandbox handlers remove their container with ``podman rm`` after the
+    run (chat/gemini_api/sandbox_containers.py). Make that a no-op in every
+    test, so no test touches real podman state and handler tests that fake
+    ``asyncio.create_subprocess_exec`` see only the ``podman run`` call.
+    Tests of the removal itself replace ``_podman`` again."""
+    import chat.gemini_api.sandbox_containers as sandbox_containers
+
+    async def _no_podman(*args, timeout=60.0):
+        return 0, "", ""
+
+    monkeypatch.setattr(sandbox_containers, "_podman", _no_podman)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_inference_provider_files(tmp_path, monkeypatch):
     """Keep every test away from the real data-dir provider files.
 
