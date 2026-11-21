@@ -6,8 +6,9 @@
  * 44% of the page on desktop, a full-screen view over the page on phones).
  * The main column is a flex column on every screen size: the header
  * (AutoProjectHeader.css), the router-state notice, ONE scroller holding the
- * Brief, AutoProject files and Updates cards at the chat's reading measure (720px
- * plus gutters, centred), with the composer in the flow between the AutoProject
+ * Brief, AutoProject files and Updates cards in a centred column that grows with
+ * the pane up to 1080px plus gutters (one and a half times the chat's 720px
+ * reading measure), with the composer in the flow between the AutoProject
  * files and Updates cards; nothing is pinned to the bottom. The browser's
  * own scroll anchoring is off on the scroller: AutoProjectMainColumn keeps the
  * position across a prepended page of older updates itself.
@@ -50,7 +51,7 @@
   gap: 1.25rem;
   box-sizing: border-box;
   width: 100%;
-  max-width: calc(720px + 4rem);
+  max-width: calc(1080px + 4rem);
   margin: 0 auto;
   padding: 1.25rem 2rem 2rem;
 }
@@ -60,7 +61,7 @@
   flex-shrink: 0;
   box-sizing: border-box;
   width: 100%;
-  max-width: calc(720px + 4rem);
+  max-width: calc(1080px + 4rem);
   margin: 0 auto;
   padding: 0.75rem 2rem 0;
 }
