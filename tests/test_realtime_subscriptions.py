@@ -228,14 +228,6 @@ def test_unsubscribe_op_still_works_immediately(monkeypatch):
     assert any(msg.get("type") == "unsubscribed" for msg in ws.sent)
 
 
-def test_subscription_expired_envelope_helper():
-    from chat.realtime import events
-    assert events.make_subscription_expired("conv-xyz") == {
-        "type": "subscription_expired",
-        "conversation_id": "conv-xyz",
-    }
-
-
 def test_replay_buffer_eviction_respects_ttl_subscriber(monkeypatch):
     """While a TTL'd subscription holds the queue in the bus, the replay
     buffer's idle-eviction sweep refuses to drop the conversation's buffer.

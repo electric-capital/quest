@@ -92,9 +92,6 @@ def _segments(data: Iterable[Any]) -> list:
     return out
 
 
-_SPECIAL = b"()\"{ \t\r\n"
-
-
 def _tokenize(data: Iterable[Any]) -> list:
     """Tokens: '(' ')' '\\n' (line end), _Atom, str (quoted), _Literal."""
     tokens: list = []

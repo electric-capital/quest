@@ -117,7 +117,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "HISTORY_FORBIDDEN_MESSAGE",
     "REVISION_NOT_FOUND_MESSAGE",
-    "SOURCE_KINDS",
     "RevisionNotFound",
     "copy_revision",
     "list_versions",
@@ -126,8 +125,6 @@ __all__ = [
     "require_history_access",
     "restore_revision",
 ]
-
-SOURCE_KINDS = ("conversation", "action_request", "ui", "unknown")
 
 REVISION_NOT_FOUND_MESSAGE = "Revision not found."
 HISTORY_FORBIDDEN_MESSAGE = "History is available to people who can edit this doc."

@@ -22,18 +22,6 @@ from auth.config import (
 logger = logging.getLogger(__name__)
 
 
-def get_oauth_flow(redirect_uri: str) -> Flow:
-    """Create OAuth flow from server credentials (combined scopes, for backward compat)."""
-    client_config = load_google_oauth_config()
-
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=SCOPES,
-        redirect_uri=redirect_uri
-    )
-    return flow
-
-
 def get_login_oauth_flow(redirect_uri: str) -> Flow:
     """Create OAuth flow for app login (minimal scopes)."""
     client_config = load_google_oauth_config()

@@ -36,15 +36,9 @@ def _build_client(monkeypatch, tmp_path, owned_ids):
             return {"id": conversation_id, "user_id": user_id, "project_id": None}
         return None
 
-    async def get_project(conversation_id):
-        return None
-
     import db.conversation_store as conversation_store
 
     monkeypatch.setattr(conversation_store, "get_conversation_meta", get_meta, raising=True)
-    monkeypatch.setattr(
-        conversation_store, "get_project_for_conversation", get_project, raising=True
-    )
 
     app = FastAPI()
     app.include_router(file_router)
