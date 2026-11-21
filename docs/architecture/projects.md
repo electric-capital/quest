@@ -54,7 +54,7 @@ The conversation's next turn therefore runs as a project conversation: the schem
 
 Cached SDK sessions are invalidated (`invalidate_user_sessions`) because project membership changes the system prompt (project guide, skill auto-loads, file tools and notes).
 
-In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `Sidebar.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the chat becomes the project's first conversation while its files stay with the chat (the project starts with an empty Project Files space; the user can ask the chat, or use Move to project, to share files with later chats). On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
+In the frontend, the option appears as "Create Project from Chat" in the top-level conversation entry's dropdown menu in `sidebar/ConversationsSection.tsx` (hidden for Slack conversations). It opens `ConvertToProjectModal` (`frontend/src/components/ConvertToProjectModal.tsx`, reusing the `NewProjectModal` styles), which prefills the project name from the conversation title and explains that the chat becomes the project's first conversation while its files stay with the chat (the project starts with an empty Project Files space; the user can ask the chat, or use Move to project, to share files with later chats). On success the sidebar refetches projects, drops the conversation from the top-level list, and drills into the new project, auto-selecting the moved conversation.
 
 ## Archiving a Project
 
@@ -150,8 +150,8 @@ When a project's guide is updated via `PUT /app/api/projects/{project_id}`, the 
 
 The `delete_account()` handler in `chat/routes/user.py` cleans up projects, routines, schedules, and project skills during account deletion:
 
-1. Collects the list of user projects and conversations before deletion
-2. Calls `delete_all_user_routines(user_id)` from `db/routine_store.py` (CASCADE deletes linked schedules)
+1. Calls `delete_all_user_routines(user_id)` from `db/routine_store.py` (CASCADE deletes linked schedules)
+2. Collects the list of user projects and conversations before they are deleted
 3. Calls `delete_all_user_projects(user_id)` from `db/project_store.py` (explicitly deletes project skills first due to non-cascading FK, then CASCADE deletes linked conversation rows and routines)
 4. Deletes each project's filesystem directory (`data/projects/{project_id}/`)
 5. Deletes each conversation's chat directory (`data/chats/{conversation_id}/`)
@@ -161,7 +161,7 @@ The `delete_account()` handler in `chat/routes/user.py` cleans up projects, rout
 The frontend provides UI components for project management:
 
 - `NewProjectModal` (`frontend/src/components/NewProjectModal.tsx`) -- Modal for creating a new project (name input)
-- `ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) -- Modal for editing project settings with sidebar navigation containing four sections: General (project name, project instructions -- the `guide` field's UI label), Skills, Project Access (`ProjectDocSourcesSection.tsx`, see [Project Access](#project-access-doc-sources); hidden for public projects like Skills) and Danger Zone (an Archive / Unarchive Project block -- one click, reversible, neutral styling -- above the two-step Delete Project). The modal is widened with a row layout to accommodate the sidebar.
+- `ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) -- Modal for editing project settings with sidebar navigation containing five sections: General (project name, project instructions -- the `guide` field's UI label), Memories ([Project Memories](project-memories.md)), Skills, Project Access (`ProjectDocSourcesSection.tsx`, see [Project Access](#project-access-doc-sources); hidden for public projects like Skills) and Danger Zone (an Archive / Unarchive Project block -- one click, reversible, neutral styling -- above the two-step Delete Project). The modal is widened with a row layout to accommodate the sidebar.
 
   On mobile (keyed on the `useIsMobile` hook, mirroring `SettingsModal`) it renders as a full-screen two-tier takeover: the first screen is the section list, tapping a section slides its content over the list, and a header back button (or Escape) returns to the list; mobile styling is scoped by a `project-settings-modal-mobile` class.
 
@@ -172,7 +172,7 @@ The frontend provides UI components for project management:
 
 The Projects section (`components/sidebar/ProjectsSection.tsx`) is always visible in the sidebar. When no projects exist, a dotted-border "Create Project" button is shown. When projects exist, a "+" button appears in the Projects section header for creating new projects, next to an options (vertical-dots) menu -- the same `ConversationFilterMenu` the conversation sections use -- with a "Show Archived" checkbox. `ProjectsContext` always fetches the full list (`fetchProjects({ includeArchived: true })`) so by-id lookups (the drilled project, `HomeComposer`, `MobileShell`) resolve archived projects too; the section filters archived rows client-side behind the toggle (state in `Sidebar.tsx`, reset on page load like the conversation filters) and renders them dimmed via the `archived` class. Each project entry displays a folder icon and a right-pointing navigation chevron. The Requests and Search nav items are positioned above the sliding panels container (`.sidebar-panels`) inside `.sidebar-content`, so they remain visible when the user drills into a project.
 
-Clicking a project triggers a slide-left animation that reveals the project's conversations as a drill-down view. The drill-down saves the currently selected top-level conversation ID to a ref (`previousTopLevelConversationId`) before entering the project. `handleProjectDrillDown` is async: it calls `loadProjectConversations()` (which returns `Promise<Conversation[]>`) and then auto-selects the latest conversation in the project. If the project has no conversations, the main panel shows an empty state. When `activeProjectId` is set from URL params (e.g., navigating to `/projects/<pid>/<id>`), a `useEffect` auto-drills into the corresponding project.
+Clicking a project triggers a slide-left animation that reveals the project's conversations as a drill-down view. The drill-down saves the currently selected top-level conversation ID to a ref (`previousTopLevelConversationId`) before entering the project. `handleProjectDrillDown` is async: it uses the `useProjectConversations` hook (its cached list, else `load()`, which returns `Promise<Conversation[]>`) and then auto-selects the latest conversation in the project. If the project has no conversations, the main panel shows an empty state. When `activeProjectId` is set from URL params (e.g., navigating to `/projects/<pid>/<id>`), a `useEffect` auto-drills into the corresponding project.
 
 A back button at the top of the drill-down view calls `handleDrillDownBack()`, which restores the conversation that was selected before drilling in (read from the `previousTopLevelConversationId` ref). If no conversation was selected before, the main panel returns to the empty state. The ref is cleared after restoration.
 

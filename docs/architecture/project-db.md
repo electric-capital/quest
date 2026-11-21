@@ -40,7 +40,7 @@ data/projects/{project_id}/
     └── workspace/    # Project workspace shared by all project conversations (proj://, /project)
 ```
 
-The database is separate from the workspace so that workspace file operations (listing, reading, writing) do not interact with it. Since the database lives under `data/projects/{project_id}/`, it is automatically cleaned up when a project is deleted via the existing `shutil.rmtree` in `ChatStorage.delete_project_dir()` in `chat/storage.py`.
+The database is separate from the workspace so that workspace file operations (listing, reading, writing) do not interact with it. Since the database lives under `data/projects/{project_id}/`, it is automatically cleaned up when a project is deleted via the existing `shutil.rmtree` in `ChatStorage.delete_project_workspace()` in `chat/storage.py`.
 
 ## Tool Registration
 
@@ -85,7 +85,7 @@ The REST endpoints in `chat/project_db_routes.py` stay ungated: they only list, 
 1. LLM calls `tool_call(tool_name="project_db_query", arguments={"query": "..."})`
 2. `_dispatch_tool_call()` in `chat/gemini_api/tool_dispatch.py` routes to `_handle_project_db_query(project_id, query)`
 3. Handler validates `project_id` is not `None` and `query` is not empty
-4. Builds the database path: `PROJECTS_DIR / project_id / "project.db"` (creates parent directory if needed)
+4. Takes the database path from `ChatStorage.get_project_db_path(project_id)` (the file already exists: `project_has_legacy_db()` refused the call otherwise)
 5. Calls `_execute_project_db_query(db_path, query)` which uses `aiosqlite` for async I/O
 
 ## Query Handling Details

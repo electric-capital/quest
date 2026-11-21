@@ -18,7 +18,7 @@ Each `/connectors` row carries:
 - `kind`: `"oauth"`, `"api_key"` or `"form"`
 - `connected`, and for oauth rows optionally `needs_reauth`
 - `available` -- optional; `false` hides the row entirely (from both the connected list and the add picker). Every service needing admin-configured server-side integration credentials computes it:
-  - the core oauth rows (Google Services, Ramp) probe their canonical credential loader (`load_google_oauth_config` / the ramp store read) via the `_server_configured` helper in `get_connectors()`, and
+  - the core oauth rows (Google Services, Ramp) probe their canonical credential source in `get_connectors()` (`load_google_oauth_config` via the `_server_configured` helper; the ramp store read), and
   - plugin rows use `plugin_server_available()` (e.g. a plugin without its server-side base URL, the Slack plugin without OAuth client credentials, or the Telegram plugin without its MTProto app credentials).
 
   Airtable carries no flag -- the user supplies their own PAT, so there is nothing server-side to configure.
@@ -42,7 +42,7 @@ OAuth rows (core: Google Services, Ramp; plugin: e.g. Slack, GitHub, Twitter/X, 
 
 Clicking "Reconnect" opens the OAuth popup at the row's `connect_url` -- the same URL the add flow uses to connect. This re-authenticates the user, replacing the stored token with a fresh one. Core OAuth connectors intentionally have no Disconnect button; reconnecting is the way to refresh or replace a connection. A plugin's single-connection oauth row carries a `disconnect_url` when the plugin declares one (`UserConnectionSpec.disconnect_url`, see [Plugins](plugins.md#disconnect-and-revoke)); the row then also shows the Disconnect control described under API Key Connected Rows, after Reconnect (or Re-authorize).
 
-Any oauth row may report a needs-reauth state when `connected && needs_reauth` (today only Google Services computes it, from missing OAuth scopes):
+Any oauth row may report a needs-reauth state when `connected && needs_reauth` (Google Services computes it from missing OAuth scopes; a plugin supplies a `needs_reauth` hook on its connection spec):
 
 - Badge: yellow "Update Available" label (CSS class `connector-badge-warn`)
 - Button: "Re-authorize" (CSS class `connector-btn-connect`), which opens the same OAuth popup
@@ -116,7 +116,7 @@ The same server-AND-user combination gates every plugin's skills and tools via `
 
 ## Connector-Gated Settings Sections
 
-The same `GET /connectors` rows also gate the per-connector settings sections in the Settings nav (`CONNECTOR_SECTIONS` in `SettingsModal.tsx`). These are listed after the main sections (Data Connections, Memories, Skills, Inference API) and only while their backing service is usable for the current user:
+The same `GET /connectors` rows also gate the per-connector settings sections in the Settings nav (`CONNECTOR_SECTIONS` in `SettingsModal.tsx`). These are listed after the main sections (`MAIN_SECTIONS`) and only while their backing service is usable for the current user:
 
 | Section | Connector row | Shown when |
 |---------|---------------|------------|
