@@ -53,7 +53,7 @@ The FileViewerModal provides a "Save to Drive" button for markdown files viewed 
 
 **Endpoint:** POST `/app/api/conversations/{conversation_id}/files/save-to-drive`
 
-**Implementation:** `save_to_drive()` in `chat/file_routes.py`. See that function for request/response fields.
+**Implementation:** `_save_to_drive()` in `chat/file_routes.py`, behind the per-space `save_file_to_drive` routes. See that function for request/response fields.
 
 **Auth:** Session cookie or API key Bearer token (same as other file browser endpoints)
 
@@ -61,7 +61,7 @@ Creates a new Google Document in the user's Drive root via multipart upload to t
 
 **OAuth scope required:** `drive.file` (per-app file creation scope, part of `GOOGLE_SERVICE_SCOPES` in `auth/config.py`). Users who connected Google Services before this scope was added must reconnect via Settings > Data Connections to grant the updated permissions.
 
-**Frontend:** `saveToDrive()` in `frontend/src/api/fileApi.ts`. "Save to Drive" button appears in the FileViewerModal when viewing `.md` files.
+**Frontend:** `saveFileToDrive()` in `frontend/src/api/fileApi.ts`. "Save to Drive" button appears in the FileViewerModal when viewing `.md` files.
 
 ## Drive Upload (via `upload_to_drive` Action Request)
 

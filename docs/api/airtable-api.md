@@ -44,11 +44,12 @@ Defined in `auth/airtable.py`:
 
 ## System Instructions Integration
 
-When a user has configured their Airtable token, the Airtable API documentation is conditionally included in the system instructions sent to the LLM:
+When a user has configured their Airtable token, the model can reach the Airtable API documentation:
 
 - `get_instructions()` in `api/airtable.py` generates Airtable API documentation section
 - `get_user_connected_services()` in `api/instructions.py` checks for `airtable_token` in user dict
-- `get_instructions_content()` in `api/instructions.py` includes Airtable docs only when connected
+- The system prompt carries a one-line Airtable entry in its service list (`_preamble_instructions()` in `api/instructions.py`) only when connected
+- The full documentation is the `system:airtable` skill in `chat/system_skills/catalog.py` (`requires="airtable"`), which the model loads on demand
 
 ## Constraints
 
@@ -73,4 +74,4 @@ Airtable offers both OAuth and PATs. Quest uses PATs because: (1) OAuth tokens e
 Airtable PATs grant broad access -- a read-scoped PAT allows GET requests to any API path the user has base access for. The `allowed_endpoints` mechanism restricts which URL paths the `authed_get` handler will proxy, adding a server-side guardrail independent of the token's own permissions. The mechanism is generic and used by all services with `authed_get` support.
 
 **Why invalidate sessions on token save/remove?**
-Session invalidation ensures the system prompt refreshes immediately to include or exclude Airtable documentation based on the user's connection status.
+Session invalidation ensures the system prompt refreshes immediately to include or exclude the Airtable entry and skill based on the user's connection status.

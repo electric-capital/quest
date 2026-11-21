@@ -24,7 +24,7 @@ The backend documentation lives in the gated `system:gcp` system skill rather th
 | `chat/system_skills/catalog.py` | Registers `system:gcp` (gated `requires="google_services"`) with content from `api.gcp.get_instructions`; sandbox-snippet note for the `/api/authed-post` proxy |
 | `auth/config.py` | `cloud-platform` scope added to `GOOGLE_SERVICE_SCOPES` |
 | `auth/google_services.py` | Google callback now stores **granted** (not requested) scopes |
-| `quest.py` | `POST /api/authed-post` proxy route registration |
+| `chat/sandbox_api.py` | `POST /api/authed-post` proxy route registration (`register_sandbox_api_routes()`) |
 | `chat/route_dispatch.py` | `/api/authed-post` added to `_BLOCKED_PROXY_PATHS` |
 
 ## Authentication

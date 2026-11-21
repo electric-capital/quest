@@ -33,7 +33,7 @@ changes.
 - Auth: `get_current_user_inference_token` -- ONLY inference API keys are accepted (not session
   cookies, not `users.api_key`), with the standard `check_user_allowed` domain gate. Successful
   auth bumps the key's `last_used_at`.
-- Body: `{"prompt": "...", "model": "<optional MODEL_REGISTRY id>"}`. Model defaults to the user's
+- Body: `{"prompt": "...", "model": "<optional model id>"}`. Model defaults to the user's
   `settings.default_model`, then the server-config default. Errors follow the standard
   `{"error", "message"}` detail shape (`invalid_prompt`, `invalid_model`, `no_response` 502,
   `inference_timeout` 504, `inference_failed` 502).
@@ -48,7 +48,7 @@ Mirrors the cross-user subagent runtime (`chat/user_subagent.py`), minus approva
    transcript (send guard in `chat/realtime/socket.py`, same `read_only_conversation` rejection
    as `user_subagent`; composer notice via `isReadOnly`/`readOnlyNotice` in `ChatPanel.tsx`).
    Like Slack conversations, inference runs are **hidden from the sidebar by default** -- a
-   client-side origin filter in `Sidebar.tsx` (`applyConversationFilters`, "Show Inference API
+   client-side origin filter (`applyConversationFilters` in `frontend/src/utils/sidebarItems.ts`, "Show Inference API
    Runs" toggle in the filter menu) with a zap icon (`InferenceConversationIcon`) when shown.
    They cannot be converted to projects (`POST /projects/from-conversation` rejects the origin
    in `chat/project_routes.py`).

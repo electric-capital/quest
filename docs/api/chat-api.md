@@ -10,7 +10,7 @@ All frontend-facing endpoints (`/app/api/*`) support **dual authentication**: se
 
 - **Browser frontend**: Uses the session cookie automatically (set during OAuth login; cookie name is environment-dependent via `COOKIE_NAME` in `auth/config.py`). No API key is stored or transmitted by the frontend.
 - **Scripts and LLM agents**: Use the `Authorization: Bearer <api_key>` header.
-- **Upstream service endpoints** (`/api/gmail-*`, `/api/docs-*`, `/api/sheets-*`, plus the sandbox bridges `/api/authed-get`, `/api/authed-post`, and `/api/tool-call`): API key auth only (not called by the browser frontend).
+- **Upstream service endpoints** (`/api/gmail-simple/*`, `/api/gmail-raw/*`, the sandbox bridges `/api/authed-get`, `/api/authed-post`, and `/api/tool-call`): API key auth only (not called by the browser frontend).
   - Note: Calendar and Drive reads use `authed_get` tool calls instead of proxy endpoints, and Slack (reads and the `send_slack_dm_to_self` self-DM send alike) and the Telegram reads are dedicated dynamic tools with no HTTP routes; scripts reach them over the `/api/tool-call` bridge.
   - Plugin service access is via plugin tools only -- plugins cannot mount proxy routes.
 
@@ -35,7 +35,7 @@ Error codes and responses are defined in the auth dependencies in `auth/session.
 
 ### General API Error Responses
 
-Upstream service endpoints (`/api/gmail-*`, `/api/docs-*`, etc.) return JSON error objects with `error` and `message` fields. Error generation is in `get_valid_service_credentials()` in `auth/google_credentials.py` and `get_current_user` in `auth/session.py`.
+Upstream service endpoints (`/api/gmail-simple/*` etc.) return JSON error objects with `error` and `message` fields. Error generation is in `get_valid_service_credentials()` in `auth/google_credentials.py` and `get_current_user` in `auth/session.py`.
 
 ### Frontend Authentication Flow
 
@@ -45,7 +45,7 @@ The frontend authenticates via session cookie without storing any API key. On mo
 
 All conversation REST endpoints are defined in `chat/routes/conversations.py`. See that file and `db/conversation_store.py` for parameters, request/response shapes, and error codes. Types are in `frontend/src/api/types.ts`.
 
-- **GET `/app/api/conversations`** -- List conversations for the authenticated user, sorted by most recent activity (`list_conversations_endpoint()`). With no query params it returns the full list.
+- **GET `/app/api/conversations`** -- List conversations for the authenticated user, sorted by most recent activity (`list_conversations()`). With no query params it returns the full list.
   - Supports `include_archived`, plus server-side sidebar filters: `exclude_projects=true` drops project-linked rows, `include_slack=false` / `include_inference=false` drop `origin="slack"` / `origin="inference_api"` rows (NULL-origin legacy rows always survive origin filters). AutoProject run conversations are never listed ([AutoProjects](../architecture/autoprojects.md#lifecycle)).
   - Optional paging via `limit` (1..200) + `cursor`: responses always carry `has_more` and `next_cursor` (an opaque keyset cursor encoding the last row's `(last_message_at, id)`; paging is keyset -- `(last_message_at, id) < cursor` under the `last_message_at DESC, id DESC` sort -- so newly prepended conversations can't shift page windows; malformed cursors 400 with `invalid_cursor`).
   - Each conversation object includes `project_id`, `routine_id`, `archived`, `custom_name`, and `model` fields. The `title` field resolves via `ChatStorage._resolve_list_title()`: `custom_name` if set, otherwise the cached `auto_title` column, otherwise a one-shot `chat_history.json` read for legacy rows (see [Database -- Conversation Model](../architecture/database.md#conversation-model)).
@@ -55,7 +55,7 @@ All conversation REST endpoints are defined in `chat/routes/conversations.py`. S
 - **POST `/app/api/conversations/{id}/duplicate-workspace`** -- Create a new empty standalone conversation seeded with a copy of the source's conversation workspace (`duplicate_conversation_workspace()`; 404 unless the caller owns the source).
   - Copies the source's conversation workspace root via `ChatStorage.copy_workspace_files(src_root, dst_root)` (off-thread `shutil.copytree`). For a project conversation that is still only its own conversation workspace, never the project workspace, and the copy is a standalone conversation outside the project. Conversation metadata sidecars (`chat_history.json`, `workspace_reads.json`, ...) live outside the workspace and are not copied; neither are symlinks, special files, or the hidden workspace-root `.responses/` dir (authed_get response bodies tied to the source conversation's tool calls, meaningless without that context).
   - Returns the same seed-friendly shape as `POST /conversations`. Surfaced as the "Duplicate Workspace" item in the sidebar conversation meatball menu (`Sidebar.tsx`), which navigates to the new conversation.
-- **GET `/app/api/conversations/{id}`** -- Get conversation with full message history (`get_conversation_endpoint()`). Response includes `last_message_seq` so the persistent-WS client can subscribe with a usable `last_seq` right after hydration. Also carries the sidebar title fields -- `title` (resolved via `ChatStorage._resolve_list_title()`), `custom_name`, and `archived` -- so the chat header title unit shows the same title as the sidebar row. See [Realtime Architecture](../architecture/realtime.md).
+- **GET `/app/api/conversations/{id}`** -- Get conversation with full message history (`get_conversation()`). Response includes `last_message_seq` so the persistent-WS client can subscribe with a usable `last_seq` right after hydration. Also carries the sidebar title fields -- `title` (resolved via `ChatStorage._resolve_list_title()`), `custom_name`, and `archived` -- so the chat header title unit shows the same title as the sidebar row. See [Realtime Architecture](../architecture/realtime.md).
 - **GET `/app/api/conversations/{id}/tail?after_seq=N`** -- Return only messages with `seq > after_seq` (`get_conversation_tail()`), fetched by the persistent-WS client after each `message_appended` event. After the ownership check the rows come from the replay buffer when it holds all of them, else from `chat_history.json` read in a worker thread (see [Realtime -- Replay Buffer](../architecture/realtime.md#replay-buffer)). Response shape: `{messages: [...], last_message_seq: N}`.
 - **PUT `/app/api/conversations/{id}/archive`** -- Soft-delete a conversation (`archive_conversation_endpoint()`). Delegates to `archive_conversation()` in `db/conversation_store.py`, which also marks it read.
 - **PUT `/app/api/conversations/{id}/unarchive`** -- Restore an archived conversation (`unarchive_conversation_endpoint()`). Delegates to `unarchive_conversation()` in `db/conversation_store.py`.
@@ -77,11 +77,11 @@ Creating a conversation:
 
 ### Get Conversation
 
-**Endpoint**: `GET /app/api/conversations/{conversation_id}` -- retrieves a conversation with its full message history. Implementation: `get_conversation_endpoint()` in `chat/routes/conversations.py`. Response shape: `ConversationDetail` in `frontend/src/api/types.ts`.
+**Endpoint**: `GET /app/api/conversations/{conversation_id}` -- retrieves a conversation with its full message history. Implementation: `get_conversation()` in `chat/routes/conversations.py`. Response shape: `ConversationDetail` in `frontend/src/api/types.ts`.
 
 The response merges server-side metadata (`model`, `routine_id`, `project_id`, `origin`, `flags`, and `autoproject_id` on an AutoProject run) onto the dict returned by `ChatStorage.get_conversation()`. The `flags` array is the persisted per-conversation flag set (NULL == `[]`), surfaced so the composer can render its read-only "N flag(s) enabled" label after the first message and across reloads (see [Conversation Flags](../architecture/conversation-flags.md)).
 
-For Slack-driven conversations (`origin === "slack"`) it additionally surfaces `slack_channel_id`, `slack_thread_ts` (looked up via `list_slack_conversations_for_user()`), and `slack_team_id` (from `user.slack_oauth.default_team_id`). These three identifiers let the web UI build the native Slack deep link described in [Slack Socket Mode](../architecture/slack-socket-mode.md).
+For Slack-driven conversations (`origin === "slack"`) it additionally surfaces `slack_channel_id`, `slack_thread_ts` (looked up via `list_slack_conversations_for_user()`), and `slack_team_id` (the `default_team_id` in the OAuth blob of the user's Slack `user_service_credentials` row). These three identifiers let the web UI build the native Slack deep link described in [Slack Socket Mode](../architecture/slack-socket-mode.md).
 
 The response also carries `pending_wait_handles` -- a list projected from `tool_wait_handle_store.list_pending_for_conversation` with one `{id, kind, correlation_id, created_at}` entry per still-`pending` row -- so a fresh load can lock the composer immediately when the suspended turn is waiting on an action request or `slack_reply`. See [Wait Handles -- Composer Sync](../architecture/wait-handles.md#composer-sync).
 
@@ -118,7 +118,7 @@ Archive a conversation (soft-delete). Archived conversations are excluded from l
 - Sets `archived=True` on the conversation row in the `conversations` table via `archive_conversation()` in `db/conversation_store.py`
 - Marks the conversation read and publishes `conversation_unread_changed` ([Conversation Unread State](../architecture/conversation-unread.md#when-a-conversation-becomes-read))
 
-**Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `conversation_not_found`)
+**Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `not_found`)
 
 **Implementation**: `archive_conversation_endpoint()` in `chat/routes/conversations.py`. Delegates to `archive_conversation()` in `db/conversation_store.py`.
 
@@ -144,7 +144,7 @@ Restore a previously archived conversation.
 **Side effects**:
 - Sets `archived=False` on the conversation row in the `conversations` table via `unarchive_conversation()` in `db/conversation_store.py`
 
-**Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `conversation_not_found`)
+**Error Response**: `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `not_found`)
 
 **Implementation**: `unarchive_conversation_endpoint()` in `chat/routes/conversations.py`. Delegates to `unarchive_conversation()` in `db/conversation_store.py`.
 
@@ -175,7 +175,7 @@ Set or clear a custom name for a conversation. Custom names take priority over a
 - Empty strings and whitespace-only strings are normalized to NULL (reverts to auto-generated title)
 
 **Error Responses**:
-- `400 Bad Request` if name exceeds 100 characters (error code: `name_too_long`)
+- `400 Bad Request` if name exceeds 100 characters (error code: `invalid_name`)
 - `404 Not Found` if conversation does not exist or does not belong to the authenticated user (error code: `conversation_not_found`)
 
 **Implementation**: `rename_conversation_endpoint()` in `chat/routes/conversations.py`. Delegates to `rename_conversation()` in `db/conversation_store.py`.
@@ -200,7 +200,7 @@ Unconditionally sets the `model` and `thinking_effort` columns via `set_conversa
 
 **Implementation**: `update_conversation_model_endpoint()` in `chat/routes/conversations.py`. Delegates to `set_conversation_model()` in `db/conversation_store.py`.
 
-**Frontend Usage**: The model selector dropdown in `ChatPanel.tsx` calls this endpoint when the user changes the model. The frontend hydrates the model selector from the `model` field in the conversation metadata returned by the server, replacing the previous localStorage-based persistence.
+**Frontend Usage**: The model selector dropdown (`ModelSelector` in `Composer.tsx`) calls this endpoint when the user changes the model. The frontend hydrates the model selector from the `model` field in the conversation metadata returned by the server.
 
 ---
 
@@ -282,7 +282,7 @@ Response shape: `ComposerAttachmentUploadResponse` in `frontend/src/api/types.ts
 
 The endpoint publishes `file_list_changed` like the other workspace-mutating routes ([File Browser API](file-browser-api.md)).
 
-The frontend caller is `uploadComposerAttachments()` in `frontend/src/api/fileApi.ts`, driven by `handleSendMessage` in `frontend/src/components/ChatPanel.tsx`. See [Realtime -- Message Attachments](../architecture/realtime.md#message-attachments) for the end-to-end flow including provider-multimodal hand-off and the `attachments_unsupported_during_resume` rejection.
+The frontend caller is `uploadComposerAttachments()` in `frontend/src/api/fileApi.ts`, driven by `handleSendMessage` in `frontend/src/components/Composer.tsx`. See [Realtime -- Message Attachments](../architecture/realtime.md#message-attachments) for the end-to-end flow including provider-multimodal hand-off and the `attachments_unsupported_during_resume` rejection.
 
 ---
 
@@ -330,13 +330,13 @@ Defined in the model loop in `chat/gemini_api/conversation.py`, the realtime pub
 - Run lifecycle (per-conversation):
   - **`send_message_accepted`** (`seq`, optional echoed `client_send_id`; sender-only delivery receipt sent after the user row is appended),
   - **`send_message_finished`** (`interrupted: bool`),
-  - **`send_message_rejected`** (`reason: "already_running" | "attachments_unsupported_during_resume" | "user_not_found" | "expensive_resume_unacknowledged"`):
+  - **`send_message_rejected`** (`reason: "already_running" | "read_only_conversation" | "attachments_unsupported_during_resume" | "user_not_found" | "expensive_resume_unacknowledged"`, plus the AutoProject run-start reasons):
     - `attachments_unsupported_during_resume` when a composer-paste send lands on a conversation with a dangling tool_use,
     - `user_not_found` when the fresh per-turn DB re-read finds the user row deleted,
     - `expensive_resume_unacknowledged` when a send into a flagged long-idle/long-context conversation lacks the `expensive_resume_acknowledged: true` envelope field -- see [Expensive-Resume Warning](../architecture/expensive-resume.md),
   - **`stop_acknowledged`**.
 - Durable per-conversation: **`message_appended`** (`seq`, `conversation_id`). The client REST-fetches the new tail via `GET /conversations/{id}/tail` and merges the rows by `seq` (so overlapping tail-fetches stay in disk order). Bodies are NOT pushed on the live channel.
-- Transient per-conversation: **`text_delta`** (LLM text chunk, `content`), **`tool_started`** (boundary "tool started" hint, `tool_id`, `tool_name`), **`sub_agent_tool_use`** / **`sub_agent_tool_result`** (sub-agent tool calls during `agent_task` / `agent_task_parallel` / `agent_task_parallel_template`, keyed by `parent_tool_id`; persisted on the parent `tool_result`'s `sub_agent_tool_calls` array when that is flushed), **`sub_agent_finished`** (canonical sub-agent done signal, `parent_tool_id`, `agent_name`, `status`, optional `error`), **`conversation_updated`** (out-of-band when the model sets a conversation name via `set_conversation_name`).
+- Transient per-conversation: **`text_delta`** (LLM text chunk, `content`), **`sub_agent_tool_use`** / **`sub_agent_tool_result`** (sub-agent tool calls during `agent_task` / `agent_task_parallel` / `agent_task_parallel_template`, keyed by `parent_tool_id`; persisted on the parent `tool_result`'s `sub_agent_tool_calls` array when that is flushed), **`sub_agent_finished`** (canonical sub-agent done signal, `parent_tool_id`, `agent_name`, `status`, optional `error`), **`conversation_updated`** (out-of-band when the model sets a conversation name via `set_conversation_name`).
 - Per-user globals:
   - **`request_count_changed`** (`counts: {all, open, executed, denied, stopped}`),
   - **`conversation_list_changed`** (`conversation_id`, `action: "created" | "archived" | "unarchived" | "renamed" | "model_changed"`),
@@ -369,7 +369,7 @@ Custom 4xxx codes from `chat/realtime/socket.py`: 4401 (auth failed / revoked), 
 
 ### Get Current User Info
 
-`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`) plus `default_thinking_effort` / `public_default_thinking_effort`; either model may be `null` -- the FE owns the fallback: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `UserInfo` in `frontend/src/api/types.ts`. The FE re-reads it on every new-chat composer mount and private<->public switch (ConversationModelsContext `refreshDefaultModel`, see [Frontend](../architecture/frontend.md)).
+`GET /app/api/me` -- Returns user email, display name, connection status, admin flag, `default_model` (the per-user "last-used" default web/composer model for private conversations, raw from `users.settings.default_model`) and `public_default_model` (the same for public-project conversations, raw from `users.settings.public_default_model`) plus `default_thinking_effort` / `public_default_thinking_effort`; either model may be `null` -- the FE owns the fallback: Opus 4.8 when allowed + credentialed, else the admin's first top-level pick, else the first offerable model per `available_models` on `GET /app/api/config`. See `get_current_user_info()` in `chat/routes/user.py`. Response type: `checkSession()` in `frontend/src/utils/auth.ts`. The FE re-reads it on every new-chat composer mount and private<->public switch (ConversationModelsContext `refreshDefaultModel`, see [Frontend](../architecture/frontend.md)).
 
 The `has_any_service_connected` flag drives auto-opening the settings panel to Data Connections for new users. The `is_admin` flag (from `admin_emails` in `server_config.json`) controls visibility of the `AdminOpsMenu` component.
 
@@ -450,7 +450,7 @@ System notifications (the inbox's Other tab) are served by `chat/notification_ro
 
 ### Unauthenticated Endpoints
 
-- **GET `/app/api/config`** -- Get environment config (`get_app_config()` in `chat/routes/user.py`). Returns `quest_env` (`"dev"` or `"prod"`). Frontend derives app name ("DevQuest" vs "Quest") from this.
+- **GET `/app/api/config`** -- Get environment config (`get_app_config()` in `chat/routes/user.py`). Returns `quest_env` (`get_quest_env()` in `config/environment.py`) among other fields. Frontend derives app name ("DevQuest" vs "Quest") from this.
 - **GET `/app/api/version`** -- Release info of the running instance (`get_app_version()` in `chat/routes/user.py`): `git_hash` (HEAD commit, polled by the frontend to detect redeploys) plus `version`, `tag`, `released` (ISO date-time) and `commits_since_tag` from the nearest `v<semver>` release tag (`config/version.py`, all null/0 on an untagged checkout; see [Development Workflows -- Releases](../setup/development-workflows.md#releases)). Captured once at process startup; shown in Settings > About.
 - **GET `/auth/login-url`** -- Get Google OAuth login URL (`get_login_url()` in `auth/google_login.py`). Used by `SignInScreen.tsx`.
 

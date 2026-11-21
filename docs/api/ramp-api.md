@@ -22,8 +22,8 @@ The backend documentation is carried in the `system:ramp` system skill, gated on
 | `chat/gemini_api/authed_get.py` | `api.ramp.com` entry in `_SERVICE_REGISTRY` (`requires_user`, `retry_on_401`, `missing_credentials_error`, allow-list generated from `_RAMP_READ_RESOURCES` plus explicit cards patterns); `_load_ramp_credentials()` (delegates to `get_ramp_token`, returns `None` on failure) and `_inject_ramp_bearer_auth()` |
 | `chat/system_skills/catalog.py` | Registers `system:ramp` gated on `requires="ramp"`; `content_builder` delegates to `api.ramp.get_instructions` |
 | `db/models.py` | `ramp_oauth` JSON column on `users` (`access_token`, `refresh_token`, `expires_at`, `scope`, `token_type`, `authorized_at`); migration `b7d4f21a8c3e` |
-| `chat/routes/user.py` | `ramp` entry in `GET /connectors` with `available` (admin credentials present) and `connected`; `ramp_connected` folded into `/me`'s `has_any_service_connected` |
-| `chat/routes/admin.py` | `ramp` in `SERVICE_CREDENTIAL_LABELS` / `_SERVICE_FORM_VIEWS` (flat client id/secret form) and `PUT /admin/service-credentials/ramp` |
+| `chat/routes/user.py` | `ramp` entry in `GET /connectors` with `available` (admin credentials present) and `connected`; the `ramp` key of `get_user_connected_services()` counts toward `/me`'s `has_any_service_connected` |
+| `config/service_specs.py` | The `ramp` `ServiceSpec` (label, flat client id/secret fields) behind the generic `PUT /admin/service-credentials/{service}` in `chat/routes/admin.py` |
 | `api/instructions.py` | `"ramp"` key in `get_user_connected_services()`; Ramp section in the instructions document |
 
 ## OAuth Flow
