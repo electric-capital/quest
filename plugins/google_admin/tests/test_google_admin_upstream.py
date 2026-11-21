@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from config.oauth_tokens import token_expires_within
 import plugins.google_admin.upstream as upstream
 from plugins.google_admin.upstream import (
     GOOGLE_ADMIN_IDENTITY_SCOPES,
@@ -28,7 +29,6 @@ from plugins.google_admin.upstream import (
     google_admin_is_configured,
     google_admin_needs_reauth,
     load_google_admin_client_config,
-    token_expires_within,
     validate_google_admin_credentials,
 )
 

@@ -28,6 +28,12 @@ from typing import Any, Optional
 
 import httpx
 
+from config.oauth_tokens import (
+    current_or_refreshed_token,
+    get_user_oauth_blob,
+    store_user_oauth_blob,
+)
+
 logger = logging.getLogger(__name__)
 
 SERVICE_ID = "google_admin"
@@ -86,9 +92,6 @@ GOOGLE_ADMIN_IDENTITY_SCOPES = ("openid", _SCOPE_PREFIX + "userinfo.email")
 GOOGLE_ADMIN_SCOPE_REQUEST = " ".join(
     GOOGLE_ADMIN_SCOPES + GOOGLE_ADMIN_IDENTITY_SCOPES
 )
-
-# Safety margin: refresh the token if it expires within 5 minutes.
-_REFRESH_MARGIN_SECONDS = 300
 
 _HTTP_TIMEOUT = 30.0
 
@@ -180,8 +183,7 @@ def load_google_admin_client_config() -> dict:
 
 def get_user_google_admin_oauth(user: dict) -> Optional[dict]:
     """The user's stored OAuth blob, or None when not connected."""
-    rows = user.get("service_credentials") or {}
-    return (rows.get(SERVICE_ID) or {}).get("oauth_blob")
+    return get_user_oauth_blob(user, SERVICE_ID)
 
 
 def has_granted_scope(user: dict, scope: str) -> bool:
@@ -213,26 +215,6 @@ def google_admin_needs_reauth(row: dict) -> bool:
     """
     granted = (row.get("oauth_blob") or {}).get("scopes") or []
     return not set(GOOGLE_ADMIN_SCOPES).issubset(set(granted))
-
-
-def token_expires_within(blob: dict, margin_seconds: int = _REFRESH_MARGIN_SECONDS) -> bool:
-    """Whether the blob's access token expires within ``margin_seconds``.
-
-    An unparseable or missing ``expires_at`` reads as expired: Google
-    access tokens always expire, so with no usable expiry the safe move is
-    to refresh rather than send a possibly-dead token.
-    """
-    expires_at_str = blob.get("expires_at")
-    if not expires_at_str:
-        return True
-    try:
-        expires_at = datetime.fromisoformat(expires_at_str)
-    except (TypeError, ValueError):
-        return True
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    return (expires_at - now).total_seconds() < margin_seconds
 
 
 def build_token_blob(
@@ -316,13 +298,9 @@ async def _refresh_google_admin_token(user: dict, blob: dict) -> Optional[str]:
 
     new_blob = build_token_blob(token_data, previous=blob)
 
-    from db.user_service_credential_store import upsert_credential
-    await upsert_credential(user["id"], SERVICE_ID, oauth_blob=new_blob)
-
-    # Mutate the in-memory user dict so later calls in the same turn see
-    # the fresh token without a DB re-read.
-    rows = user.setdefault("service_credentials", {})
-    rows.setdefault(SERVICE_ID, {})["oauth_blob"] = new_blob
+    # Persist, and update the in-memory user dict so later calls in the
+    # same turn see the fresh token without a DB re-read.
+    await store_user_oauth_blob(user, SERVICE_ID, new_blob)
 
     logger.info("[Google Admin] Refreshed access token for %s", email)
     return new_blob["access_token"]
@@ -334,20 +312,9 @@ async def get_google_admin_token(user: dict) -> Optional[str]:
     Returns None when Google Workspace Admin is not connected or the
     refresh fails, so callers surface an actionable reconnect message.
     """
-    blob = get_user_google_admin_oauth(user)
-    if not blob or not blob.get("access_token"):
-        return None
-
-    if not token_expires_within(blob):
-        return blob["access_token"]
-
-    lock = _refresh_locks.setdefault(user.get("id"), asyncio.Lock())
-    async with lock:
-        # Another coroutine may have refreshed while we waited on the lock.
-        blob = get_user_google_admin_oauth(user) or blob
-        if not token_expires_within(blob):
-            return blob.get("access_token")
-        return await _refresh_google_admin_token(user, blob)
+    return await current_or_refreshed_token(
+        user, SERVICE_ID, _refresh_google_admin_token, _refresh_locks,
+    )
 
 
 async def load_google_admin_credentials(user: dict):

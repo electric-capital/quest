@@ -8,13 +8,13 @@ carry-over).
 
 from datetime import datetime, timedelta, timezone
 
+from config.oauth_tokens import token_expires_within
 from plugins.twitter.upstream import (
     TWITTER_SCOPES,
     build_token_blob,
     twitter_connected,
     twitter_is_configured,
     twitter_needs_reauth,
-    token_expires_within,
     validate_twitter_credentials,
 )
 
