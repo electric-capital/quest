@@ -201,7 +201,7 @@ The `legacy_shared_workspace` and `converted_from_standalone` flags in `chat_his
 
 ## Deprecated Model Remapping
 
-`_DEPRECATED_MODELS` in `chat/gemini_api/constants.py` maps retired model ids to their replacements wherever a model id enters the loop (the turn's model and every sub-agent spawn arm; grep its uses). The frontend mirror is `DEPRECATED_MODEL_MAP` in `frontend/src/constants/models.ts`. Retired ids stay in the `ModelId` enum (`db/models.py`) for historical analytics rows.
+`_DEPRECATED_MODELS` in `chat/gemini_api/constants.py` maps retired model ids to their replacements wherever a model id enters the loop (the turn's model and every sub-agent spawn arm; grep its uses). The frontend mirror is `DEPRECATED_MODEL_MAP` in `frontend/src/constants/models.ts`.
 
 ## In-Memory Chat Session Store
 

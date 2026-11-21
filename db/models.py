@@ -20,37 +20,6 @@ from config.password_hashing import password_fingerprint
 from db.encrypted_types import EncryptedJSON, EncryptedText
 
 
-class ModelId(StrEnum):
-    """Vertex model identifiers (Gemini, Anthropic) -- a historical enum kept
-    for readability of call rows; NOT the source of truth for what is
-    selectable (see chat/llm/config.py resolve_model). Instance-served
-    models (OpenRouter) carry ``<instance_id>:<wire_id>`` ids and are not
-    listed here."""
-    GEMINI_3_1_PRO = "gemini-3.1-pro-preview"  # Deprecated: hidden from the model selector; existing rows still run it (now on Vertex)
-    GEMINI_3_PRO = "gemini-3-pro-preview"  # Deprecated: replaced by GEMINI_3_1_PRO for new conversations
-    GEMINI_3_FLASH = "gemini-3-flash-preview"  # Deprecated: hidden from the model selector; existing rows still run it
-    GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite-preview"  # Deprecated: hidden from the model selector; existing rows still run it
-    GEMINI_3_5_FLASH = "gemini-3.5-flash"  # Deprecated: hidden from the model selector; existing rows still run it
-    GEMINI_3_5_FLASH_LITE = "gemini-3.5-flash-lite"
-    GEMINI_3_6_FLASH = "gemini-3.6-flash"
-    GEMINI_3_7_FLASH = "gemini-3.7-flash"
-    GEMINI_3_8_FLASH = "gemini-3.8-flash"
-    GEMINI_4_ARGON = "gemini-4-argon"
-    GEMINI_4_CARBON = "gemini-4-carbon"
-    GEMINI_4_HYDROGEN = "gemini-4-hydrogen"
-    GEMINI_4_NEON = "gemini-4-neon"
-    CLAUDE_HAIKU_4_5 = "claude-haiku-4.5"
-    CLAUDE_HAIKU_5_5 = "claude-haiku-5-5"
-    CLAUDE_SONNET_4_6 = "claude-sonnet-4-6"
-    CLAUDE_OPUS_4_6 = "claude-opus-4-6"
-    CLAUDE_OPUS_4_7 = "claude-opus-4-7"
-    CLAUDE_OPUS_4_8 = "claude-opus-4-8"
-    CLAUDE_SONNET_5 = "claude-sonnet-5"
-    CLAUDE_SONNET_5_5 = "claude-sonnet-5-5"
-    CLAUDE_OPUS_5 = "claude-opus-5"
-    CLAUDE_OPUS_5_5 = "claude-opus-5-5"
-
-
 class ApiCallType(StrEnum):
     """Discriminator for the type of Gemini API call."""
     TOP_LEVEL = "top_level"
@@ -1590,7 +1559,7 @@ class LlmCallGemini(Base):
     # The user who owns this conversation (no FK cascade -- kept for analytics)
     user_id: Mapped[int] = mapped_column(sa.Integer, nullable=False)
 
-    # The model used for this call (e.g., ModelId.GEMINI_3_PRO)
+    # The model id used for this call (e.g. "gemini-3-pro-preview")
     model: Mapped[str] = mapped_column(String(100), nullable=False)
 
     # Whether this is a top-level agent call or a sub-agent call

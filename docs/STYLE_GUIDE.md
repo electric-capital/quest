@@ -35,7 +35,7 @@ export interface Message {
 
 The same rule applies to *data*, not just code. If a fact can be read straight out of a source file with no interpretation -- the members of a list, set, enum or registry, a default value, a date, a price, a limit, a mapping -- the doc names the symbol and file and stops there. It never copies the values. A copied list is stale the moment the code changes, nobody remembers to update it, and an agent that trusts the doc over the code then acts on wrong data.
 
-The canonical case is the model catalog: docs point to `MODEL_REGISTRY` in `chat/llm/config.py` instead of spelling out "the available models are A, B, C, D". The same goes for allow-lists such as `TEMPLATE_BATCH_ALLOWED_MODELS`, enums such as `ModelId` in `db/models.py`, and defaults such as `DEFAULT_ROUTINE_MODELS`.
+The canonical case is the model catalog: docs point to `MODEL_REGISTRY` in `chat/llm/config.py` instead of spelling out "the available models are A, B, C, D". The same goes for allow-lists such as `TEMPLATE_BATCH_ALLOWED_MODELS`, enums such as `ActionRequestType` in `db/models.py`, and defaults such as `DEFAULT_ROUTINE_MODELS`.
 
 **Do this:**
 ```

@@ -268,14 +268,11 @@ The handler registry in `chat/action_request_types/registry.py` is the source of
 
 **`SkillVisibility`** -- Visibility levels for skills in the skill library (one member per level; `VALID_VISIBILITIES` in `db/skill_store.py` is derived from it, so the enum is the only place to add a level). The access rules per level are in [Skill Library Architecture](skill-library.md).
 
-Two `StrEnum` enums are used by the LLM call analytics models (`LlmCallGemini` / `LlmCallAnthropic` / `LlmCallOpenRouter`):
-
-**`ModelId`** -- Known LLM model identifiers across all providers. The members are in `db/models.py`; the runtime truth about each model (provider, context window, deprecation, Vertex id) is `MODEL_REGISTRY` in `chat/llm/config.py`, and retired ids are kept in the enum only so historical `llm_calls_*` rows stay interpretable (see [Deprecated Model Remapping](gemini-api.md#deprecated-model-remapping) for the runtime alias).
-
+One `StrEnum` enum is used by the LLM call analytics models (`LlmCallGemini` / `LlmCallAnthropic` / `LlmCallOpenRouter`), whose `model` column is a plain string holding the model id:
 
 **`ApiCallType`** -- Discriminator for the type of LLM API call (`call_type` on the `llm_calls_*` rows): whether the top-level agent or a sub-agent made the call.
 
-These enums are imported by `db/llm_call_store.py` and the `chat/gemini_api/` package (`conversation.py` and `sub_agent.py`) to categorize API calls when recording usage.
+It is imported by `db/llm_call_store.py` and the `chat/gemini_api/` package (`conversation.py` and `sub_agent.py`) to categorize API calls when recording usage.
 
 ## LlmCallGemini and LlmCallAnthropic Models
 
