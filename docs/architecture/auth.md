@@ -91,6 +91,17 @@ The persistent WebSocket re-validates its cookie and admission on a heartbeat
 (`_revalidate_auth()` in `chat/realtime/socket.py`); control messages also check
 current admission before dispatch. See [Realtime](realtime.md#heartbeat-and-auth).
 
+**The WebSocket honours the cookie only same-origin** (`_cookie_origin_allowed()` in
+`chat/realtime/socket.py`). Browsers do not apply the same-origin policy to WebSockets and send
+the `SameSite=Lax` cookie from any page on the same site (a sibling subdomain, another port of the
+same host), so when the handshake carries an `Origin` header its `host[:port]` must equal the
+request's `Host`, an `X-Forwarded-Host` entry, the configured `app_base_url`, or the
+`oauth_hostname` (any port). The scheme is not compared, because TLS terminates in front of Quest.
+A handshake without `Origin` (a non-browser client) is unaffected, and `?api_key=` authenticates
+from any origin. A reverse proxy that rewrites `Host` must forward the original as
+`X-Forwarded-Host`, or the deployment must set `app_base_url`; otherwise the socket closes with
+`CLOSE_AUTH_FAILED` and the server logs the refused origin.
+
 **Response headers.** `SecurityHeadersMiddleware` in `chat/security_headers.py` (installed in
 `quest.py`) adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and
 `Content-Security-Policy: frame-ancestors 'none'` to every HTTP response that does not already set
