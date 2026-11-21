@@ -54,15 +54,6 @@ export function resolveDefaultPick(
   return { model: resolveFallbackModel(availableIds, visibility), thinkingEffort: null };
 }
 
-/** Model-only form of resolveDefaultPick, for callers without a level. */
-export function resolveDefaultModel(
-  candidates: (string | null | undefined)[],
-  availableIds: string[] | null,
-  visibility: ModelVisibility,
-): string {
-  return resolveDefaultPick(candidates.map((model) => ({ model })), availableIds, visibility).model;
-}
-
 /**
  * The stored "last-used" candidates for a visibility, from a GET /me payload.
  * Public composers try the public pick first and then the private one, so a
