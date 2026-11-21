@@ -376,7 +376,7 @@ All log output uses a unified format configured in `chat/logging_config.py` (dic
 - `data/quest.db.pre-encryption-*.bak`: the plaintext copy written by the encryption migration -- delete it once the upgrade is verified
 - `server_credentials.json`: never commit to version control (in `.gitignore`)
 - Firewall: expose only the HTTPS front (Tailscale Serve, `cloudflared`, or ports 80/443 on a reverse proxy); block direct access to 8000 from anything but that front on the same host (see Serving over HTTPS)
-- Script-runner Podman containers run ephemerally with `--rm` and workspace volume mounts (see [Script Runner](../architecture/script-runner.md))
+- Script-runner Podman containers are ephemeral (one per call, removed right after it) with workspace volume mounts (see [Script Runner](../architecture/script-runner.md))
 
 ## Backup
 

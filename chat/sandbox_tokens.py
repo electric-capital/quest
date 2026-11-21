@@ -22,9 +22,10 @@ This module replaces it with a per-run token:
   the loopback-only sandbox routes -- and those routes accept nothing
   else (``users.api_key`` and session cookies are rejected there).
 
-The mapping is deliberately process-local: containers die with the server
-process, so there is nothing worth persisting, and a restart invalidates
-every outstanding token by construction.
+The mapping is deliberately process-local: the server removes its sandbox
+containers at shutdown and boot (chat/gemini_api/sandbox_containers.py), so
+there is nothing worth persisting, and a restart invalidates every
+outstanding token by construction.
 """
 
 from __future__ import annotations
