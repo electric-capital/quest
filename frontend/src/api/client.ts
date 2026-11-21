@@ -73,7 +73,9 @@ import type {
   ActionRequestCountsResponse,
   SearchResponse,
   VersionResponse,
+  LatestActiveAutoProjectsResponse,
   LatestActiveConversationsResponse,
+  LatestActiveProjectsResponse,
   MostExpensiveConversationsResponse,
   AdminUserReportResponse,
   AdminModelReportResponse,
@@ -1051,6 +1053,14 @@ export function fetchLatestActiveConversations(
       include_routines: includeRoutines === false ? false : undefined,
     },
   });
+}
+
+export function fetchLatestActiveProjects(): Promise<LatestActiveProjectsResponse> {
+  return apiGet(endpoints.adminLatestActiveProjects());
+}
+
+export function fetchLatestActiveAutoProjects(): Promise<LatestActiveAutoProjectsResponse> {
+  return apiGet(endpoints.adminLatestActiveAutoProjects());
 }
 
 export function fetchMostExpensiveConversations(

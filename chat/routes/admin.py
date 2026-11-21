@@ -14,15 +14,19 @@ from auth.config import COOKIE_NAME, is_password_login
 from auth.session import get_user_from_cookie, set_impersonation_cookie, set_session_cookie
 from chat.compaction import compaction_count
 from chat.storage import ChatStorage
+from db.autoproject_store import list_latest_active_autoprojects
 from db.conversation_store import (
     get_conversations_with_users,
+    group_conversation_ids_query,
     list_conversation_activity_rows,
+    list_group_conversation_rows,
     list_latest_active_conversations,
 )
 from db.llm_call_store import (
     get_daily_usage_buckets,
     get_latest_context_tokens_for_conversations,
     get_most_expensive_conversations,
+    get_usage_by_conversation_group,
     get_usage_by_model,
     get_usage_by_model_for_conversations,
     get_usage_by_user,
@@ -40,6 +44,7 @@ from db.project_memory_suggestion_store import (
     list_all_suggestion_rows as list_all_project_suggestion_rows,
 )
 from db.table_store import list_all_table_rows
+from db.project_store import list_latest_active_projects
 from db.routine_store import get_routine_labels
 from db.skill_store import list_skill_labels
 from db.user_store import get_user_by_id, list_all_users, list_user_signup_dates
@@ -308,6 +313,99 @@ def _admin_conversation_view(
         # Lifetime compaction count from the compaction_meta.json sidecar.
         "compaction_count": compaction_count(conversation_id),
     }
+
+
+def _clamp_latest_limit(limit: int) -> int:
+    """Cap at 100 so a crafted query string can't fan out into a giant scan."""
+    return max(1, min(limit, 100))
+
+
+@router.get("/admin/system-monitor/latest-active-projects")
+async def admin_latest_active_projects(
+    limit: int = 20,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return the most recently active projects across all users.
+
+    The project-level twin of the latest-active-conversations endpoint: one
+    row per project, ordered by the newest ``last_message_at`` among its
+    conversations, with the token usage and cost of ALL the project's
+    surviving conversations (routine runs included, whole lifetime) merged
+    per model. ``active_days`` is the union of distinct UTC user-message
+    days across the project's non-routine conversations.
+    """
+    _require_admin(user)
+    rows = await list_latest_active_projects(limit=_clamp_latest_limit(limit))
+    project_ids = [row["id"] for row in rows]
+    conv_rows = await list_group_conversation_rows(project_ids=project_ids)
+    usage_by_project = (
+        await get_usage_by_conversation_group(
+            group_conversation_ids_query(project_ids=project_ids),
+            {row["id"]: row["group_id"] for row in conv_rows},
+        )
+        if project_ids else {}
+    )
+
+    def _collect_active_days() -> dict[str, set]:
+        by_project: dict[str, set] = {}
+        for conv in conv_rows:
+            if conv["routine_id"]:
+                continue
+            days = ChatStorage.user_message_active_days(conv["id"])
+            if days:
+                by_project.setdefault(conv["group_id"], set()).update(days)
+        return by_project
+
+    # One chat_history.json parse per non-routine conversation of the
+    # displayed projects: off the event loop, like the other report handlers.
+    active_days_by_project = await asyncio.to_thread(_collect_active_days)
+
+    projects = []
+    for row in rows:
+        usage = usage_by_project.get(row["id"], _EMPTY_USAGE)
+        projects.append({
+            **row,
+            "active_days": len(active_days_by_project.get(row["id"], ())),
+            "usage_by_model": usage["models"],
+            "usage_total": usage["total"],
+        })
+    return {"projects": projects}
+
+
+@router.get("/admin/system-monitor/latest-active-autoprojects")
+async def admin_latest_active_autoprojects(
+    limit: int = 20,
+    user: dict = Depends(get_current_user_cookie_or_apikey_checked),
+):
+    """Return the most recently active AutoProjects across all users.
+
+    One row per AutoProject, ordered by ``last_activity_at``, with the token
+    usage and cost of all its surviving run conversations (whole lifetime)
+    merged per model, and the run figures from
+    ``list_latest_active_autoprojects`` (runs, failed runs, distinct UTC days
+    with a run started).
+    """
+    _require_admin(user)
+    rows = await list_latest_active_autoprojects(limit=_clamp_latest_limit(limit))
+    autoproject_ids = [row["id"] for row in rows]
+    conv_rows = await list_group_conversation_rows(autoproject_ids=autoproject_ids)
+    usage_by_autoproject = (
+        await get_usage_by_conversation_group(
+            group_conversation_ids_query(autoproject_ids=autoproject_ids),
+            {row["id"]: row["group_id"] for row in conv_rows},
+        )
+        if autoproject_ids else {}
+    )
+
+    autoprojects = []
+    for row in rows:
+        usage = usage_by_autoproject.get(row["id"], _EMPTY_USAGE)
+        autoprojects.append({
+            **row,
+            "usage_by_model": usage["models"],
+            "usage_total": usage["total"],
+        })
+    return {"autoprojects": autoprojects}
 
 
 def _parse_range_date(value: Optional[str], param: str) -> Optional[date]:

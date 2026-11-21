@@ -2445,6 +2445,56 @@ export interface LatestActiveConversationsResponse {
   conversations: AdminActiveConversation[];
 }
 
+// One project row of the System Reports "Projects" section: the project-level
+// twin of AdminActiveConversation, with figures aggregated over all the
+// project's surviving conversations (routine runs included, whole lifetime).
+export interface AdminActiveProject {
+  id: string;
+  name: string;
+  public: boolean;
+  archived: boolean;
+  user_id: number;
+  user_email: string;
+  user_name: string;
+  // Newest last_message_at among the project's conversations.
+  last_message_at: string | null;
+  conversation_count: number;
+  // Of those, the conversations a routine created.
+  routine_conversation_count: number;
+  // Distinct UTC days with at least one user message in a non-routine
+  // conversation of the project.
+  active_days: number;
+  // One merged entry per model across the project's conversations.
+  usage_by_model: AdminConversationModelUsage[];
+  usage_total: AdminConversationUsageTotal;
+}
+
+export interface LatestActiveProjectsResponse {
+  projects: AdminActiveProject[];
+}
+
+// One row of the System Reports "AutoProjects" section, aggregated over all
+// the AutoProject's surviving runs (whole lifetime).
+export interface AdminActiveAutoProject {
+  id: string;
+  title: string;
+  archived: boolean;
+  user_id: number;
+  user_email: string;
+  user_name: string;
+  last_activity_at: string | null;
+  run_count: number;
+  failed_run_count: number;
+  // Distinct UTC days on which a run started.
+  active_days: number;
+  usage_by_model: AdminConversationModelUsage[];
+  usage_total: AdminConversationUsageTotal;
+}
+
+export interface LatestActiveAutoProjectsResponse {
+  autoprojects: AdminActiveAutoProject[];
+}
+
 // Ranked most-expensive-first; same row shape as the latest-active list.
 export interface MostExpensiveConversationsResponse {
   conversations: AdminActiveConversation[];

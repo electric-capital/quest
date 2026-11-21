@@ -41,7 +41,7 @@ import re
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import delete, func, literal, select, update
+from sqlalchemy import case, delete, func, literal, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 
@@ -65,7 +65,7 @@ from chat.autoprojects.constants import (
     autoproject_not_found_message,
 )
 from db.engine import AsyncSessionLocal
-from db.models import Conversation, AutoProject, AutoProjectBriefVersion, AutoProjectRun
+from db.models import Conversation, AutoProject, AutoProjectBriefVersion, AutoProjectRun, User
 
 # Fallback title when a first prompt has no text to cut one from.
 DEFAULT_AUTOPROJECT_TITLE = "Untitled AutoProject"
@@ -926,6 +926,61 @@ async def list_autoproject_conversation_ids(autoproject_id: str) -> list[str]:
             .where(AutoProjectRun.autoproject_id == autoproject_id)
         )).scalars().all())
     return sorted(ids)
+
+
+async def list_latest_active_autoprojects(limit: int = 20) -> list[dict]:
+    """The most recently active AutoProjects across all users, newest
+    ``last_activity_at`` first (admin System Reports; not owner-scoped).
+
+    Joined to ``users`` for the owner identity. Each row carries the run
+    figures of the AutoProject: ``run_count`` (runs that still exist; a deleted
+    run is gone), ``failed_run_count`` and ``active_days``, the number of
+    distinct UTC days on which a run started. A run starts with the user's
+    one message, so that is the AutoProject's count of days with a user
+    message, read without opening a chat history. Archived AutoProjects are
+    listed (flagged).
+    """
+    runs = (
+        select(
+            AutoProjectRun.autoproject_id.label("autoproject_id"),
+            func.count(AutoProjectRun.id).label("run_count"),
+            func.sum(case(
+                (AutoProjectRun.status == AUTOPROJECT_RUN_STATUS_FAILED, 1), else_=0,
+            )).label("failed_run_count"),
+            # SQLite stores the naive-UTC DateTime as "YYYY-MM-DD HH:MM:SS";
+            # date() keeps the day part.
+            func.count(func.distinct(func.date(AutoProjectRun.started_at))).label("active_days"),
+        )
+        .group_by(AutoProjectRun.autoproject_id)
+        .subquery()
+    )
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(
+                AutoProject, User.email, User.name,
+                runs.c.run_count, runs.c.failed_run_count, runs.c.active_days,
+            )
+            .join(User, AutoProject.user_id == User.id)
+            .outerjoin(runs, runs.c.autoproject_id == AutoProject.id)
+            .order_by(AutoProject.last_activity_at.desc(), AutoProject.id)
+            .limit(limit)
+        )
+        return [
+            {
+                "id": autoproject.id,
+                "title": autoproject.title,
+                "archived": bool(autoproject.archived),
+                "user_id": autoproject.user_id,
+                "user_email": email,
+                "user_name": name or "",
+                "last_activity_at": _iso(autoproject.last_activity_at),
+                "run_count": int(run_count or 0),
+                "failed_run_count": int(failed_run_count or 0),
+                "active_days": int(active_days or 0),
+            }
+            for autoproject, email, name, run_count, failed_run_count, active_days
+            in result.all()
+        ]
 
 
 async def list_autoproject_ids_for_user(user_id: int) -> list[str]:
