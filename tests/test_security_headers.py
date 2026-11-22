@@ -77,7 +77,7 @@ def test_streaming_body_and_websocket_pass_through():
 
 def test_quest_app_sends_the_headers():
     # Subprocess: importing quest loads the plugins into the process-global
-    # registries (same pattern as tests/test_spa_docs_routes.py).
+    # registries (same pattern as tests/route_table_support.py).
     script = (
         "import json, quest\n"
         "from starlette.testclient import TestClient\n"

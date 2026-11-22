@@ -63,32 +63,11 @@ class TestSandboxAppSurface:
         assert app.docs_url is None
         assert app.openapi_url is None
 
-    def test_main_app_serves_the_same_roster(self):
+    def test_main_app_serves_the_same_roster(self, quest_route_table):
         """The main app must keep the shared routes: the LLM's in-process
         curl_proxy_* dispatch resolves against quest.app's route table.
-
-        Runs in a subprocess because importing quest loads the plugins into
-        the process-global registries, which would pollute other tests.
         """
-        import json
-        import subprocess
-        import sys
-        from pathlib import Path
-
-        script = (
-            "import json, quest\n"
-            "routes = sorted({(m, r.path) for r in quest.app.routes"
-            " if hasattr(r, 'methods') for m in r.methods})\n"
-            "print(json.dumps(routes))\n"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            cwd=Path(__file__).resolve().parent.parent,
-        )
-        assert proc.returncode == 0, proc.stderr
-        main_routes = {tuple(r) for r in json.loads(proc.stdout)}
+        main_routes = {tuple(r) for r in quest_route_table["routes"]}
         for method_path in EXPECTED_SANDBOX_ROUTES - {("GET", "/health")}:
             assert method_path in main_routes, method_path
 

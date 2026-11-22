@@ -4,82 +4,43 @@
 interactive API docs moved from its defaults (/docs, /redoc) to /api-docs and
 /api-redoc. These tests pin both halves of that swap on the real route table.
 
-Runs in a subprocess because importing quest loads the plugins into the
-process-global registries, which would pollute other tests (same pattern as
-tests/test_sandbox_api.py).
+The route table comes from the shared ``quest_route_table`` fixture
+(tests/route_table_support.py).
 """
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
-from pathlib import Path
 
-import pytest
-
-
-_SCRIPT = (
-    "import json, quest\n"
-    "from chat.route_table import iter_app_routes\n"
-    "app = quest.app\n"
-    "routes = sorted({(m, r.path) for r in iter_app_routes(app)"
-    " if r.methods for m in r.methods})\n"
-    "paths = [r.path for r in iter_app_routes(app)]\n"
-    "print(json.dumps({\n"
-    "    'routes': routes,\n"
-    "    'paths': paths,\n"
-    "    'docs_url': app.docs_url,\n"
-    "    'redoc_url': app.redoc_url,\n"
-    "    'openapi_url': app.openapi_url,\n"
-    "    'oauth2_redirect_url': app.swagger_ui_oauth2_redirect_url,\n"
-    "}))\n"
-)
-
-
-@pytest.fixture(scope="module")
-def route_table() -> dict:
-    proc = subprocess.run(
-        [sys.executable, "-c", _SCRIPT],
-        capture_output=True,
-        text=True,
-        cwd=Path(__file__).resolve().parent.parent,
-    )
-    assert proc.returncode == 0, proc.stderr
-    # The JSON document is the last stdout line (imports may log above it).
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-def test_spa_docs_routes_exist(route_table):
-    routes = {tuple(r) for r in route_table["routes"]}
+def test_spa_docs_routes_exist(quest_route_table):
+    routes = {tuple(r) for r in quest_route_table["routes"]}
     assert ("GET", "/docs") in routes
     assert ("GET", "/docs/{rest:path}") in routes
 
 
-def test_spa_docs_routes_precede_static_fallback(route_table):
+def test_spa_docs_routes_precede_static_fallback(quest_route_table):
     """/docs must be registered before the /{filename} static fallback,
     which would otherwise 404 it (no dist file named "docs")."""
-    paths = route_table["paths"]
+    paths = quest_route_table["paths"]
     assert paths.index("/docs") < paths.index("/{filename}")
     assert paths.index("/docs/{rest:path}") < paths.index("/{filename}")
 
 
-def test_swagger_and_redoc_moved(route_table):
-    assert route_table["docs_url"] == "/api-docs"
-    assert route_table["redoc_url"] == "/api-redoc"
-    assert route_table["openapi_url"] == "/openapi.json"
+def test_swagger_and_redoc_moved(quest_route_table):
+    assert quest_route_table["docs_url"] == "/api-docs"
+    assert quest_route_table["redoc_url"] == "/api-redoc"
+    assert quest_route_table["openapi_url"] == "/openapi.json"
 
 
-def test_default_redoc_path_gone(route_table):
-    assert "/redoc" not in route_table["paths"]
+def test_default_redoc_path_gone(quest_route_table):
+    assert "/redoc" not in quest_route_table["paths"]
 
 
-def test_docs_path_is_only_the_spa_route(route_table):
+def test_docs_path_is_only_the_spa_route(quest_route_table):
     """Exactly one route owns /docs: the SPA one, not Swagger UI."""
-    assert route_table["paths"].count("/docs") == 1
+    assert quest_route_table["paths"].count("/docs") == 1
     # Swagger's OAuth2 redirect page follows docs_url too, so no non-SPA
     # route is left anywhere under /docs/.
-    assert route_table["oauth2_redirect_url"] == "/api-docs/oauth2-redirect"
-    assert not [p for p in route_table["paths"] if p and p.startswith("/docs/") and p != "/docs/{rest:path}"]
-    assert "/api-docs" in route_table["paths"]
-    assert "/api-redoc" in route_table["paths"]
+    assert quest_route_table["oauth2_redirect_url"] == "/api-docs/oauth2-redirect"
+    assert not [p for p in quest_route_table["paths"] if p and p.startswith("/docs/") and p != "/docs/{rest:path}"]
+    assert "/api-docs" in quest_route_table["paths"]
+    assert "/api-redoc" in quest_route_table["paths"]

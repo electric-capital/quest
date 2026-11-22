@@ -493,27 +493,9 @@ def test_real_auth_dependency_401_without_credentials(env, multiconn_plugin):
     assert _run(env.store.list_connections(env.users["alice"]["id"], SERVICE)) == []
 
 
-def test_quest_app_mounts_connection_routes():
-    """quest.app serves the routes (subprocess: importing quest loads every
-    plugin into the process-global registries)."""
-    import json
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    script = (
-        "import json, quest\n"
-        "from chat.route_table import iter_app_routes\n"
-        "routes = sorted({(m, r.path) for r in iter_app_routes(quest.app)"
-        " if r.methods for m in r.methods})\n"
-        "print(json.dumps(routes))\n"
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        cwd=Path(__file__).resolve().parent.parent,
-    )
-    assert proc.returncode == 0, proc.stderr
-    routes = {tuple(r) for r in json.loads(proc.stdout.strip().splitlines()[-1])}
+def test_quest_app_mounts_connection_routes(quest_route_table):
+    """quest.app serves the routes."""
+    routes = {tuple(r) for r in quest_route_table["routes"]}
     assert ("POST", "/auth/connections/{service}") in routes
     assert ("PUT", "/auth/connections/{service}/{connection_id}") in routes
     assert ("DELETE", "/auth/connections/{service}/{connection_id}") in routes

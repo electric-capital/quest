@@ -13,7 +13,7 @@ get_user_from_cookie), each guarded route group in-process (403 with an
 impersonation cookie, the route's normal behaviour without one), and the
 real app's route table in a subprocess (importing quest loads every plugin
 into the process-global registries; same pattern as
-tests/test_spa_docs_routes.py).
+tests/route_table_support.py).
 """
 
 from __future__ import annotations

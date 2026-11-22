@@ -140,30 +140,12 @@ class TestTelegramProxyBlocked:
         assert "dedicated tool" in payload["error"]
         assert notices == []
 
-    def test_main_app_has_no_telegram_api_routes(self):
+    def test_main_app_has_no_telegram_api_routes(self, quest_route_table):
         """quest.py mounts no /api/telegram/*; only the plugin's /auth/telegram
-        login routes exist. Subprocess: importing quest loads plugins into
-        the process-global registries."""
-        import subprocess
-        import sys
-        from pathlib import Path
-
-        script = (
-            "import json, quest\n"
-            "from chat.route_table import iter_app_routes\n"
-            "paths = sorted({r.path for r in iter_app_routes(quest.app) if r.path})\n"
-            "print(json.dumps({'api': [p for p in paths if p.startswith('/api/telegram')],"
-            " 'auth': [p for p in paths if p.startswith('/auth/telegram')]}))\n"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True,
-            cwd=Path(__file__).resolve().parents[3],
-        )
-        assert proc.returncode == 0, proc.stderr
-        routes = json.loads(proc.stdout.strip().splitlines()[-1])
-        assert routes["api"] == []
-        assert routes["auth"] == [
+        login routes exist."""
+        paths = {p for p in quest_route_table["paths"] if p}
+        assert [p for p in paths if p.startswith("/api/telegram")] == []
+        assert sorted(p for p in paths if p.startswith("/auth/telegram")) == [
             "/auth/telegram", "/auth/telegram/2fa", "/auth/telegram/disconnect",
             "/auth/telegram/send-code", "/auth/telegram/verify",
         ]
