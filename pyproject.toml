@@ -56,6 +56,9 @@ dev = [
     # decodes chat/image_sanitizer.py output (the sanitizer itself is stdlib)
     "pillow>=13.0.0",
     "pytest>=8.0.0",
+    # Fails a stuck test by name instead of stalling the run (see `timeout`
+    # under [tool.pytest.ini_options])
+    "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
 ]
 
@@ -79,3 +82,7 @@ testpaths = ["tests", "plugins"]
 # Keep the repo root importable regardless of which paths are collected
 # (out-of-tree plugin suites import quest modules and tests.plugin_support).
 pythonpath = ["."]
+# pytest-timeout: a test still running after this many seconds is failed by
+# name with the stack of every thread, and the run carries on. The slowest
+# test takes a few seconds; this only catches a test that is stuck.
+timeout = 120

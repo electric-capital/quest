@@ -262,8 +262,28 @@ def test_inference_credentials_written_encrypted_and_swept(store_dirs):
 # Masked TTY prompt
 # ---------------------------------------------------------------------------
 
+def _wait_until_reading(master: int, slave: int, shown: bytearray) -> None:
+    """Block until _read_masked on ``slave`` is ready for keystrokes.
+
+    Seeing the prompt is not enough: _read_masked writes the prompt and
+    *then* switches the terminal to raw mode with TCSAFLUSH, which throws
+    away any input that arrived in between. Keys typed in that window are
+    lost and the read blocks forever, so wait for the mode switch itself
+    (ICANON off), which is the same call that does the flush.
+    """
+    import termios
+    import time
+
+    while not shown.endswith(b": "):
+        shown.extend(os.read(master, 1024))
+    deadline = time.monotonic() + 30
+    while termios.tcgetattr(slave)[3] & termios.ICANON:
+        assert time.monotonic() < deadline, "terminal never left canonical mode"
+        time.sleep(0.001)
+
+
 def _masked_read(keys: bytes) -> tuple[str, str]:
-    """Run _read_masked on a pty, typing ``keys`` once the prompt is up.
+    """Run _read_masked on a pty, typing ``keys`` once it is reading.
 
     Returns (password, everything the terminal displayed).
     """
@@ -274,8 +294,7 @@ def _masked_read(keys: bytes) -> tuple[str, str]:
     shown = bytearray()
 
     def type_keys():
-        while not shown.endswith(b": "):
-            shown.extend(os.read(master, 1024))
+        _wait_until_reading(master, slave, shown)
         os.write(master, keys)
 
     typist = threading.Thread(target=type_keys, daemon=True)
@@ -328,8 +347,13 @@ class TestMaskedPrompt:
         try:
             before = termios.tcgetattr(slave)
             import threading
+
+            def press_ctrl_d():
+                _wait_until_reading(master, slave, bytearray())
+                os.write(master, b"\x04")
+
             # Nothing typed: Ctrl-D on an empty line ends the read with EOFError.
-            threading.Timer(0.2, os.write, (master, b"\x04")).start()
+            threading.Thread(target=press_ctrl_d, daemon=True).start()
             with os.fdopen(slave, "w", closefd=False) as out:
                 with pytest.raises(EOFError):
                     encryption._read_masked("Password: ", slave, out)
