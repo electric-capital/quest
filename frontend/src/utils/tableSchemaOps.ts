@@ -1129,8 +1129,3 @@ export function rebaseDraft(
   const title = draft.title !== oldTitle ? draft.title : newTitle;
   return { draft: { title, columns: ids.map((id) => rebuilt.get(id)!) }, dropped };
 }
-
-/** True when the draft differs from its loaded schema (any operation). */
-export function draftIsDirty(before: TableColumn[], beforeTitle: string, draft: SchemaDraft): boolean {
-  return deriveSchemaChange(before, beforeTitle, draft).operations.length > 0;
-}

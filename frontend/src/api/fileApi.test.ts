@@ -1,5 +1,5 @@
 // URL building of the source-parameterised file API (conversation space vs
-// project space and the project twins) and the copy / move routes between a
+// project space) and the copy / move routes between a
 // project conversation's two spaces, incl. the typed 409 destination_exists.
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
@@ -8,22 +8,19 @@ import {
   copyFileFromProject,
   copyFileToProject,
   createFolder,
-  createProjectFolder,
-  deleteProjectFile,
-  downloadProjectFile,
-  downloadProjectFolder,
+  deleteFile,
+  downloadFile,
+  downloadFolder,
+  fetchFileContent,
   fileDownloadUrl,
   fileRoutesBase,
   fileSourceKey,
-  getProjectFileContent,
-  getProjectFileInfo,
+  getFileInfo,
   isDestinationExistsError,
   listFiles,
-  listProjectFiles,
-  projectFileDownloadUrl,
   projectSource,
-  saveProjectFileToDrive,
-  uploadProjectFiles,
+  saveFileToDrive,
+  uploadFiles,
 } from './fileApi';
 
 const ORIGIN = window.location.origin;
@@ -63,13 +60,13 @@ describe('file sources', () => {
 
   it('builds download URLs for inline previews', () => {
     expect(fileDownloadUrl('c1', 'a b/c.png')).toBe('/app/api/conversations/c1/files/download?path=a%20b%2Fc.png');
-    expect(projectFileDownloadUrl('p1', '/x.pdf')).toBe('/app/api/projects/p1/files/download?path=%2Fx.pdf');
+    expect(fileDownloadUrl(projectSource('p1'), '/x.pdf')).toBe('/app/api/projects/p1/files/download?path=%2Fx.pdf');
   });
 });
 
-describe('project twins', () => {
+describe('project space', () => {
   it('lists through the project routes, conversation ids keep the conversation routes', async () => {
-    await listProjectFiles('p1', '/docs');
+    await listFiles(projectSource('p1'), '/docs');
     await listFiles('c1', '');
     expect(call(0).url).toBe(`${ORIGIN}/app/api/projects/p1/files?path=%2Fdocs`);
     expect(call(0).init.method).toBe('GET');
@@ -77,16 +74,16 @@ describe('project twins', () => {
   });
 
   it('reads content and info', async () => {
-    await getProjectFileContent('p1', '/a.md');
-    await getProjectFileInfo('p1', '/dir');
+    await fetchFileContent(projectSource('p1'), '/a.md');
+    await getFileInfo(projectSource('p1'), '/dir');
     expect(call(0).url).toBe(`${ORIGIN}/app/api/projects/p1/files/content?path=%2Fa.md`);
     expect(call(1).url).toBe(`${ORIGIN}/app/api/projects/p1/files/info?path=%2Fdir`);
   });
 
   it('deletes, creates folders and saves to Drive', async () => {
-    await deleteProjectFile('p1', '/old.txt');
-    await createProjectFolder('p1', '/', 'new');
-    await saveProjectFileToDrive('p1', '/a.md', 'A');
+    await deleteFile(projectSource('p1'), '/old.txt');
+    await createFolder(projectSource('p1'), '/', 'new');
+    await saveFileToDrive(projectSource('p1'), '/a.md', 'A');
     await createFolder(conversationSource('c1'), '/', 'n');
 
     expect(call(0).url).toBe(`${ORIGIN}/app/api/projects/p1/files?path=%2Fold.txt`);
@@ -107,8 +104,8 @@ describe('project twins', () => {
     }));
     fetchMock.mockResolvedValueOnce(new Response('zip'));
 
-    expect(await downloadProjectFile('p1', '/r.csv')).toEqual({ url: 'blob:x', filename: 'report.csv' });
-    expect(await downloadProjectFolder('p1', '/out')).toEqual({ url: 'blob:x', filename: 'out.zip' });
+    expect(await downloadFile(projectSource('p1'), '/r.csv')).toEqual({ url: 'blob:x', filename: 'report.csv' });
+    expect(await downloadFolder(projectSource('p1'), '/out')).toEqual({ url: 'blob:x', filename: 'out.zip' });
     expect(call(0).url).toBe(`${ORIGIN}/app/api/projects/p1/files/download?path=%2Fr.csv`);
     expect(call(1).url).toBe(`${ORIGIN}/app/api/projects/p1/files/download-folder?path=%2Fout`);
   });
@@ -128,7 +125,7 @@ describe('project twins', () => {
     }
     vi.stubGlobal('XMLHttpRequest', FakeXhr);
 
-    await uploadProjectFiles('p1', [new File(['x'], 'x.txt')], '/in');
+    await uploadFiles(projectSource('p1'), [new File(['x'], 'x.txt')], '/in');
     expect(opened).toEqual([`${ORIGIN}/app/api/projects/p1/files/upload?path=%2Fin`]);
   });
 });
