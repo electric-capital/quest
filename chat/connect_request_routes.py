@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from chat import connect_requests
 from chat.auth import get_current_user_cookie_or_apikey_checked
-from chat.realtime import bus, events as realtime_events
+from chat.wait_handles.publish import publish_wait_handle_resolved
 from chat.storage import ChatStorage
 from chat.wait_handles import resume as wait_resume
 from db import tool_wait_handle_store
@@ -143,22 +143,7 @@ async def resolve_connect_request(
             "[connect_request] card rewrite failed for %s", handle_id,
             exc_info=True,
         )
-    try:
-        bus.publish_to_user(
-            user_id,
-            realtime_events.make_wait_handle_resolved(
-                conversation_id=conversation_id,
-                handle_id=updated["id"],
-                kind=updated.get("kind") or "",
-                status=updated["status"],
-                response=response,
-            ),
-        )
-    except Exception:
-        logger.debug(
-            "[connect_request] publish wait_handle_resolved failed",
-            exc_info=True,
-        )
+    publish_wait_handle_resolved(user_id, updated, response=response)
     try:
         wait_resume.maybe_kick_resume(request.app, user, conversation_id)
     except Exception:

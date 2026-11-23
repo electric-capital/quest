@@ -13,6 +13,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from chat.realtime import bus as _rt_bus
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -30,7 +32,7 @@ def env(isolated_db, monkeypatch):
         lambda app, user, cid: kicks.append((user["id"], cid)),
     )
     monkeypatch.setattr(
-        routes_mod.bus, "publish_to_user",
+        _rt_bus, "publish_to_user",
         lambda user_id, event: events.append((user_id, event)),
     )
 

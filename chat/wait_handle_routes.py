@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
-from chat.realtime import bus, events as realtime_events
+from chat.wait_handles.publish import publish_wait_handle_resolved
 from chat.wait_handles import resume as wait_resume
 from db import tool_wait_handle_store
 from db.models import ToolWaitHandleKind, ToolWaitHandleStatus
@@ -131,22 +131,7 @@ async def resolve_wait_handle(
         "[wait_handle] Resolved handle %s as %s (user=%s)",
         handle_id, updated["status"], user_id,
     )
-    try:
-        bus.publish_to_user(
-            user_id,
-            realtime_events.make_wait_handle_resolved(
-                conversation_id=updated["conversation_id"],
-                handle_id=updated["id"],
-                kind=updated.get("kind") or "",
-                status=updated["status"],
-                response=response,
-            ),
-        )
-    except Exception:
-        logger.debug(
-            "[wait_handle] publish wait_handle_resolved failed",
-            exc_info=True,
-        )
+    publish_wait_handle_resolved(user_id, updated, response=response)
     # The model loop suspended via the wait sentinel and returned, so the
     # dangling wait_for_handles tool_use must be closed by a headless
     # resume reading the just-resolved DB row. maybe_kick_resume is

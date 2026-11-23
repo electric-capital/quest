@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from chat import connect_requests
+from chat.realtime import bus as _rt_bus
 
 
 def _run(coro):
@@ -381,7 +382,7 @@ def route_env(isolated_db, monkeypatch, rows):
         lambda app, user, cid: kicks.append(cid),
     )
     monkeypatch.setattr(
-        routes_mod.bus, "publish_to_user",
+        _rt_bus, "publish_to_user",
         lambda user_id, event: events.append(event),
     )
     monkeypatch.setattr(

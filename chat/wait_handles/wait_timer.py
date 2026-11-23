@@ -160,24 +160,10 @@ def _announce_timeouts(
     ``skip_conversation_id`` -- the conversation whose live model run
     flipped the rows and reads their status directly.
     """
-    from chat.realtime import bus, events as realtime_events
+    from chat.wait_handles.publish import publish_wait_handle_resolved
 
     for row in flipped:
-        try:
-            bus.publish_to_user(
-                row["user_id"],
-                realtime_events.make_wait_handle_resolved(
-                    conversation_id=row["conversation_id"],
-                    handle_id=row["id"],
-                    kind=row.get("kind") or "",
-                    status=row["status"],
-                ),
-            )
-        except Exception:
-            logger.debug(
-                "[wait-timer] publish wait_handle_resolved (timeout) failed",
-                exc_info=True,
-            )
+        publish_wait_handle_resolved(row["user_id"], row)
 
     if app is None or user is None:
         return
