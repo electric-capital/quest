@@ -45,7 +45,7 @@ A table's files live under `TABLES_DIR/<table_id>/`, a path produced only by `Ch
 - `owner_id` cascades with the user and `project_id` with the project. `schema` (the ORM attribute is `table_schema`) is the ordered column list in the stored form of the [Schema Model](#schema-model); the store checks only its shape, and callers convert it with `load_schema()` and `dump_schema()`. `row_count` is cached for list views. `last_write_source` names the writer (the forms are listed on the column).
 - `require_approval` is the owner's switch, as `docs.require_approval`.
 - In `data_table_shares`, `user_id` NULL grants `read` or `write` to everyone on the install. SQLite treats NULLs as distinct in the unique `(table_id, user_id)` index, so the partial unique index `ix_data_table_shares_everyone` allows at most one everyone row per table.
-- **Title uniqueness** is case-insensitive per (owner, project, mode), enforced by `_title_taken()` rather than an index (a collision raises `DuplicateTableTitleError`), with the rules of the docs store: a NULL `project_id` is its own scope, the comparison uses Python `casefold()`, and it is check-then-insert with no lock against a simultaneous create.
+- **Title uniqueness** is case-insensitive per (owner, project, AutoProject, mode), enforced by `_title_taken()` rather than an index (a collision raises `DuplicateTableTitleError`), with the rules of the docs store: a NULL `project_id` / `autoproject_id` is its own scope, the comparison uses Python `casefold()`, and it is check-then-insert with no lock against a simultaneous create.
 
 ## Store Rules
 

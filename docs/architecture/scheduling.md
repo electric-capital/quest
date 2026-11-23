@@ -90,7 +90,7 @@ When a scheduled run fires (`_execute_scheduled_run()` in `chat/scheduler.py`):
 2. Create a new conversation in the project via `ChatStorage.create_project_conversation()`, passing the `routine_id` and the routine's `model` (if specified) so the conversation is linked to the routine and has the model set from creation
 3. Link the conversation to the ledger row and the schedule via `set_run_conversation()` (the run was already marked running when it was claimed)
 4. Save the routine prompt as a user message via `ChatStorage.append_message()`
-5. Call `run_conversation_turn()` with a no-op `on_event` callback (no WebSocket to stream to), passing the routine's `model` if specified (read via `routine.get("model")` from the routine data joined in `list_enabled_schedules()`) and `routine_id` so the routine's auto-load skills are resolved and merged with user/project auto-loads (see [Skill Library Architecture](skill-library.md))
+5. Call `drive_routine_run()` (`chat/routine_runs.py`), which wraps `run_conversation_turn()` and the completion nudge ([Routines](routines.md)), with a no-op `on_event` callback (no WebSocket to stream to), passing the routine's `model` if specified (read via `routine.get("model")` from the routine data joined in `list_enabled_schedules()`) and `routine_id` so the routine's auto-load skills are resolved and merged with user/project auto-loads (see [Skill Library Architecture](skill-library.md))
 6. Persist the response messages via `_persist_scheduler_messages()` (a thin wrapper over `ChatStorage.append_structured_messages()`)
 7. Mark the run as completed via `finish_run(..., "completed")` (clears `is_running`, stamps `last_run_completed_at`)
 8. On `CancelledError` (server shutdown): mark the run `interrupted` and persist partial output plus the interruption notice (see [Restart Resilience](#restart-resilience)), then re-raise
@@ -123,8 +123,8 @@ Routines that need fire-and-forget writes should prefer `send_slack_dm_to_self`-
 
 ### Mechanism
 
-1. Before starting an interval-based run, `_is_due()` checks `schedule["is_running"]`
-2. If `True`, the run is skipped (logged at INFO level with the reason "still running")
+1. Before starting an interval-based run, `_interval_due()` checks `schedule["is_running"]`
+2. If `True`, the run is skipped (silently, like any schedule that is not due)
 3. On claim: `claim_occurrence()` sets `is_running=True` and `last_run_started_at`
 4. On run complete: `finish_run(..., "completed")` sets `is_running=False` and `last_run_completed_at`
 5. On error or interruption: `finish_run()` sets `is_running=False` but does not update `last_run_completed_at`
@@ -137,7 +137,7 @@ Routines that need fire-and-forget writes should prefer `send_slack_dm_to_self`-
 
 ### RoutineSettingsModal Schedule UI
 
-The RoutineSettingsModal uses a left navigation sidebar with Prompt, Schedule, and Delete sections (see [Routines Architecture](routines.md) for the full modal layout). The Schedule section contains:
+The RoutineSettingsModal uses a left navigation sidebar with Prompt, Schedule, Skills, Costs and Delete sections (see [Routines Architecture](routines.md) for the full modal layout). The Schedule section contains:
 
 1. **"Run on a schedule" checkbox** -- a single checkbox that controls whether the schedule is active. When unchecked, the schedule configuration inputs below remain visible but are grayed out and disabled, preserving the configuration for when the user re-enables the schedule
 2. **Schedule Type** dropdown -- Daily / Weekly / Hourly / Every N minutes
@@ -156,7 +156,7 @@ Styles for the schedule section are in `frontend/src/components/RoutineSettingsM
 
 ### Sidebar Schedule Indicator
 
-`frontend/src/components/Sidebar.tsx` shows a small clock icon next to routines that have an active schedule (`schedule.is_enabled`). The routine listing API includes schedule data (via a left-join in `db/routine_store.py`), avoiding N+1 API calls. Styles are in `frontend/src/components/Sidebar.css` (`.routine-schedule-indicator`).
+`frontend/src/components/sidebar/RoutinesSection.tsx` shows a small clock icon next to routines that have an active schedule (`schedule.is_enabled`). The routine listing API includes schedule data (via a left-join in `db/routine_store.py`), avoiding N+1 API calls. Styles are in `frontend/src/components/Sidebar.css` (`.routine-schedule-indicator`).
 
 ## Cascade Deletion
 

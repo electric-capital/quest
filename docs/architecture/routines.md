@@ -65,7 +65,7 @@ The `routine_id` is persisted on the conversation record in the database. This l
 
 Routines with an attached schedule are executed automatically by the background scheduler daemon in `chat/scheduler.py`. Unlike the manual run flow (which is frontend-driven), scheduled runs are entirely backend-driven:
 
-1. The scheduler daemon polls every 30 seconds and identifies due schedules via `_is_due()` in `chat/scheduler.py`
+1. The scheduler daemon polls every 30 seconds and identifies due schedules via `_check_anchored()` / `_check_interval()` in `chat/scheduler.py`
 2. For each due schedule, spawns `_execute_scheduled_run()` as an independent asyncio task
 3. The task looks up the user record via `get_user_by_id()` from `db/user_store.py`
 4. Creates a new conversation in the project via `ChatStorage.create_project_conversation()`, passing the `routine_id` so the conversation is linked to the routine (and named after it -- see Conversation Naming below)
@@ -113,7 +113,7 @@ The routine completion tool and the scheduler are unaffected.
 
 - Name input (max 100 characters)
 - Prompt textarea, with the `ROUTINE_PROMPT_FILES_HINT` help line (see [File Spaces in Routine Prompts](#file-spaces-in-routine-prompts))
-- Model selector dropdown: shows the non-deprecated models from the shared `SELECTABLE_MODELS` view in `frontend/src/constants/models.ts` (Gemini 3.1 Flash-Lite, Gemini 3 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash-Lite, Gemini 3.6 Flash, and the Claude models); default is Gemini 3 Flash. The routine-settings modal additionally keeps a routine's stored deprecated model (e.g. Gemini 3.1 Pro) as an extra "(deprecated)" option so saving unrelated edits doesn't silently switch the model
+- Model selector dropdown: shows the models from `getSelectableModels()` in `frontend/src/constants/models.ts` (non-deprecated and allowed for the project's visibility); the default is `DEFAULT_ROUTINE_MODEL` in `NewRoutineModal.tsx`. The routine-settings modal additionally keeps a routine's stored deprecated model (e.g. Gemini 3.1 Pro) as an extra "(deprecated)" option so saving unrelated edits doesn't silently switch the model
 
 The form resets when the modal opens. On submit, it calls `createRoutine()` and fires the `onRoutineCreated` callback, which triggers a reload of the routines list in the sidebar. Styles are in `frontend/src/components/NewRoutineModal.css`.
 
@@ -124,7 +124,7 @@ The form resets when the modal opens. On submit, it calls `createRoutine()` and 
 **Prompt section:**
 - Name input (max 100 characters)
 - Auto-growing prompt textarea that expands to fit content up to approximately 20 lines (~420px), following the same pattern as the ChatPanel textarea. The textarea auto-sizes on initial load, on input, and when navigating back to the Prompt section. The label carries the `ROUTINE_PROMPT_FILES_HINT` help line
-- Model selector dropdown: shows all available models from the shared `AVAILABLE_MODELS` constant; deprecated models stored on routines are silently remapped on load via `DEPRECATED_MODEL_MAP` from `frontend/src/constants/models.ts`
+- Model selector dropdown: shows the models from `getSelectableModels()`; deprecated models stored on routines are silently remapped on load via `DEPRECATED_MODEL_MAP` from `frontend/src/constants/models.ts`
 - Save button and error display
 
 **Schedule section:**
@@ -132,7 +132,7 @@ The form resets when the modal opens. On submit, it calls `createRoutine()` and 
 - Save button and error display
 
 **Skills section:**
-- Lists all skills the user has access to (own + shared + public, fetched via `fetchSkills()`) with a per-skill auto-load toggle for the routine. Auto-loaded skill IDs for the routine are fetched on section activation via `fetchRoutineAutoloadedSkillIds(projectId, routineId)` and toggled via `setRoutineSkillAutoload(projectId, routineId, skillId, enabled)`. Toggles persist immediately to the `routine_skill_autoloads` table -- there is no separate Save button. See [Skill Library Architecture](skill-library.md) for how routine auto-loads merge with user and project auto-loads at conversation time
+- Lists the user's own skills (`fetchSkills()`) and the skills shared with them (`fetchSharedWithMeSkills()`) on two tabs, with a per-skill auto-load toggle for the routine. Auto-loaded skill IDs for the routine are fetched on section activation via `fetchRoutineAutoloadedSkillIds(projectId, routineId)` and toggled via `setRoutineSkillAutoload(projectId, routineId, skillId, enabled)`. Toggles persist immediately to the `routine_skill_autoloads` table -- there is no separate Save button. See [Skill Library Architecture](skill-library.md) for how routine auto-loads merge with user and project auto-loads at conversation time
 
 **Costs section** (`frontend/src/components/RoutineCostsSection.tsx`, read-only):
 - Fetched on section activation via `fetchRoutineCosts(projectId, routineId)` (`GET .../routines/{id}/costs`, see [Routines API](../api/routines-api.md)); the component is keyed on the routine id so each routine gets a fresh fetch
@@ -151,13 +151,13 @@ On save, it calls `updateRoutine()` and handles schedule create/update/delete as
 
 ### Sidebar Routines Section
 
-When the user drills into a project in `frontend/src/components/Sidebar.tsx`, routines are loaded alongside conversations via `loadProjectRoutines()`. The "Routines" section is always visible in the project drill-down view (similar to how the "Projects" section is always visible in the main sidebar). When the project has no routines, a dotted-border "Create Routine" button is shown. When routines exist, a small "+" button appears in the section header for creating new routines (both open the `NewRoutineModal`).
+When the user drills into a project in `frontend/src/components/Sidebar.tsx`, routines are loaded alongside conversations via the `useProjectRoutines` hook. The "Routines" section is always visible in the project drill-down view (similar to how the "Projects" section is always visible in the main sidebar). When the project has no routines, a dotted-border "Create Routine" button is shown. When routines exist, a small "+" button appears in the section header for creating new routines (both open the `NewRoutineModal`).
 
 Each routine entry displays the routine name, a settings gear icon that opens the `RoutineSettingsModal`, and a play button (triangle icon) that triggers `handleRunRoutine()`. If a routine has an active schedule (`schedule.is_enabled`), a small clock icon appears next to the routine name as a visual indicator.
 
 The routine listing API includes schedule data (via a left-join in `db/routine_store.py`), so the sidebar does not need separate API calls to determine schedule presence.
 
-Routines are reloaded from the server when routine creation, update, or deletion callbacks fire (`handleRoutineCreated`, `handleRoutineUpdated`, `handleRoutineDeleted`), as well as when `handleProjectUpdated()` fires (triggered by project settings changes).
+Routines are reloaded from the server when routine creation, update, or deletion callbacks fire (all three call `handleRoutinesChanged`), as well as when `handleProjectUpdated()` fires (triggered by project settings changes).
 
 ### Sidebar Conversation Grouping
 

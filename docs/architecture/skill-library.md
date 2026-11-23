@@ -223,7 +223,7 @@ Current catalog (registered in order):
 | `system:sheets` | `google_services` | Google Sheets reads (delegates to `api.sheets.get_instructions`) |
 | `system:slides` | `google_services` | Read-only Google Slides reads via `authed_get` (delegates to `api.slides.get_instructions`). See [Slides API](../api/slides-api.md) |
 | `system:tasks` | `google_services` | Google Tasks reads (delegates to `api.tasks.get_instructions`) |
-| `system:slack` | `slack` | Slack reads, `find_slack_channel`, `send_slack_dm_to_self` (self-DMs incl. workspace-file attachments), plus `send_slack_message` / `send_slack_dm` action-request spec (delegates to `api.slack.get_instructions`) |
+| `system:slack` | `slack` | Slack reads, `find_slack_channel`, `send_slack_dm_to_self` (self-DMs incl. workspace-file attachments), plus `send_slack_message` / `send_slack_dm` action-request spec (plugin-registered, from `plugins/slack/instructions.md`) |
 | `system:telegram` | `telegram` | Telegram reads plus `send_telegram_message` action-request spec (plugin-registered from `plugins/telegram`, content from its `instructions.md`) |
 | `system:twitter` | `twitter` | Twitter/X reads via `authed_get` plus `send_twitter_dm` action-request spec (plugin-registered from `plugins/twitter`, content from its `instructions.md`) |
 | `system:airtable` | `airtable` | Airtable reads (delegates to `api.airtable.get_instructions`) |
@@ -328,7 +328,7 @@ Rather than having each sub-agent independently resolve enabled skills from user
 
 ### User Settings UI
 
-The "Skills" section in `settings/SkillsSection.tsx` is a category nav item in the user SettingsModal alongside Data Connections, Memories, LLM Instructions, and Sign Out. It provides full skill management with a tabbed interface:
+The "Skills" section in `settings/SkillsSection.tsx` is a category nav item in the user SettingsModal alongside Data Connections and Memories. It provides full skill management with a tabbed interface:
 
 **Tab layout:** "My Skills" / "Shared with Me" tabs at the top of the section.
 
@@ -352,7 +352,7 @@ The "Skills" section in `settings/SkillsSection.tsx` is a category nav item in t
 
 ### Project Settings Skills UI
 
-The "Skills" section in `ProjectSettingsModal.tsx` renders the `ProjectSkillsSection` component (`frontend/src/components/ProjectSkillsSection.tsx`). The ProjectSettingsModal has been restructured with a sidebar navigation containing three sections: General (project name and guide), Skills, and Danger Zone (delete project). The modal is widened to accommodate the sidebar layout.
+The "Skills" section in `ProjectSettingsModal.tsx` renders the `ProjectSkillsSection` component (`frontend/src/components/ProjectSkillsSection.tsx`). The modal's other sections are listed in [Projects](projects.md).
 
 The `ProjectSkillsSection` component provides a three-tab interface:
 
@@ -437,7 +437,7 @@ In addition to auto-loaded skills (which apply to every conversation), users can
 
 ### Frontend UI
 
-A "+ Skill" button appears under the message input box in `ChatPanel.tsx`. Clicking it opens the `SkillSelectorModal`, which is modeled after `SearchModal.tsx` and uses `createPortal` for rendering.
+A "+ Skill" button appears under the message input box in `Composer.tsx`. Clicking it opens the `SkillSelectorModal`, which is modeled after `SearchModal.tsx` and uses `createPortal` for rendering.
 
 **SkillSelectorModal behavior:**
 
@@ -454,7 +454,7 @@ A "+ Skill" button appears under the message input box in `ChatPanel.tsx`. Click
 
 - `ConversationSkillsContext` maintains two per-conversation maps: `conversationQueuedSkills` (skills selected but not yet sent) and `conversationLoadedSkills` (skills already sent in a message)
 - When the user confirms skills in the modal, they are queued via `setQueuedSkillsForConversation()`
-- On the next message send, `ChatPanel` reads the queued skills, includes them as `skill_ids` in the persistent-WS `send_message` payload, then moves them from queued to loaded state
+- On the next message send, `Composer` reads the queued skills, includes them as `skill_ids` in the persistent-WS `send_message` payload, then moves them from queued to loaded state
 - On conversation load, `useConversation` hydrates the loaded skills set from the server via `fetchConversationLoadedSkills()`
 
 ### Backend Flow

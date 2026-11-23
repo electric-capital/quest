@@ -31,7 +31,7 @@ The UI at `/tables`: the sidebar Tables blocks, All Tables with its New Table di
 
 The sidebar shows the user's own user tables and, while drilled into a project, that project's tables, each block under its Docs block and capped at `SIDEBAR_TABLE_LIMIT`. All Tables combines the same three sources as All Docs, because `GET /tables` has no cross-project stream: "Your tables" and "Shared with you" are two server-paged `useTables` streams, and each project gets a group from `useProjectTablesIndex`, archived projects included. The project filter shows only that project's stream. New Table opens `NewTableDialog` ([Schema Editor](#schema-editor)), which `TablesListView` owns unless its host passes `onNewTable`.
 
-With no tables at all, or none in the filtered project, the view says in a line what a table is for and offers the same dialog; the sidebar block points at asking Quest. A public project's conversations cannot create tables (`_PUBLIC_TABLES_SECTION` in `chat/gemini_api/system_prompt.py`), so there neither one does: the view says only the user can create one, and the drill-down block, given the project's `public` flag (`publicProject`), points at the Tables view. A failed load, a single project's included, never reads as "no tables": both say it failed.
+With no tables at all, or none in the filtered project, the view says in a line what a table is for and offers the same dialog; the sidebar block points at asking Quest. In a public project neither one does: the view says only the user can create one, and the drill-down block, given the project's `public` flag (`publicProject`), points at the Tables view. A failed load, a single project's included, never reads as "no tables": both say it failed.
 
 ## Viewer
 

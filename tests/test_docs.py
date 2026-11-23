@@ -39,7 +39,7 @@ OVER_BUDGET_CEILINGS = {
     "docs/architecture/quest-docs.md": 8389,
     "docs/architecture/realtime.md": 7297,
     "docs/architecture/llm-providers.md": 7500,
-    "docs/architecture/skill-library.md": 6922,
+    "docs/architecture/skill-library.md": 6894,
     "docs/architecture/inference-providers.md": 7000,
 }
 
