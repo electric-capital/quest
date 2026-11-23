@@ -43,7 +43,6 @@ from types import ModuleType
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
 SESSION_LOCAL_MODULES = (
     "db.action_request_store",
@@ -135,17 +134,11 @@ def isolated_db(tmp_path, monkeypatch):
     )
     event.listen(async_engine.sync_engine, "connect", _set_sqlite_pragma)
     session_local = async_sessionmaker(async_engine, expire_on_commit=False)
-    sync_session_local = sessionmaker(
-        autocommit=False, autoflush=False, bind=engine,
-    )
 
     models_mod.Base.metadata.create_all(engine)
 
     real_session_local = engine_mod.AsyncSessionLocal
-    monkeypatch.setattr(engine_mod, "DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setattr(engine_mod, "ASYNC_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    monkeypatch.setattr(engine_mod, "engine", engine)
-    monkeypatch.setattr(engine_mod, "SessionLocal", sync_session_local)
     monkeypatch.setattr(engine_mod, "async_engine", async_engine)
     monkeypatch.setattr(engine_mod, "AsyncSessionLocal", session_local)
     for mod in store_modules:
