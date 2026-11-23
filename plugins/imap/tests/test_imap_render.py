@@ -370,7 +370,9 @@ class TestRobustness:
             msg.add_attachment(b"x", maintype="application", subtype="octet-stream",
                                filename=f"f{i}.bin")
         atts = list_attachments(parse_message(msg.as_bytes()))
-        assert 0 < len(atts) < 500
+        # MAX_PARTS visits: the multipart root, the body, then 498 attachments.
+        assert len(atts) == render.MAX_PARTS - 2
+        assert atts[-1].filename == f"f{render.MAX_PARTS - 3}.bin"
         assert [a.index for a in atts] == list(range(1, len(atts) + 1))
 
     def test_blank_plain_falls_back_to_html(self):
@@ -607,17 +609,6 @@ class TestReviewFixes:
         # Beyond MAX_DEPTH nothing is descended into: empty body, no attachments.
         assert body == "## Body\n\n_(empty body)_"
         assert section == "## Attachments\n\n_No attachments._"
-
-    def test_many_parts_exact_count(self):
-        msg = EmailMessage()
-        msg.set_content("body")
-        for i in range(800):
-            msg.add_attachment(b"x", maintype="application", subtype="octet-stream",
-                               filename=f"f{i}.bin")
-        atts = list_attachments(parse_message(msg.as_bytes()))
-        # MAX_PARTS visits: the multipart root, the body, then 498 attachments.
-        assert len(atts) == render.MAX_PARTS - 2
-        assert atts[-1].filename == f"f{render.MAX_PARTS - 3}.bin"
 
     def test_batch_errors_are_single_line(self):
         doc = render_batch_markdown([
