@@ -10,25 +10,99 @@ from api.gmail import (
 
 
 # ---------------------------------------------------------------------------
-# Unicode stripping tests
+# Input -> expected output, one case per rule
 # ---------------------------------------------------------------------------
 
-class TestZeroWidthCharactersRemoved:
-    """Test 1: Common zero-width characters are removed from text."""
+_MIXED_NEWLINES_IN = (
+    "# Newsletter Title\n\n"
+    "First paragraph of content.\n\n"
+    "Second paragraph.\n\n\n\n\n"
+    "Third paragraph after excessive newlines.\n\n"
+    "Fourth paragraph (double preserved).\n\n\n"
+    "Fifth paragraph after triple."
+)
+_MIXED_NEWLINES_OUT = (
+    "# Newsletter Title\n\n"
+    "First paragraph of content.\n\n"
+    "Second paragraph.\n\n"
+    "Third paragraph after excessive newlines.\n\n"
+    "Fourth paragraph (double preserved).\n\n"
+    "Fifth paragraph after triple."
+)
 
-    def test_common_zero_width_chars_removed(self):
-        text = "Hello\u200c \u200bWorld\u034f and\u00ad good\ufeff morning"
-        result = clean_email_markdown(text)
-        assert result == "Hello World and good morning"
 
-    def test_visible_text_preserved(self):
-        text = "Hello\u200cWorld"
-        result = clean_email_markdown(text)
-        assert result == "HelloWorld"
+def _unchanged(text: str, id: str):
+    return pytest.param(text, text, id=id)
+
+
+@pytest.mark.parametrize("text, expected", [
+    # Zero-width and other invisible characters are removed.
+    pytest.param(
+        "Hello\u200c \u200bWorld\u034f and\u00ad good\ufeff morning",
+        "Hello World and good morning",
+        id="common-zero-width-chars-removed",
+    ),
+    pytest.param("Hello\u200cWorld", "HelloWorld", id="visible-text-preserved"),
+    # ... including inside markdown structure, without breaking it.
+    pytest.param(
+        "[Click\u200c here](https://example.com)",
+        "[Click here](https://example.com)",
+        id="inside-link-text",
+    ),
+    pytest.param(
+        "![alt\u200b text](https://example.com/img.png)",
+        "![alt text](https://example.com/img.png)",
+        id="inside-image-alt",
+    ),
+    pytest.param("**bold\u034f text**", "**bold text**", id="inside-bold"),
+    pytest.param("*italic\u00ad text*", "*italic text*", id="inside-italic"),
+    pytest.param("# Heading\ufeff text", "# Heading text", id="inside-heading"),
+    # Normal text passes through unchanged.
+    _unchanged("Hello, world! This is a normal email.", "normal-ascii"),
+    _unchanged("Bonjour le monde! Привет мир! 你好世界!", "normal-unicode"),
+    _unchanged("Price: $19.99 — 50% off (limited time only)", "normal-punctuation"),
+    _unchanged("", "empty-string"),
+    # Runs of three or more newlines collapse to a paragraph break.
+    pytest.param("line1\n\n\nline2", "line1\n\nline2", id="triple-newlines"),
+    pytest.param("line1\n\n\n\n\n\nline2", "line1\n\nline2", id="six-newlines"),
+    pytest.param("line1" + "\n" * 10 + "line2", "line1\n\nline2", id="ten-newlines"),
+    # Paragraph breaks and single newlines are preserved.
+    _unchanged("line1\n\nline2", "double-newlines-preserved"),
+    _unchanged("para1\n\npara2\n\npara3", "multiple-paragraphs-preserved"),
+    _unchanged("line1\nline2", "single-newline-preserved"),
+    # Whitespace-only lines between newlines are collapsed.
+    pytest.param("line1\n \n \n \nline2", "line1\n\nline2", id="spaces-between-newlines"),
+    pytest.param("line1\n\t\n\t\n\t\nline2", "line1\n\nline2", id="tabs-between-newlines"),
+    pytest.param(
+        "line1\n \t \n\n \nline2", "line1\n\nline2",
+        id="mixed-whitespace-between-newlines",
+    ),
+    # Realistic email markdown with mixed newline situations.
+    pytest.param(_MIXED_NEWLINES_IN, _MIXED_NEWLINES_OUT, id="mixed-newline-sections"),
+    # Trailing spaces and tabs are stripped from every line.
+    pytest.param("line1   \nline2  \nline3", "line1\nline2\nline3", id="trailing-spaces"),
+    pytest.param("line1\t\nline2\t\t\nline3", "line1\nline2\nline3", id="trailing-tabs"),
+    pytest.param(
+        "line1 \t \nline2\t \nline3", "line1\nline2\nline3",
+        id="trailing-mixed-whitespace",
+    ),
+    # Unicode stripping and newline collapsing work together.
+    pytest.param(
+        "Hello\u200c World\n\n\n\n\nSecond\u200b paragraph\n\n\n\nThird\u034f line",
+        "Hello World\n\nSecond paragraph\n\nThird line",
+        id="combined-cleanup",
+    ),
+    pytest.param(
+        "Hello\u200c   \n\n\n\nWorld\u200b   ", "Hello\n\nWorld",
+        id="combined-with-trailing-whitespace",
+    ),
+])
+def test_clean_email_markdown(text, expected):
+    assert clean_email_markdown(text) == expected
 
 
 class TestAllTargetCharactersRemoved:
-    """Test 2: Every character in the strip list is removed."""
+    """Every character in the strip list is removed."""
 
     def test_all_target_characters_removed(self):
         # Build a string containing every invisible character between visible chars
@@ -47,195 +121,12 @@ class TestAllTargetCharactersRemoved:
         assert result == ""
 
 
-class TestNormalTextUnchanged:
-    """Test 3: Normal text without special characters passes through unchanged."""
-
-    def test_normal_ascii_text(self):
-        text = "Hello, world! This is a normal email."
-        assert clean_email_markdown(text) == text
-
-    def test_normal_unicode_text(self):
-        text = "Bonjour le monde! Привет мир! 你好世界!"
-        assert clean_email_markdown(text) == text
-
-    def test_text_with_normal_punctuation(self):
-        text = "Price: $19.99 — 50% off (limited time only)"
-        assert clean_email_markdown(text) == text
-
-
-class TestCharactersInsideMarkdownStructure:
-    """Test 4: Invisible chars inside markdown structure are removed without
-    breaking the structure."""
-
-    def test_inside_link_text(self):
-        text = "[Click\u200c here](https://example.com)"
-        result = clean_email_markdown(text)
-        assert result == "[Click here](https://example.com)"
-
-    def test_inside_image_alt(self):
-        text = "![alt\u200b text](https://example.com/img.png)"
-        result = clean_email_markdown(text)
-        assert result == "![alt text](https://example.com/img.png)"
-
-    def test_inside_bold(self):
-        text = "**bold\u034f text**"
-        result = clean_email_markdown(text)
-        assert result == "**bold text**"
-
-    def test_inside_italic(self):
-        text = "*italic\u00ad text*"
-        result = clean_email_markdown(text)
-        assert result == "*italic text*"
-
-    def test_inside_heading(self):
-        text = "# Heading\ufeff text"
-        result = clean_email_markdown(text)
-        assert result == "# Heading text"
-
-
-class TestEmptyStringInput:
-    """Test 5: Empty string returns empty string."""
-
-    def test_empty_string(self):
-        assert clean_email_markdown("") == ""
-
-    def test_none_like_empty(self):
-        # Empty string is falsy; the function should handle it
-        assert clean_email_markdown("") == ""
-
-
 # ---------------------------------------------------------------------------
-# Newline collapsing tests
+# End to end from HTML
 # ---------------------------------------------------------------------------
-
-class TestTripleNewlinesCollapse:
-    """Test 6: Triple newlines collapse to double."""
-
-    def test_triple_newlines(self):
-        text = "line1\n\n\nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-
-class TestManyNewlinesCollapse:
-    """Test 7: Many newlines collapse to double."""
-
-    def test_six_newlines(self):
-        text = "line1\n\n\n\n\n\nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-    def test_ten_newlines(self):
-        text = "line1" + "\n" * 10 + "line2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-
-class TestDoubleNewlinesPreserved:
-    """Test 8: Double newlines (paragraph breaks) are preserved."""
-
-    def test_double_newlines_preserved(self):
-        text = "line1\n\nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-    def test_multiple_paragraphs_preserved(self):
-        text = "para1\n\npara2\n\npara3"
-        result = clean_email_markdown(text)
-        assert result == "para1\n\npara2\n\npara3"
-
-
-class TestSingleNewlinesPreserved:
-    """Test 9: Single newlines are preserved."""
-
-    def test_single_newline_preserved(self):
-        text = "line1\nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\nline2"
-
-
-class TestWhitespaceOnlyLinesBetweenNewlines:
-    """Test 10: Whitespace-only lines between newlines are collapsed."""
-
-    def test_spaces_between_newlines(self):
-        text = "line1\n \n \n \nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-    def test_tabs_between_newlines(self):
-        text = "line1\n\t\n\t\n\t\nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-    def test_mixed_whitespace_between_newlines(self):
-        text = "line1\n \t \n\n \nline2"
-        result = clean_email_markdown(text)
-        assert result == "line1\n\nline2"
-
-
-class TestMixedNewlineContent:
-    """Test 11: Realistic email markdown with mixed newline situations."""
-
-    def test_mixed_newline_sections(self):
-        text = (
-            "# Newsletter Title\n\n"
-            "First paragraph of content.\n\n"
-            "Second paragraph.\n\n\n\n\n"
-            "Third paragraph after excessive newlines.\n\n"
-            "Fourth paragraph (double preserved).\n\n\n"
-            "Fifth paragraph after triple."
-        )
-        result = clean_email_markdown(text)
-        expected = (
-            "# Newsletter Title\n\n"
-            "First paragraph of content.\n\n"
-            "Second paragraph.\n\n"
-            "Third paragraph after excessive newlines.\n\n"
-            "Fourth paragraph (double preserved).\n\n"
-            "Fifth paragraph after triple."
-        )
-        assert result == expected
-
-
-class TestTrailingWhitespaceStripped:
-    """Test 12: Lines with trailing spaces/tabs have that whitespace removed."""
-
-    def test_trailing_spaces_stripped(self):
-        text = "line1   \nline2  \nline3"
-        result = clean_email_markdown(text)
-        assert result == "line1\nline2\nline3"
-
-    def test_trailing_tabs_stripped(self):
-        text = "line1\t\nline2\t\t\nline3"
-        result = clean_email_markdown(text)
-        assert result == "line1\nline2\nline3"
-
-    def test_trailing_mixed_whitespace_stripped(self):
-        text = "line1 \t \nline2\t \nline3"
-        result = clean_email_markdown(text)
-        assert result == "line1\nline2\nline3"
-
-
-# ---------------------------------------------------------------------------
-# Combined function tests
-# ---------------------------------------------------------------------------
-
-class TestBothCleanupsApplied:
-    """Test 13: Both Unicode stripping and newline collapsing work together."""
-
-    def test_combined_cleanup(self):
-        text = "Hello\u200c World\n\n\n\n\nSecond\u200b paragraph\n\n\n\nThird\u034f line"
-        result = clean_email_markdown(text)
-        assert result == "Hello World\n\nSecond paragraph\n\nThird line"
-
-    def test_combined_with_trailing_whitespace(self):
-        text = "Hello\u200c   \n\n\n\nWorld\u200b   "
-        result = clean_email_markdown(text)
-        assert result == "Hello\n\nWorld"
-
 
 class TestRealisticHtmlOutput:
-    """Test 14: Run realistic HTML through convert_html_to_markdown() then clean_email_markdown()."""
+    """Run realistic HTML through convert_html_to_markdown() then clean_email_markdown()."""
 
     def test_realistic_gmail_newsletter(self):
         # HTML representative of Gmail newsletters: hidden preview text with
