@@ -270,7 +270,9 @@ The handler's `enrich_params_for_preview()` hook resolves dialog names via `reso
 
 On success, the handler returns a result dict with `success`, `dialog_id`, and `message_id`. If the user's Telegram session is not connected or has expired, the handler raises a `RuntimeError` directing the user to connect via Settings.
 
-**Shared Drive plumbing** (`chat/action_request_types/_drive.py`): The two Drive-backed handlers share one module for the Drive API base constants, the `drive.file` scope check helpers, the reauth error message, Google API error extraction, the best-effort `_resolve_folder_name()` preview helper (a Drive `files.get` for the name, mirroring `_resolve_calendar_name` in `create_calendar_invite.py`; falls back to the raw id or "My Drive (root)"), and the `create_folder()` call (`files.create` with `_FOLDER_MIME_TYPE`, `supportsAllDrives=true`) used by both `create_drive_folder` and `upload_to_drive`'s on-the-fly folder path.
+**Shared Google checks** (`chat/action_request_types/_google.py`): `require_google_scope()` (connection and scope check opening `execute`), `_extract_google_api_error()`.
+
+**Shared Drive plumbing** (`chat/action_request_types/_drive.py`): The two Drive-backed handlers share one module for the Drive API base constants, the `drive.file` scope constant, the reauth error message, the best-effort `_resolve_folder_name()` preview helper (a Drive `files.get` for the name, mirroring `_resolve_calendar_name` in `create_calendar_invite.py`; falls back to the raw id or "My Drive (root)"), and the `create_folder()` call (`files.create` with `_FOLDER_MIME_TYPE`, `supportsAllDrives=true`) used by both `create_drive_folder` and `upload_to_drive`'s on-the-fly folder path.
 
 **`upload_to_drive` handler** (`UploadToDriveHandler` in `chat/action_request_types/upload_to_drive.py`): Uploads one or more workspace files to the user's Google Drive after a single approval, reusing the same multipart upload mechanism as the file-browser "Save to Drive" feature (`chat/file_routes.py:save_file_to_drive`) but uploading the **raw bytes** rather than converting markdown to a Google Doc.
 
@@ -301,8 +303,6 @@ The following all live at module scope:
 - cell normalization (`_normalize_cell`: `None` -> `""`, bools -> `TRUE`/`FALSE`, integral floats -> int repr)
 - the formula-aware cell comparison (`_cell_matches_live`: formula cells -- detected via the FORMULA rendering -- match only on formula text; plain cells match any of the three renderings with a `float()` equality fallback so `"1,234.50"` formatted reads match `1234.5` unformatted reads)
 - and the trailing-empty-cell padding the Sheets values API requires (`_pad_grid`)
-
-It reuses `_extract_google_api_error` / `_get_authorized_google_scopes` from `_drive.py`.
 
 **`send_slack_dm` handler** (legacy): Preserved for backward compatibility. Behaves identically to `send_slack_message` but accepts a `user_id` parameter instead of `channel_id`, targeting only DMs.
 

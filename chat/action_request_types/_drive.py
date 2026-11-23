@@ -14,6 +14,7 @@ from urllib.parse import quote
 import httpx
 
 from auth.google_credentials import make_authenticated_request
+from chat.action_request_types._google import _extract_google_api_error
 
 logger = logging.getLogger(__name__)
 
@@ -32,32 +33,6 @@ def _drive_reauth_message() -> str:
         "Google Drive write access requires reconnecting Google Services via "
         "Settings > Data Connections."
     )
-
-
-def _get_authorized_google_scopes(user: dict) -> set[str]:
-    google_services_oauth = user.get("google_services_oauth") or {}
-    return {scope for scope in google_services_oauth.get("scopes", []) if isinstance(scope, str)}
-
-
-def _extract_google_api_error(response: httpx.Response) -> str:
-    try:
-        payload = response.json()
-    except Exception:
-        return response.text or f"HTTP {response.status_code}"
-
-    error = payload.get("error")
-    if isinstance(error, dict):
-        message = error.get("message")
-        if message:
-            return str(message)
-        errors = error.get("errors")
-        if isinstance(errors, list) and errors:
-            first = errors[0]
-            if isinstance(first, dict) and first.get("message"):
-                return str(first["message"])
-    if isinstance(error, str):
-        return error
-    return response.text or f"HTTP {response.status_code}"
 
 
 async def _resolve_folder_name(folder_id: str, user: dict | None) -> str | None:

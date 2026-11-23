@@ -13,6 +13,7 @@ from dateutil import parser as dateutil_parser
 
 from auth.google_credentials import make_authenticated_request
 from chat.action_request_types.base import ActionRequestHandler
+from chat.action_request_types._google import _extract_google_api_error, require_google_scope
 from chat.action_request_types._param_validation import reject_unknown_params
 from db.models import ActionRequestType
 
@@ -41,32 +42,6 @@ def _calendar_reauth_message() -> str:
         "Google Calendar write access requires reconnecting Google Services via "
         "Settings > Data Connections."
     )
-
-
-def _get_authorized_google_scopes(user: dict) -> set[str]:
-    google_services_oauth = user.get("google_services_oauth") or {}
-    return {scope for scope in google_services_oauth.get("scopes", []) if isinstance(scope, str)}
-
-
-def _extract_google_api_error(response: httpx.Response) -> str:
-    try:
-        payload = response.json()
-    except Exception:
-        return response.text or f"HTTP {response.status_code}"
-
-    error = payload.get("error")
-    if isinstance(error, dict):
-        message = error.get("message")
-        if message:
-            return str(message)
-        errors = error.get("errors")
-        if isinstance(errors, list) and errors:
-            first = errors[0]
-            if isinstance(first, dict) and first.get("message"):
-                return str(first["message"])
-    if isinstance(error, str):
-        return error
-    return response.text or f"HTTP {response.status_code}"
 
 
 def _normalize_timezone(time_zone: object) -> str | None:
@@ -254,15 +229,7 @@ class CreateCalendarInviteHandler(ActionRequestHandler):
         conversation_id: str | None = None,
         project_id: str | None = None,
     ) -> dict:
-        google_services_oauth = user.get("google_services_oauth") or {}
-        if not google_services_oauth.get("access_token"):
-            raise RuntimeError(
-                "Google Services not connected. Please connect Google Services via "
-                "Settings > Data Connections."
-            )
-
-        if "https://www.googleapis.com/auth/calendar.events" not in _get_authorized_google_scopes(user):
-            raise RuntimeError(_calendar_reauth_message())
+        require_google_scope(user, "https://www.googleapis.com/auth/calendar.events", _calendar_reauth_message())
 
         body: dict = {
             "summary": params["summary"],

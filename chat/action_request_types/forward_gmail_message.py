@@ -39,9 +39,10 @@ import httpx
 from api.gmail.constants import GMAIL_API_BASE
 from api.gmail.helpers import extract_attachments, extract_headers
 from auth.google_credentials import make_authenticated_request
-from chat.action_request_types._drive import (
+from chat.action_request_types._google import (
+    GOOGLE_NOT_CONNECTED_MESSAGE,
     _extract_google_api_error,
-    _get_authorized_google_scopes,
+    require_google_scope,
 )
 from chat.action_request_types._param_validation import reject_unknown_params
 from chat.action_request_types.base import ActionRequestHandler
@@ -452,10 +453,7 @@ class ForwardGmailMessageHandler(ActionRequestHandler):
         """
         google_services_oauth = user.get("google_services_oauth") or {}
         if not google_services_oauth.get("access_token"):
-            raise ValueError(
-                "Google Services not connected. Please connect Google Services "
-                "via Settings > Data Connections."
-            )
+            raise ValueError(GOOGLE_NOT_CONNECTED_MESSAGE)
 
         url = f"{GMAIL_API_BASE}/users/me/messages/{quote(params['message_id'], safe='')}"
         try:
@@ -519,14 +517,7 @@ class ForwardGmailMessageHandler(ActionRequestHandler):
         conversation_id: str | None = None,
         project_id: str | None = None,
     ) -> dict:
-        google_services_oauth = user.get("google_services_oauth") or {}
-        if not google_services_oauth.get("access_token"):
-            raise RuntimeError(
-                "Google Services not connected. Please connect Google Services via "
-                "Settings > Data Connections."
-            )
-        if not (_SEND_SCOPES & _get_authorized_google_scopes(user)):
-            raise RuntimeError(_gmail_reauth_message())
+        require_google_scope(user, _SEND_SCOPES, _gmail_reauth_message())
 
         sender = user.get("email")
         if not sender:
