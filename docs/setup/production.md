@@ -359,6 +359,7 @@ default per-file upload limit; lower it under Settings > Limits to match.
 For a server with a public IP and your own certificates (Caddy obtains them automatically). Key
 requirements:
 - WebSocket support: must proxy `Upgrade` and `Connection` headers (Caddy handles this automatically)
+- Host header: pass the browser's `Host` through (`proxy_set_header Host $host` in Nginx; Caddy does by default) or set `app_base_url`, because the WebSocket accepts the session cookie only from its own origin ([Auth -- Session Cookies](../architecture/auth.md#session-cookies))
 - Read timeout: at least 5 minutes (`proxy_read_timeout 300s` in Nginx) for long-running model responses
 - Client body size: increase from default for file uploads to above the upload limit in Settings > Limits (`client_max_body_size 250M` in Nginx for the default)
 - HTTPS only: redirect port 80 to 443; set `app_base_url` to the `https://` URL as above

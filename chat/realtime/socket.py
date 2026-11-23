@@ -241,6 +241,62 @@ async def stream_endpoint(websocket: WebSocket, api_key: Optional[str] = None) -
 # ---------------------------------------------------------------------------
 
 
+def _netloc(value: str) -> str:
+    """Lower-cased ``host[:port]`` of a URL or bare host value, or ""."""
+    value = (value or "").strip().lower()
+    if not value:
+        return ""
+    if "://" in value:
+        from urllib.parse import urlsplit
+
+        return urlsplit(value).netloc
+    return value
+
+
+def _cookie_origin_allowed(websocket: WebSocket) -> bool:
+    """Whether the handshake's ``Origin`` may use the session cookie.
+
+    Browsers do not apply the same-origin policy to WebSocket handshakes,
+    and the ``SameSite=Lax`` session cookie still rides along from any
+    page on the same site (a sibling subdomain, another port on the same
+    host). Without this check such a page could open this socket as the
+    signed-in user and read their conversations or send on their behalf.
+
+    A handshake without an ``Origin`` header is not from a browser page
+    and is allowed (the cookie is not ambient there). Otherwise the
+    Origin's ``host[:port]`` must be this deployment's: the request's own
+    ``Host``, the ``X-Forwarded-Host`` a fronting proxy passed along, or
+    the configured ``app_base_url`` / ``oauth_hostname``. The scheme is
+    not compared, since TLS usually terminates in front of Quest. None of
+    these request headers can be set by a page's script.
+    """
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    origin_netloc = _netloc(origin)
+    if not origin_netloc:
+        # "null" (sandboxed frame, file://) or unparseable.
+        return False
+
+    allowed = {_netloc(websocket.headers.get("host", ""))}
+    for forwarded in websocket.headers.get("x-forwarded-host", "").split(","):
+        allowed.add(_netloc(forwarded))
+    try:
+        from config.server_config import get_app_base_url, load_server_config
+
+        allowed.add(_netloc(get_app_base_url()))
+        oauth_hostname = _netloc(load_server_config().get("oauth_hostname", ""))
+    except Exception:
+        logger.exception("[realtime] reading the configured public URL failed")
+        oauth_hostname = ""
+    allowed.discard("")
+    if origin_netloc in allowed:
+        return True
+    # ``oauth_hostname`` is a bare hostname shared by instances on
+    # different ports, so it is compared without the port.
+    return bool(oauth_hostname) and origin_netloc.rsplit(":", 1)[0] == oauth_hostname
+
+
 async def _authenticate(
     websocket: WebSocket, api_key: Optional[str],
 ) -> Optional[dict]:
@@ -248,6 +304,15 @@ async def _authenticate(
     user: Optional[dict] = None
 
     signed_cookie = websocket.cookies.get(COOKIE_NAME)
+    if signed_cookie and not _cookie_origin_allowed(websocket):
+        # Cross-origin page: the cookie is ambient, so it proves nothing.
+        # An explicit api_key below still authenticates.
+        logger.warning(
+            "[realtime] ignoring session cookie on a cross-origin WebSocket "
+            "handshake (origin=%r, host=%r)",
+            websocket.headers.get("origin"), websocket.headers.get("host"),
+        )
+        signed_cookie = None
     if signed_cookie:
         try:
             user = await get_user_from_cookie(signed_cookie)
