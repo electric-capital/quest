@@ -236,7 +236,7 @@ async def cancel_pending_wait_handles_for_conversation(
     so the run view shows it cancelled (the AutoProject page reads the handle).
     """
     from db import tool_wait_handle_store
-    from chat.realtime import bus, events as realtime_events
+    from chat.wait_handles.publish import publish_wait_handle_resolved
 
     cancelled = await tool_wait_handle_store.cancel_pending_for_conversation(
         user_id, conversation_id,
@@ -258,22 +258,15 @@ async def cancel_pending_wait_handles_for_conversation(
                 else None
             )
             request_id_int = int(request_id_str) if request_id_str else None
-            bus.publish_to_user(
-                user_id,
-                realtime_events.make_wait_handle_resolved(
-                    conversation_id=row["conversation_id"],
-                    handle_id=row["id"],
-                    kind=row.get("kind") or "",
-                    status=row["status"],
-                    request_id=request_id_int,
-                    response=row.get("response"),
-                ),
-            )
-        except Exception:
+        except (TypeError, ValueError):
             logger.debug(
-                "[session] publish wait_handle_resolved (cancelled) failed",
-                exc_info=True,
+                "[session] wait handle %s has a non-numeric action request id",
+                row.get("id"), exc_info=True,
             )
+            continue
+        publish_wait_handle_resolved(
+            user_id, row, response=row.get("response"), request_id=request_id_int,
+        )
 
 
 def invalidate_user_sessions(user_id: int) -> int:

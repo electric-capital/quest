@@ -107,8 +107,8 @@ async def resolve_caller_handle(
     response. Returns the updated handle row, or None when it was already
     resolved (timed out / cancelled) -- callers decide what that means.
     """
-    from chat.realtime import bus, events as realtime_events
     from chat.wait_handles import resume as wait_resume
+    from chat.wait_handles.publish import publish_wait_handle_resolved
     from db import tool_wait_handle_store
     from db.user_store import get_user_by_id
 
@@ -128,22 +128,11 @@ async def resolve_caller_handle(
         )
         return None
 
-    try:
-        bus.publish_to_user(
-            run["caller_user_id"],
-            realtime_events.make_wait_handle_resolved(
-                conversation_id=run["caller_conversation_id"],
-                handle_id=updated["id"],
-                kind=updated.get("kind") or "user_subagent",
-                status=updated["status"],
-                response=response,
-            ),
-        )
-    except Exception:
-        logger.debug(
-            "[user-subagent] publish wait_handle_resolved failed (run=%s)",
-            run["id"], exc_info=True,
-        )
+    publish_wait_handle_resolved(
+        run["caller_user_id"], updated,
+        response=response, default_kind="user_subagent",
+        conversation_id=run["caller_conversation_id"],
+    )
 
     caller = await get_user_by_id(run["caller_user_id"])
     if caller is None:

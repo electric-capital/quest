@@ -61,11 +61,10 @@ from chat.autoprojects.questions import (
     validate_answer,
 )
 from chat.gemini_api.session import remove_chat_session
-from chat.realtime import events as realtime_events
-from chat.realtime.bus import bus
 from chat.realtime.socket import cancel_conversation_runs
 from chat.storage import ChatStorage
 from chat.wait_handles import resume as wait_resume
+from chat.wait_handles.publish import publish_wait_handle_resolved
 from db import autoproject_store, tool_wait_handle_store, user_store
 from db.conversation_store import delete_abandoned_autoproject_conversations
 from db.models import ToolWaitHandleStatus
@@ -385,21 +384,9 @@ async def answer_question(
         conversation_id, handle_id, status=QUESTION_STATUS_ANSWERED, answer=answer,
     )
 
-    try:
-        bus.publish_to_user(
-            user["id"],
-            realtime_events.make_wait_handle_resolved(
-                conversation_id=conversation_id,
-                handle_id=updated["id"],
-                kind=HANDLE_KIND,
-                status=updated["status"],
-                response={"answer": answer},
-            ),
-        )
-    except Exception:
-        logger.debug(
-            "[autoproject_question] publish wait_handle_resolved failed", exc_info=True,
-        )
+    publish_wait_handle_resolved(
+        user["id"], updated, response={"answer": answer},
+    )
     # The AutoProject page changed (the question shows its answer); the list row did
     # not (the run is still waiting until its resume starts).
     try:

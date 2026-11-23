@@ -170,23 +170,12 @@ async def _flush_after(channel: str, thread_ts: str, delay: float) -> None:
         # already drove (or will drive) the resume.
         return
 
-    try:
-        from chat.realtime import bus, events as realtime_events
-        bus.publish_to_user(
-            handle["user_id"],
-            realtime_events.make_wait_handle_resolved(
-                conversation_id=updated["conversation_id"],
-                handle_id=updated["id"],
-                kind=updated.get("kind") or "slack_reply",
-                status=updated["status"],
-                response={"user_reply": collated, "posted_ts": posted_ts},
-            ),
-        )
-    except Exception:
-        logger.debug(
-            "[slack-runtime] publish wait_handle_resolved failed",
-            exc_info=True,
-        )
+    from chat.wait_handles.publish import publish_wait_handle_resolved
+    publish_wait_handle_resolved(
+        handle["user_id"], updated,
+        response={"user_reply": collated, "posted_ts": posted_ts},
+        default_kind="slack_reply",
+    )
 
     if _app_ref is None:
         logger.warning(

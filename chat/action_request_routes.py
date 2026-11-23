@@ -12,6 +12,7 @@ from chat.auth import get_current_user_cookie_or_apikey_checked
 from chat.action_request_types import get_handler, get_preview_for_request
 from chat.realtime import bus, events as realtime_events
 from chat.realtime.bus import publish_request_count_changed
+from chat.wait_handles.publish import publish_wait_handle_resolved
 from chat.storage import ChatStorage
 from chat.wait_handles import resume as wait_resume
 from db import conversation_store, tool_wait_handle_store
@@ -215,23 +216,10 @@ async def _resolve_linked_wait_handle(
             user_id=user_id,
         )
         if updated is not None:
-            try:
-                bus.publish_to_user(
-                    user_id,
-                    realtime_events.make_wait_handle_resolved(
-                        conversation_id=updated["conversation_id"],
-                        handle_id=updated["id"],
-                        kind=updated.get("kind") or "action_request",
-                        status=updated["status"],
-                        request_id=request_id,
-                        response=response,
-                    ),
-                )
-            except Exception:
-                logger.debug(
-                    "[action_request] publish wait_handle_resolved failed",
-                    exc_info=True,
-                )
+            publish_wait_handle_resolved(
+                user_id, updated,
+                response=response, default_kind="action_request", request_id=request_id,
+            )
             if kick_resume:
                 try:
                     wait_resume.maybe_kick_resume(
