@@ -22,7 +22,7 @@ All work lands on `main` through pull requests -- never commit directly to `main
 - `tests/migration_support.py` -- The `deployment` fixture behind the `tests/test_*_migration.py` end-to-end Alembic tests: a prod-mode deployment in a temp data dir (env, `config.paths`, encryption key cache, ORM store bindings) that `alembic.command` runs against in the test process; the module docstring has the mechanics
 - `tests/authed_get_support.py` -- `mock_httpx_client()`, the recording stand-in for `httpx.AsyncClient` shared by the core and plugin suites that drive `_make_authed_request`
 - `conftest.py` (repo root) -- Pytest hook that also collects out-of-tree plugin test suites from `QUEST_PLUGIN_PATH` roots
-- `pyproject.toml` -- Dev dependency group includes `pytest>=8.0.0`
+- `pyproject.toml` -- Dev dependency group includes `pytest`, `pytest-xdist` and `pytest-timeout`; `[tool.pytest.ini_options]` sets the per-test timeout
 
 ## Syntax Checking
 
@@ -49,6 +49,12 @@ Pytest's `testpaths` (pyproject.toml) covers both `tests/` and `plugins/`, so a 
 ### Running in parallel
 
 `uv run pytest -n auto` runs the suite across one worker process per CPU core with [pytest-xdist](https://pytest-xdist.readthedocs.io/) (dev dependency group); CI uses it. A bare `uv run pytest` stays serial (`-n` is not in `addopts`), so `--durations`, `-x` and debugger sessions behave as usual. xdist requires every worker to collect the same test ids, so a `parametrize` whose values are computed at import time (bytes carrying a timestamp, `uuid4()`, random data) needs explicit `ids=[...]`; `tests/test_image_sanitizer.py` shows the pattern.
+
+### Stuck tests
+
+A test that is still running after 120 seconds is failed by [pytest-timeout](https://github.com/pytest-dev/pytest-timeout) (dev dependency group; `timeout` in pyproject.toml): the failure names the test and prints the stack of every thread, and the rest of the run carries on, under xdist too. The limit is far above the slowest test, so it only fires on a test that is blocked. A test that needs longer sets its own limit with `@pytest.mark.timeout(<seconds>)`; `-o timeout=0` switches the limit off for a debugger session. The backend CI job additionally has `timeout-minutes: 20` as a backstop for a stall outside any single test.
+
+A test that types into a pty must wait until the code under test has switched the terminal mode before it writes: a mode switch with `TCSAFLUSH` discards input that arrived earlier, and the read then blocks forever. `_wait_until_reading()` in `tests/test_encryption.py` shows the pattern.
 
 ### Database-backed tests
 
