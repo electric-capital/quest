@@ -10,9 +10,9 @@ Tool definitions are maintained in a single, provider-agnostic format (JSON Sche
 
 ## LLMProvider Interface
 
-The `LLMProvider` abstract base class in `chat/llm/base.py` defines the contract that each provider must implement. Key methods include `create_session()`, `send_message_stream()`, `format_tool_results()`, `get_usage()`, `save_history()`/`load_history()`, `upload_file()`/`make_file_part()`, `make_text_part()`, `inject_turn_warning()`, `get_pending_tool_uses()`, `get_pending_tool_use_args()`, and `append_user_text()`.
+The `LLMProvider` abstract base class in `chat/llm/base.py` defines the contract that each provider must implement. Key methods include `create_session()`, `send_message_stream()`, `format_tool_results()`, `get_usage()`, `save_history()`/`load_history()`, `upload_file()`/`make_file_part()`, `make_text_part()`, `inject_turn_warning()`, `get_pending_tool_use_args()`, and `append_user_text()`.
 
-`get_pending_tool_use_args()` returns `(tool_id, tool_name, args)` tuples for tool_use blocks on the last assistant turn that have no matching tool_result (`get_pending_tool_uses()` is the older `(tool_id, tool_name)`-only form); `append_user_text()` appends a provider-appropriate text block to a formatted tool-results list. Both are used by the resume bucket logic at the top of `run_conversation_turn()` to close dangling tool_uses without isinstance branching -- see [Slack Socket Mode -- Restart Resilience](slack-socket-mode.md#restart-resilience) and [Wait Handles -- Suspend / Resume](wait-handles.md#suspend--resume).
+`get_pending_tool_use_args()` returns `(tool_id, tool_name, args)` tuples for tool_use blocks on the last assistant turn that have no matching tool_result; `append_user_text()` appends a provider-appropriate text block to a formatted tool-results list. Both are used by the resume bucket logic at the top of `run_conversation_turn()` to close dangling tool_uses without isinstance branching -- see [Slack Socket Mode -- Restart Resilience](slack-socket-mode.md#restart-resilience) and [Wait Handles -- Suspend / Resume](wait-handles.md#suspend--resume).
 
 The cancel-time helper `_save_interrupted_sdk_history()` no longer uses these methods -- it walks the on-disk envelope shape directly. See `chat/llm/base.py` for the full abstract method signatures and their docstrings.
 

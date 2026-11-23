@@ -293,11 +293,11 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
-    def get_pending_tool_uses(self, session: Any) -> list[tuple[str, str]]:
+    def get_pending_tool_use_args(self, session: Any) -> list[tuple[str, str, dict]]:
         """Return pending tool_use blocks on the last assistant turn.
 
-        Returns ``[(tool_id, tool_name), ...]`` for tool_use blocks in the
-        last assistant message of the session that have no matching
+        Returns ``[(tool_id, tool_name, args), ...]`` for tool_use blocks
+        in the last assistant message of the session that have no matching
         tool_result in a later message.
 
         Used by the conversation resume path: when a Slack-driven run is
@@ -305,25 +305,9 @@ class LLMProvider(ABC):
         the loaded session ends on an assistant turn whose tool_use has no
         matching tool_result. The caller formats the user's next message
         as a tool_result closing those tool_uses, so the resumed API call
-        has the required user(tool_result) -> assistant alternation.
-
-        Args:
-            session: Session object to inspect.
-
-        Returns:
-            A list of (tool_id, tool_name) tuples; empty when there are
-            no dangling tool_use blocks (the normal case).
-        """
-        ...
-
-    @abstractmethod
-    def get_pending_tool_use_args(self, session: Any) -> list[tuple[str, str, dict]]:
-        """Return pending tool_use blocks with their arguments.
-
-        Same shape as ``get_pending_tool_uses`` but also returns each
-        tool_use's argument dict. The resume path needs the args of a
-        dangling ``wait_for_handles`` call to know which handle ids to
-        re-query from the DB.
+        has the required user(tool_result) -> assistant alternation. The
+        args of a dangling ``wait_for_handles`` call tell it which handle
+        ids to re-query from the DB.
 
         Args:
             session: Session object to inspect.
