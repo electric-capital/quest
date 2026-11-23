@@ -1091,6 +1091,10 @@ async def admin_update_service_credentials(
     ``required_if`` enforced, empty secret keeps the stored one). Starts
     from the currently effective config (store first, then the legacy
     location) so unrecognized stored keys survive a save.
+
+    An optional ``clear`` list of field keys removes those optional
+    secrets from the stored config; it is not a credential field and is
+    split off the body before validation.
     """
     _require_admin(user)
     from config.service_credentials import write_service_credentials
@@ -1106,8 +1110,10 @@ async def admin_update_service_credentials(
             },
         )
     existing, _source = _effective_service_credentials(service)
+    values = dict(body)
+    clear = values.pop("clear", None)
     try:
-        stored = resolve_update(spec, body, existing)
+        stored = resolve_update(spec, values, existing, clear=clear)
     except ValueError as exc:
         raise HTTPException(
             status_code=400,

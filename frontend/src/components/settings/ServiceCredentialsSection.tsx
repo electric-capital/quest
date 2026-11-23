@@ -100,6 +100,26 @@ function storedSecretKeys(detail: ServiceCredentialDetail): string[] {
     .map((field) => field.key);
 }
 
+/** Masked previews the server sent for stored secrets (`<key>_preview`). */
+function secretPreviews(detail: ServiceCredentialDetail): Record<string, string> {
+  const previews: Record<string, string> = {};
+  for (const field of detail.fields) {
+    const preview = detail.credentials[`${field.key}_preview`];
+    if (field.type === 'secret' && typeof preview === 'string' && preview) previews[field.key] = preview;
+  }
+  return previews;
+}
+
+/** Stored secret keys whose field is optional (no `required`, and no
+ * `required_if` that could make it required), so the admin may remove them.
+ * The server stays the judge for custom stored shapes. */
+function removableSecretKeys(detail: ServiceCredentialDetail): string[] {
+  return storedSecretKeys(detail).filter((key) => {
+    const field = detail.fields.find((f) => f.key === key);
+    return field !== undefined && !field.required && !field.required_if;
+  });
+}
+
 /**
  * One service's credential form, rendered entirely from the backend's
  * CredentialFieldSchema list -- core services and plugins share this
@@ -119,6 +139,8 @@ function CredentialForm({
   const [values, setValues] = useState<SchemaFormValues>(() => formToValues(detail));
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState('');
+  // Optional secrets marked for removal; sent as `clear` on save.
+  const [pendingRemoval, setPendingRemoval] = useState<string[]>([]);
   const statusTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -131,11 +153,18 @@ function CredentialForm({
     setValues((prev) => ({ ...prev, [key]: value }));
   }, []);
 
+  const handleRemoveSecret = useCallback((key: string, remove: boolean) => {
+    setPendingRemoval((prev) => (remove ? [...prev.filter((k) => k !== key), key] : prev.filter((k) => k !== key)));
+    // A value typed before marking removal must not be sent with it.
+    if (remove) setValues((prev) => ({ ...prev, [key]: '' }));
+  }, []);
+
   const handleSave = useCallback(async () => {
     setSaveStatus('saving');
     setSaveError('');
     try {
-      const updated = await updateServiceCredentials(detail.service, values);
+      const payload = pendingRemoval.length > 0 ? { ...values, clear: pendingRemoval } : values;
+      const updated = await updateServiceCredentials(detail.service, payload);
       onSaved(updated);
     } catch (error) {
       console.error(`Failed to save ${detail.service} credentials:`, error);
@@ -144,7 +173,7 @@ function CredentialForm({
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 4000);
     }
-  }, [detail.service, values, onSaved]);
+  }, [detail.service, values, pendingRemoval, onSaved]);
 
   // Required text fields must be filled before saving; required secrets are
   // left to the server (an empty value may legitimately keep a stored one).
@@ -165,6 +194,10 @@ function CredentialForm({
         onChange={setValue}
         idPrefix={`svc-cred-${detail.service}`}
         storedSecrets={storedSecretKeys(detail)}
+        secretPreviews={secretPreviews(detail)}
+        removableSecrets={removableSecretKeys(detail)}
+        pendingRemoval={pendingRemoval}
+        onRemoveSecret={handleRemoveSecret}
       />
       <div className="svc-cred-form-actions">
         <SaveActions

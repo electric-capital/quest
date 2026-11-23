@@ -3008,8 +3008,10 @@ export interface ConnectionFormField extends SchemaFormField {
 
 // Masked form values keyed by field key: text/textarea fields round-trip
 // verbatim, bool fields are booleans, secret fields appear only as
-// `<key>_set` booleans (the server never returns secrets), list fields are
-// arrays of entry objects in the same masked form.
+// `<key>_set` booleans plus, for a long non-password secret, a masked
+// `<key>_preview` string (first and last four characters; the server never
+// returns a whole secret), list fields are arrays of entry objects in the
+// same masked form.
 export type ServiceCredentialForm = Record<string, string | boolean | SchemaFormItem[]>;
 
 export interface ServiceCredentialDetail extends ServiceCredentialSummary {
@@ -3023,7 +3025,8 @@ export interface ServiceCredentialsListResponse {
 
 // Generic PUT body: flat {field key: value}. An empty secret value keeps
 // the currently stored one; a list field is sent as its full entry array.
-export type ServiceCredentialUpdate = Record<string, string | boolean | SchemaFormItem[]>;
+// `clear` lists optional secret keys to remove from the stored config.
+export type ServiceCredentialUpdate = Record<string, string | boolean | string[] | SchemaFormItem[]>;
 
 // Admin inference providers (LLM backend credentials/config)
 
