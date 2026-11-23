@@ -37,15 +37,14 @@ from dateutil import parser as dateutil_parser
 
 from auth.google_credentials import make_authenticated_request
 from chat.action_request_types.base import ActionRequestHandler
+from chat.action_request_types._google import _extract_google_api_error, require_google_scope
 from chat.action_request_types._param_validation import reject_unknown_params
 from chat.action_request_types._skill_content_edit import build_content_diff
 from chat.action_request_types.create_calendar_invite import (
     CALENDAR_API_BASE,
     _EMAIL_RE,
     _calendar_reauth_message,
-    _extract_google_api_error,
     _format_preview_datetime,
-    _get_authorized_google_scopes,
     _normalize_timezone,
     _parse_event_datetime,
     _resolve_calendar_name,
@@ -594,14 +593,7 @@ class EditCalendarEventHandler(ActionRequestHandler):
         conversation_id: str | None = None,
         project_id: str | None = None,
     ) -> dict:
-        google_services_oauth = user.get("google_services_oauth") or {}
-        if not google_services_oauth.get("access_token"):
-            raise RuntimeError(
-                "Google Services not connected. Please connect Google Services via "
-                "Settings > Data Connections."
-            )
-        if CALENDAR_EVENTS_SCOPE not in _get_authorized_google_scopes(user):
-            raise RuntimeError(_calendar_reauth_message())
+        require_google_scope(user, CALENDAR_EVENTS_SCOPE, _calendar_reauth_message())
 
         # Re-read the live event: the card may have sat open while the
         # event changed underneath it.
