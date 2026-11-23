@@ -44,8 +44,11 @@ describe('AutoProjectQuestionCard', () => {
     expect(screen.getByText('Q3')).toBeTruthy();
     expect(screen.queryByRole('group', { name: 'Suggested answers' })).toBeNull();
     expect(onAnswered).toHaveBeenCalledTimes(1);
-    // The clicked option unmounted: the card keeps focus.
-    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Question' }));
+    // The clicked option unmounted: the card keeps focus. It takes it in an
+    // effect after the answer renders (outside act()), so wait for it.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Question' })),
+    );
   });
 
   it('locks every option while one is being sent', async () => {

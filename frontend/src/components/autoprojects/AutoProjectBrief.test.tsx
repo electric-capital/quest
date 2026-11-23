@@ -139,8 +139,12 @@ describe('AutoProjectBriefEditor', () => {
     fireEvent.click(saveButton());
     expect(mocks.putAutoProjectBrief).toHaveBeenCalledWith('ap1', 'New brief', 3);
     await waitFor(() => expect(onBrief).toHaveBeenCalledWith({ brief: 'New brief', brief_version: 4 }));
+    // The save resolves outside act(), so the editor closing and the effect
+    // that then puts focus back on Edit land a tick or two later: wait for it.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit brief' })),
+    );
     expect(screen.queryByLabelText('Edit brief (markdown)')).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit brief' }));
   });
 
   it('shows the newer brief above the untouched draft on a 409 and saves against it next', async () => {
