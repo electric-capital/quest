@@ -276,11 +276,17 @@ async def _drive_run(run: dict, initial_message: Optional[str]) -> None:
                     run["id"], event.get("type"), exc_info=True,
                 )
 
+        # Headless runs are driven with a blank ``api_key``, the same way
+        # chat/inference_api.py drives its runs: in-process tools
+        # authenticate from the user dict itself, and run_script/run_python
+        # containers get a per-run sandbox token minted from ``user["id"]``.
+        run_user = {**target, "api_key": ""}
+
         message = initial_message if initial_message is not None else ""
         for attempt in range(_MAX_RETURN_NUDGES + 1):
             await run_conversation_turn(
                 app=_app_ref,
-                user=target,
+                user=run_user,
                 message=message,
                 conversation_id=conversation_id,
                 timezone=user_tz,
