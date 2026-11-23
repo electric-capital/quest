@@ -9,7 +9,7 @@ Quest integrates with Slack using a two-tier token architecture: a shared bot to
 - Settings > Service Credentials (admin) -- Slack card managing `client_id`, `client_secret`, and the optional `bot_token` / `socket_mode_token` in the per-service credential store; see [Service Credentials](../../../docs/architecture/service-credentials.md)
 - `server_credentials.json` -- legacy `slack` section, used as a fallback when the store has nothing
 - `server_credentials.example.json` -- Template showing the legacy file structure
-- `auth/config.py` -- `load_slack_client_config()`, `load_slack_bot_token()`, `load_slack_socket_mode_token()`, Slack OAuth scope constants
+- `auth/config.py` -- `load_slack_client_config()`, `load_slack_bot_token()`, `load_slack_socket_mode_token()`
 - `plugins/slack/oauth.py` -- OAuth callback handling, token storage
 - `plugins/slack/upstream.py` -- Slack Web API helpers: `_get_slack_client()` shared connection pool, `resolve_team_id()` for E-prefix to T-prefix resolution, `_slack_request_with_retry()` retry helper
 - `db/user_service_credential_store.py` -- Manages the per-user `slack` row (`oauth_blob`) in `user_service_credentials`
@@ -21,7 +21,7 @@ Quest integrates with Slack using a two-tier token architecture: a shared bot to
 ## Credential Configuration
 
 A Slack app must be created at api.slack.com/apps. The app needs:
-- **User token scopes** for read/write operations (defined in `auth/config.py`)
+- **User token scopes** for read/write operations (`SLACK_USER_SCOPES` in `plugins/slack/upstream.py`)
 - **Bot token scopes**: `chat:write` (bot-sent DMs), plus `files:write` and `im:write` (file attachments on `send_slack_dm_to_self` self-DMs: the upload flow and its `conversations.open` DM-channel lookup). Add `im:history` and `im:read` when enabling Socket Mode (see below)
 - **Redirect URL**: `http://localhost:8000/auth/slack/callback` (dev) or `https://your-domain.com/auth/slack/callback` (production)
 
@@ -51,7 +51,7 @@ Only one process can hold a Socket Mode connection per App-Level Token. When mul
 
 ### Per-User Token
 
-- Stored as `slack_oauth` JSON column in `users` table (`data/quest.db`), managed via `db/user_store.py`
+- Stored in the `oauth_blob` of the user's `slack` row in `user_service_credentials` (`data/quest.db`), managed via `db/user_service_credential_store.py`
 - Fields: `access_token`, `default_team_id`, `user_id`, `authorized_at`
 - Used for: read operations (search, channels, history, users), channel search via `find_slack_channel` LLM tool, user-initiated writes via `send_slack_message` action requests
 
@@ -63,7 +63,7 @@ For org-level installs, `auth.test` returns an Enterprise ID (E-prefix) instead 
 
 ## Connector Status
 
-Connected when `slack_oauth` contains an `access_token` field. Checked in `get_user_connected_services()` in `api/instructions.py`, `get_current_user_info()` in `chat/routes/user.py`, and `get_connectors()` in `chat/routes/user.py`.
+Connected when the row's `oauth_blob` contains an `access_token` field (`slack_connected()` in `plugins/slack/upstream.py`). Checked in `get_user_connected_services()` in `api/instructions.py` and `get_connectors()` in `chat/routes/user.py`.
 
 ## Message Attribution
 
@@ -77,7 +77,7 @@ The bot token represents the Slack app installation, not an individual user. Ins
 **Why store default_team_id per user?**
 In org-level installs, API methods require a `team_id` parameter. The `default_team_id` (from `auth.test` during OAuth) serves as the default workspace so users don't specify `team_id` on every request.
 
-**Why check `access_token` instead of just `slack_oauth` presence?**
+**Why check `access_token` instead of just the row's presence?**
 Ensures only users who completed the OAuth flow (with a valid token) are considered connected.
 
 **Why does `find_slack_channel` call `auth.teams.list` directly instead of `resolve_team_id()`?**
