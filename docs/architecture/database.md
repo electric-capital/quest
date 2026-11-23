@@ -344,29 +344,15 @@ The long-context flag (per-call context above the model's tier threshold -- `LON
 
 ## Engine and Sessions
 
-`db/engine.py` provides two engines that share the same SQLite database file (path from `DATABASE_PATH` in `config/paths.py`, defaults to `data/quest.db`):
-
-### Sync Engine
-
-Not used by the app: every store module uses the async engine, and Alembic builds its own engine in `alembic/env.py`.
-
-- **`engine`**: `create_engine("sqlite:///...")` with `check_same_thread=False` (required for FastAPI's threaded request handling)
-- **Connect PRAGMAs**: `@event.listens_for(engine, "connect")` (`_set_sqlite_pragma`) runs the per-connection PRAGMAs described in [Connection PRAGMAs](#connection-pragmas) on every new DBAPI connection
-- **`SessionLocal`**: `sessionmaker` factory with `autocommit=False`, `autoflush=False`
-- **`get_db()`**: FastAPI dependency that yields a sync `Session` and closes it in a `finally` block
-
-### Async Engine
-
-Used by all store modules and their FastAPI endpoint callers. Every store function is `async` and uses `AsyncSessionLocal`.
+`db/engine.py` provides one async engine on the SQLite database file (path from `DATABASE_PATH` in `config/paths.py`, defaults to `data/quest.db`). All store modules and their FastAPI endpoint callers use it; every store function is `async` and uses `AsyncSessionLocal`. Alembic does not use this module: it builds its own sync engine in `alembic/env.py`.
 
 - **`async_engine`**: `create_async_engine("sqlite+aiosqlite:///...")` -- uses the `aiosqlite` driver for non-blocking I/O. The pool is tuned explicitly (the `pool_size` / `max_overflow` / `pool_timeout` arguments on `async_engine`); for a file-based aiosqlite URL SQLAlchemy uses `AsyncAdaptedQueuePool`, so these settings are honored. The pool governs how many concurrent read sessions can be open before callers queue (sized above SQLAlchemy's default to accommodate FastAPI endpoints + the scheduler daemon + the Slack worker sharing the engine); writes still serialize at SQLite's single-writer lock regardless of pool size. See the comments in `db/engine.py` for the rationale
-- **Connect PRAGMAs**: `@event.listens_for(async_engine.sync_engine, "connect")` (`_set_sqlite_pragma_async`) runs the same per-connection PRAGMAs (see [Connection PRAGMAs](#connection-pragmas)). The listener is attached to `.sync_engine` because SQLAlchemy async engines delegate connection events to the underlying sync engine
+- **Connect PRAGMAs**: `@event.listens_for(async_engine.sync_engine, "connect")` (`_set_sqlite_pragma`) runs the per-connection PRAGMAs (see [Connection PRAGMAs](#connection-pragmas)). The listener is attached to `.sync_engine` because SQLAlchemy async engines delegate connection events to the underlying sync engine
 - **`AsyncSessionLocal`**: `async_sessionmaker` factory with `expire_on_commit=False`
-- **`get_async_db()`**: FastAPI dependency that yields an `AsyncSession` via `async with AsyncSessionLocal() as db`
 
 ### Connection PRAGMAs
 
-Both engines' connect listeners (`_set_sqlite_pragma` / `_set_sqlite_pragma_async` in `db/engine.py`) set the same four PRAGMAs on every new DBAPI connection:
+The connect listener (`_set_sqlite_pragma` in `db/engine.py`) sets four PRAGMAs on every new DBAPI connection:
 
 - `PRAGMA foreign_keys=ON` -- enforces the schema's `ON DELETE CASCADE` / `SET NULL` constraints (SQLite does not enforce FKs by default)
 - `PRAGMA journal_mode=WAL` -- lets readers proceed concurrently with a single writer (the default rollback journal blocks readers during a write). This setting persists in the DB file
@@ -423,10 +409,10 @@ SQLite has no `ALTER COLUMN`, so a type or nullability change takes `batch_alter
 ## Design Decisions
 
 **Why SQLite instead of PostgreSQL?**
-SQLite requires no separate database server, fits the single-server deployment model, and the database file lives alongside the rest of the `data/` directory. The user table is small (tens of users for an internal tool) so SQLite's write lock is not a concern. If the project scales to multiple servers, PostgreSQL can be swapped by changing `DATABASE_URL` in `db/engine.py` and `alembic.ini`.
+SQLite requires no separate database server, fits the single-server deployment model, and the database file lives alongside the rest of the `data/` directory. The user table is small (tens of users for an internal tool) so SQLite's write lock is not a concern. If the project scales to multiple servers, PostgreSQL can be swapped by changing `ASYNC_DATABASE_URL` in `db/engine.py` and the URL Alembic uses (`alembic/env.py`, `alembic.ini`).
 
-**Why a dual sync/async engine even though all stores are async?**
-The async engine (`sqlite+aiosqlite`) avoids blocking the asyncio event loop during database I/O, which matters for stores called from FastAPI async endpoints and from the conversation loop. Every `db/*_store.py` module uses `AsyncSessionLocal`. Alembic, which only supports sync engines, creates its own in `alembic/env.py` and sets the pragma there. Both `db/engine.py` engines share the same database file and the same `PRAGMA foreign_keys=ON` enforcement.
+**Why an async engine, and a separate sync one for Alembic?**
+The async engine (`sqlite+aiosqlite`) avoids blocking the asyncio event loop during database I/O, which matters for stores called from FastAPI async endpoints and from the conversation loop. Every `db/*_store.py` module uses `AsyncSessionLocal`. Alembic, which only supports sync engines, creates its own in `alembic/env.py` and sets the pragma there, on the same database file.
 
 **Why SQLAlchemy ORM instead of raw SQL?**
 The ORM provides type-safe column definitions, automatic JSON serialization for token columns, and a clean migration path via Alembic autogenerate. The `User` model serves as the single source of truth for the schema.
@@ -503,9 +489,8 @@ Per-turn granularity allows distinguishing top-level agent usage from sub-agent 
 ## Constraints
 
 - The SQLite database must exist and have the correct schema before the server starts. In production, `run.py` handles this via `alembic upgrade head`. In development, run `uv run alembic upgrade head` after pulling schema changes.
-- SQLAlchemy's `check_same_thread=False` is required on the sync engine because FastAPI processes requests across threads. This is safe for the read-heavy, low-write workload of user account and memory management.
 - The async engine requires the `aiosqlite` driver (`sqlite+aiosqlite://` URL scheme). This is a Python dependency managed in `pyproject.toml`.
-- SQLite foreign key enforcement (`PRAGMA foreign_keys=ON`) is set on every connection for both the sync engine and async engine via event listeners in `db/engine.py`, and explicitly in `alembic/env.py` for migrations. Without this, `ON DELETE CASCADE` and `ON DELETE SET NULL` constraints are silently ignored by SQLite. This is a per-connection setting, not a persistent database property.
+- SQLite foreign key enforcement (`PRAGMA foreign_keys=ON`) is set on every connection of the async engine via the event listener in `db/engine.py`, and explicitly in `alembic/env.py` for migrations. Without this, `ON DELETE CASCADE` and `ON DELETE SET NULL` constraints are silently ignored by SQLite. This is a per-connection setting, not a persistent database property.
 - The `api_key` unique index means API key collisions will raise an `IntegrityError`. The key generation function produces cryptographically random keys, making collisions effectively impossible.
 - Memory content is capped by `MAX_MEMORY_SIZE` in `db/memory_store.py`, enforced at both the data access layer and the API validation layer (`chat/memory_routes.py`).
 - The `memories_fts` virtual table and its sync triggers must exist for search to work. They are created by the Alembic migration `94c49d92fea7`.

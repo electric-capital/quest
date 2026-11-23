@@ -390,7 +390,7 @@ What to back up:
 ## Scaling Considerations
 
 - Multiple uvicorn workers (`--workers N`, rule of thumb: `2 * CPU cores + 1`) can improve throughput but complicate WebSocket connection management
-- Database scaling: migrate SQLite to PostgreSQL by changing `DATABASE_URL` in `db/engine.py` and `alembic.ini`
+- Database scaling: migrate SQLite to PostgreSQL by changing `ASYNC_DATABASE_URL` in `db/engine.py` and the URL Alembic uses (`alembic/env.py`, `alembic.ini`)
 - Connection pooling: Slack proxy already uses a shared `httpx.AsyncClient` with pooling in `plugins/slack/upstream.py`
 
 ## Design Decisions

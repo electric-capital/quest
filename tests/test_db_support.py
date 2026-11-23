@@ -25,7 +25,6 @@ def test_every_listed_module_shares_the_test_session_factory(isolated_db):
         mod = importlib.import_module(name)
         assert mod.AsyncSessionLocal is isolated_db.AsyncSessionLocal, name
     assert engine_mod.AsyncSessionLocal is isolated_db.AsyncSessionLocal
-    assert engine_mod.engine is isolated_db.engine
     from config import paths
 
     assert paths.DATABASE_PATH == isolated_db.path
