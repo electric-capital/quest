@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
-from db.project_store import get_project
+from chat.conversation_access import require_owned_project
 from db.skill_store import (
     create_skill,
     list_project_skills,
@@ -73,12 +73,7 @@ async def list_skills_for_project(
     """List all project-specific skills for a project."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     if project.get("public"):
         # Public projects have no skills by construction; return empty
@@ -98,12 +93,7 @@ async def create_skill_for_project(
     """Create a new skill in a project."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     _reject_public_project(project)
 
@@ -138,12 +128,7 @@ async def get_project_autoloaded_skills(
     """Get auto-loaded skill IDs for a project."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     if project.get("public"):
         return {"skill_ids": []}
@@ -161,12 +146,7 @@ async def get_skill_for_project(
     """Get a specific project skill by ID."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await require_owned_project(user_id, project_id)
 
     skill = await get_project_skill(project_id, skill_id)
     if not skill:
@@ -188,12 +168,7 @@ async def update_skill_for_project(
     """Update a project skill's name, description, and/or content."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     _reject_public_project(project)
 
@@ -235,12 +210,7 @@ async def delete_skill_for_project(
     """Delete a project skill."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     _reject_public_project(project)
 
@@ -264,12 +234,7 @@ async def toggle_project_skill_autoload(
     """Toggle auto-load for a skill in a project."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     _reject_public_project(project)
 
