@@ -541,6 +541,49 @@ def test_admin_put_slack_requires_secret_when_none_stored(admin_routes, slack_pl
     assert exc_info.value.status_code == 400
 
 
+def test_secret_preview_shows_first_and_last_four_of_a_long_secret(admin_routes, slack_plugin):
+    """A stored secret longer than 16 characters is previewed by its first
+    and last four; one of 16 or fewer gets no preview key at all, and the
+    whole secret is never in the response."""
+    long_token = "xoxb-1234567890-abcdefWXYZ"
+    sc.write_service_credentials("slack", {
+        "client_id": "id",
+        "client_secret": "s" * 16,  # exactly 16: too short to preview
+        "bot_token": long_token,
+        "socket_mode_token": "x" * 17,  # shortest previewed length
+    })
+    detail = _put(admin_routes, "slack", _put_slack_body())
+    creds = detail["credentials"]
+    assert creds["bot_token_preview"] == "xoxb" + "\u2022" * 8 + "WXYZ"
+    assert creds["socket_mode_token_preview"] == "xxxx" + "\u2022" * 8 + "xxxx"
+    assert creds["client_secret_set"] is True
+    assert "client_secret_preview" not in creds
+    assert long_token not in json.dumps(detail, ensure_ascii=False)
+
+
+def test_secret_preview_skips_passwords_and_unset_secrets():
+    from config.plugin_types import CredentialField
+    from config.service_specs import ServiceSpec, form_view
+
+    spec = ServiceSpec(service="x", label="X", fields=(
+        CredentialField(key="password", label="Password", type="secret"),
+        CredentialField(key="smtp_password", label="SMTP password", type="secret"),
+        CredentialField(key="api_key", label="API key", type="secret"),
+        CredentialField(key="token", label="Token", type="secret"),
+    ))
+    long_value = "correct-horse-battery-staple"
+    view = form_view(spec, {
+        "password": long_value, "smtp_password": long_value, "api_key": long_value,
+    })
+    assert view == {
+        "password_set": True,
+        "smtp_password_set": True,
+        "api_key_set": True,
+        "api_key_preview": "corr" + "\u2022" * 8 + "aple",
+        "token_set": False,
+    }
+
+
 def _put_slack_body(**extra):
     return {"client_id": "id", "client_secret": "", **extra}
 

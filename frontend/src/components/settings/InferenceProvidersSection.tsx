@@ -1080,6 +1080,7 @@ function InstanceCard({
             value={apiKey}
             onChange={setApiKey}
             placeholder={secretPlaceholder(status.credentials.api_key_set, status.hint)}
+            stored={status.credentials.api_key_set}
             secret
             optional={!status.key_required}
           />

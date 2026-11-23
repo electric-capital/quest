@@ -14,7 +14,8 @@ express directly:
 
 - ``flatten(stored) -> flat``: project the stored config into flat form
   values keyed by field key (secrets in cleartext -- only used server-side
-  for empty-means-keep resolution and ``<key>_set`` masking). Default:
+  for empty-means-keep resolution and ``<key>_set`` / ``<key>_preview``
+  masking). Default:
   the stored dict itself.
 - ``unflatten(flat, existing) -> stored``: map resolved flat values back
   to the stored shape. Default: merge over ``existing`` (unknown stored
@@ -377,12 +378,36 @@ def _flat(spec: ServiceSpec, config: dict) -> dict:
     return spec.flatten(config) if spec.flatten else dict(config)
 
 
+# A stored secret longer than this many characters is previewed by its
+# first and last four; a shorter one would give too much of itself away.
+SECRET_PREVIEW_MIN_LENGTH = 16
+_SECRET_PREVIEW_MASK = "\u2022" * 8
+
+
+def _secret_preview(f: CredentialField, value) -> str:
+    """The masked hint for a stored secret: its first and last four
+    characters around a run of dots, so an admin can tell which key is
+    stored. Empty (no hint) for a secret of ``SECRET_PREVIEW_MIN_LENGTH``
+    characters or fewer, and for password fields: those are chosen by
+    people, so even eight characters say too much.
+    """
+    if not isinstance(value, str) or "password" in f.key:
+        return ""
+    value = value.strip()
+    if len(value) <= SECRET_PREVIEW_MIN_LENGTH:
+        return ""
+    return value[:4] + _SECRET_PREVIEW_MASK + value[-4:]
+
+
 def _values_view(fields: tuple[CredentialField, ...], flat: dict) -> dict:
     view: dict = {}
     for f in fields:
         value = flat.get(f.key)
         if f.type == "secret":
             view[f.key + "_set"] = bool(value)
+            preview = _secret_preview(f, value)
+            if preview:
+                view[f.key + "_preview"] = preview
         elif f.type == "bool":
             view[f.key] = bool(value)
         elif f.type == "list":
@@ -399,7 +424,9 @@ def _values_view(fields: tuple[CredentialField, ...], flat: dict) -> dict:
 def form_view(spec: ServiceSpec, config: dict | None) -> dict:
     """Project a stored config into the masked form values.
 
-    Secrets are never returned; the form only learns ``<key>_set``. A
+    Secrets are never returned whole: the form learns ``<key>_set`` and,
+    for a long enough non-password secret, ``<key>_preview`` (see
+    ``_secret_preview``). A
     ``list`` field projects to a list of entry dicts (one per stored
     entry, each in the same masked form; a non-list stored value reads
     as no entries).

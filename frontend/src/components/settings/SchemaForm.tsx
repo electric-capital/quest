@@ -1,5 +1,4 @@
-import { Fragment, useState } from 'react';
-import type { ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type {
   SchemaFormField,
   SchemaFormItem,
@@ -27,8 +26,31 @@ import './ServiceCredentialsSection.css';
  * buttons, and keeps the values (controlled).
  */
 
-export function secretPlaceholder(isSet: boolean, hint: string): string {
-  return isSet ? 'Leave blank to keep the stored value' : hint;
+/** Placeholder of a stored secret with no preview: a row of dots. */
+export const STORED_SECRET_MASK = '\u2022'.repeat(12);
+
+/** Read to assistive tech for a stored secret, whose placeholder is dots. */
+const STORED_SECRET_DESCRIPTION = 'A value is stored. Type to replace it, or leave blank to keep it.';
+
+/**
+ * Placeholder for a secret input: when a value is stored, the server's
+ * masked `preview` of it (first and last four characters) or else a row of
+ * dots; otherwise the field's own hint. Pair it with CredentialField's
+ * `stored` so the mask clears while the input has focus.
+ */
+export function secretPlaceholder(isSet: boolean, hint: string, preview?: string): string {
+  return isSet ? preview || STORED_SECRET_MASK : hint;
+}
+
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
+  );
 }
 
 export function isFieldVisible(field: SchemaFormField, values: SchemaFormValues): boolean {
@@ -175,7 +197,15 @@ function describedByIds(helpId: string, help: string | undefined, errorId: strin
   return ids.length ? ids.join(' ') : undefined;
 }
 
-/** One labelled single-line text / password input. */
+/**
+ * One labelled single-line text / password input.
+ *
+ * `stored` marks a secret whose placeholder stands for a saved value: the
+ * placeholder clears while the input has focus, so the box is blank to type
+ * in. `onRemove` adds a trash button to the right of the input; while
+ * `removing` is set the input is replaced by a pending-removal notice with
+ * an Undo link (`onUndoRemove`).
+ */
 export function CredentialField({
   id,
   label,
@@ -188,7 +218,10 @@ export function CredentialField({
   readOnly = false,
   disabled = false,
   error,
-  action,
+  stored = false,
+  onRemove,
+  removing = false,
+  onUndoRemove,
 }: {
   id: string;
   label: string;
@@ -201,29 +234,87 @@ export function CredentialField({
   readOnly?: boolean;
   disabled?: boolean;
   error?: string;
-  /** Optional control shown under the input (e.g. a secret's Remove). */
-  action?: ReactNode;
+  stored?: boolean;
+  onRemove?: () => void;
+  removing?: boolean;
+  onUndoRemove?: () => void;
 }) {
   const errorId = `${id}-error`;
   const helpId = `${id}-help`;
+  const undoRef = useRef<HTMLButtonElement>(null);
+  const trashRef = useRef<HTMLButtonElement>(null);
+  // Each of the two buttons replaces the other, so hand focus across
+  // instead of dropping it to the page. Skipped on first render.
+  const wasRemoving = useRef(removing);
+  useEffect(() => {
+    if (wasRemoving.current === removing) return;
+    wasRemoving.current = removing;
+    (removing ? undoRef : trashRef).current?.focus();
+  }, [removing]);
+
+  if (removing) {
+    return (
+      <div className="svc-cred-row svc-cred-row-removing">
+        <span id={`${id}-label`} className="svc-cred-label">
+          {label} {optional && <span className="svc-cred-optional">(optional)</span>}
+        </span>
+        <FieldHelp id={helpId} help={help} />
+        <div id={id} className="svc-cred-removing" role="group" aria-labelledby={`${id}-label`}>
+          <TrashIcon />
+          <span className="svc-cred-removing-text">Will be removed when you save</span>
+          <button
+            ref={undoRef}
+            type="button"
+            className="svc-cred-undo"
+            onClick={onUndoRemove}
+            disabled={disabled}
+          >
+            Undo
+          </button>
+        </div>
+        <FieldError id={errorId} error={error} />
+      </div>
+    );
+  }
+
+  const input = (
+    <input
+      id={id}
+      className={`svc-cred-input${stored ? ' svc-cred-input-stored' : ''}`}
+      type={secret ? 'password' : 'text'}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      autoComplete={secret ? 'new-password' : 'off'}
+      readOnly={readOnly || undefined}
+      disabled={disabled || undefined}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={describedByIds(helpId, help, errorId, error)}
+      aria-description={stored ? STORED_SECRET_DESCRIPTION : undefined}
+    />
+  );
   return (
     <div className="svc-cred-row">
       <FieldLabel id={id} label={label} optional={optional} />
       <FieldHelp id={helpId} help={help} />
-      <input
-        id={id}
-        className="svc-cred-input"
-        type={secret ? 'password' : 'text'}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={secret ? 'new-password' : 'off'}
-        readOnly={readOnly || undefined}
-        disabled={disabled || undefined}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedByIds(helpId, help, errorId, error)}
-      />
-      {action}
+      {onRemove ? (
+        <div className="svc-cred-input-with-action">
+          {input}
+          <button
+            ref={trashRef}
+            type="button"
+            className="svc-cred-secret-trash"
+            onClick={onRemove}
+            disabled={disabled}
+            aria-label={`Remove ${label}`}
+            title="Remove the stored value"
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      ) : (
+        input
+      )}
       <FieldError id={errorId} error={error} />
     </div>
   );
@@ -424,11 +515,14 @@ export interface SchemaFormProps {
   onChange: (key: string, value: SchemaFormValue) => void;
   /** Prefix of the element ids: each control is `${idPrefix}-${key}`. */
   idPrefix: string;
-  /** Secret keys that have a stored value: their placeholder says leaving
-   * the field blank keeps it. */
+  /** Secret keys that have a stored value: their placeholder is a mask
+   * standing for it (blank keeps it), cleared while the input has focus. */
   storedSecrets?: readonly string[];
+  /** Masked previews of stored secrets by key (first and last four
+   * characters), shown as the placeholder instead of plain dots. */
+  secretPreviews?: Readonly<Record<string, string>>;
   /** Optional secret keys that have a stored value and may be removed: each
-   * shows a Remove action. Needs `onRemoveSecret`. */
+   * shows a trash button. Needs `onRemoveSecret`. */
   removableSecrets?: readonly string[];
   /** Secret keys marked for removal on save (shown as pending removal). */
   pendingRemoval?: readonly string[];
@@ -452,6 +546,7 @@ export function SchemaForm({
   onChange,
   idPrefix,
   storedSecrets = [],
+  secretPreviews = {},
   removableSecrets = [],
   pendingRemoval = [],
   onRemoveSecret,
@@ -572,6 +667,7 @@ export function SchemaForm({
         const canRemove =
           secret && onRemoveSecret !== undefined && removableSecrets.includes(field.key);
         const removing = canRemove && pendingRemoval.includes(field.key);
+        const stored = secret && storedSecrets.includes(field.key);
         return (
           <CredentialField
             key={field.key}
@@ -580,31 +676,20 @@ export function SchemaForm({
             value={String(values[field.key] ?? '')}
             onChange={(value) => onChange(field.key, value)}
             placeholder={
-              removing
-                ? 'Will be removed when you save'
-                : secret
-                  ? secretPlaceholder(storedSecrets.includes(field.key), field.placeholder)
-                  : field.placeholder
+              secret
+                ? secretPlaceholder(stored, field.placeholder, secretPreviews[field.key])
+                : field.placeholder
             }
             help={field.help}
             secret={secret}
             optional={optional}
             readOnly={readOnly}
-            disabled={disabled || removing}
+            disabled={disabled}
             error={error}
-            action={
-              canRemove && (
-                <button
-                  type="button"
-                  className="svc-cred-secret-remove"
-                  onClick={() => onRemoveSecret(field.key, !removing)}
-                  disabled={disabled}
-                  aria-describedby={`${id}-label`}
-                >
-                  {removing ? 'Keep stored value' : 'Remove'}
-                </button>
-              )
-            }
+            stored={stored}
+            onRemove={canRemove ? () => onRemoveSecret(field.key, true) : undefined}
+            removing={removing}
+            onUndoRemove={canRemove ? () => onRemoveSecret(field.key, false) : undefined}
           />
         );
       })}

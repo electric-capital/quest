@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
+  STORED_SECRET_MASK,
   SchemaForm,
   entrySummary,
   initialSchemaValues,
@@ -31,6 +32,7 @@ function Harness({
   onChangeSpy?: (key: string, value: SchemaFormValue) => void;
   readOnlyKeys?: string[];
   storedSecrets?: string[];
+  secretPreviews?: Record<string, string>;
   errors?: Record<string, string>;
   disabled?: boolean;
 }) {
@@ -186,11 +188,25 @@ describe('SchemaForm', () => {
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
   });
 
-  it('uses the keep-stored placeholder for stored secrets', () => {
-    render(<Harness storedSecrets={['password']} />);
-    expect((screen.getByLabelText('Password') as HTMLInputElement).placeholder).toBe(
-      'Leave blank to keep the stored value',
-    );
+  it('masks a stored secret with dots, or with the server preview when it has one', () => {
+    const { unmount } = render(<Harness storedSecrets={['password']} />);
+    const dots = screen.getByLabelText('Password') as HTMLInputElement;
+    expect(dots.placeholder).toBe(STORED_SECRET_MASK);
+    // The mask clears on focus through this class (CSS).
+    expect(dots.classList.contains('svc-cred-input-stored')).toBe(true);
+    expect(dots.getAttribute('aria-description')).toMatch(/A value is stored/);
+    unmount();
+
+    render(<Harness storedSecrets={['password']} secretPreviews={{ password: 'abcd\u2022\u2022\u2022\u2022wxyz' }} />);
+    expect((screen.getByLabelText('Password') as HTMLInputElement).placeholder).toBe('abcd\u2022\u2022\u2022\u2022wxyz');
+  });
+
+  it('keeps the field hint and no mask class for a secret with nothing stored', () => {
+    render(<Harness />);
+    const password = screen.getByLabelText('Password') as HTMLInputElement;
+    expect(password.placeholder).not.toBe(STORED_SECRET_MASK);
+    expect(password.classList.contains('svc-cred-input-stored')).toBe(false);
+    expect(password.getAttribute('aria-description')).toBeNull();
   });
 });
 

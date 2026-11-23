@@ -132,6 +132,16 @@ function storedSecretKeys(detail: ServiceCredentialDetail): string[] {
     .map((field) => field.key);
 }
 
+/** Masked previews the server sent for stored secrets (`<key>_preview`). */
+function secretPreviews(detail: ServiceCredentialDetail): Record<string, string> {
+  const previews: Record<string, string> = {};
+  for (const field of detail.fields) {
+    const preview = detail.credentials[`${field.key}_preview`];
+    if (field.type === 'secret' && typeof preview === 'string' && preview) previews[field.key] = preview;
+  }
+  return previews;
+}
+
 /** Stored secret keys whose field is optional (no `required`, and no
  * `required_if` that could make it required), so the admin may remove them.
  * The server stays the judge for custom stored shapes. */
@@ -216,6 +226,7 @@ function CredentialForm({
         onChange={setValue}
         idPrefix={`svc-cred-${detail.service}`}
         storedSecrets={storedSecretKeys(detail)}
+        secretPreviews={secretPreviews(detail)}
         removableSecrets={removableSecretKeys(detail)}
         pendingRemoval={pendingRemoval}
         onRemoveSecret={handleRemoveSecret}

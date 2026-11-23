@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ServiceCredentialsSection } from './ServiceCredentialsSection';
+import { STORED_SECRET_MASK } from './SchemaForm';
 import type { ServiceCredentialDetail } from '../../api/types';
 
 const mocks = vi.hoisted(() => ({
@@ -89,9 +90,9 @@ describe('ServiceCredentialsSection', () => {
     const host = screen.getByLabelText('Host') as HTMLInputElement;
     expect(host.id).toBe('svc-cred-smtp-host');
     expect(host.value).toBe('smtp.a.com');
-    const password = screen.getByLabelText(/Password/) as HTMLInputElement;
+    const password = screen.getByLabelText(/Password/, { selector: 'input' }) as HTMLInputElement;
     expect(password.value).toBe('');
-    expect(password.placeholder).toBe('Leave blank to keep the stored value');
+    expect(password.placeholder).toBe(STORED_SECRET_MASK);
     expect((screen.getByLabelText(/Notes/) as HTMLTextAreaElement).value).toBe('n');
     expect(screen.queryByLabelText(/Relay/)).toBeNull();
 
@@ -152,25 +153,44 @@ describe('ServiceCredentialsSection optional secret removal', () => {
       { key: 'bot_token', label: 'Bot token', type: 'secret', placeholder: 'xoxb-', required: false, required_if: null, visible_if: null },
       { key: 'app_token', label: 'App token', type: 'secret', placeholder: 'xapp-', required: false, required_if: null, visible_if: null },
     ],
-    credentials: { client_secret_set: true, bot_token_set: true, app_token_set: false },
+    credentials: {
+      client_secret_set: true,
+      bot_token_set: true,
+      bot_token_preview: 'xoxb\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234',
+      app_token_set: false,
+    },
   };
 
-  it('offers Remove only for stored optional secrets and sends their keys in clear', async () => {
+  it('shows the server preview as a stored secret\'s placeholder, dots without one', async () => {
+    mocks.fetchServiceCredentials.mockResolvedValue({ services: [SLACKISH] });
+    render(<ServiceCredentialsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect((screen.getByLabelText(/Bot token/, { selector: 'input' }) as HTMLInputElement).placeholder).toBe(
+      'xoxb\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234',
+    );
+    expect((screen.getByLabelText(/Client secret/, { selector: 'input' }) as HTMLInputElement).placeholder).toBe(STORED_SECRET_MASK);
+    expect((screen.getByLabelText(/App token/, { selector: 'input' }) as HTMLInputElement).placeholder).toBe('xapp-');
+  });
+
+  it('offers the trash button only for stored optional secrets and sends their keys in clear', async () => {
     mocks.fetchServiceCredentials.mockResolvedValue({ services: [SLACKISH] });
     mocks.updateServiceCredentials.mockResolvedValue(SLACKISH);
     render(<ServiceCredentialsSection />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
 
-    // Only the stored optional secret gets a Remove action: not the required
+    // Only the stored optional secret gets a trash button: not the required
     // one, not the unset optional one.
-    expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(1);
 
-    fireEvent.change(screen.getByLabelText(/Bot token/), { target: { value: 'typed' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
-    const bot = screen.getByLabelText(/Bot token/) as HTMLInputElement;
-    expect(bot.disabled).toBe(true);
-    expect(bot.value).toBe('');
-    expect(bot.placeholder).toBe('Will be removed when you save');
+    fireEvent.change(screen.getByLabelText(/Bot token/, { selector: 'input' }), { target: { value: 'typed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bot token' }));
+    // The whole row becomes the pending-removal notice: no input, no trash
+    // button, and focus lands on Undo.
+    const notice = screen.getByRole('group', { name: /Bot token/ });
+    expect(notice.textContent).toContain('Will be removed when you save');
+    expect(document.getElementById('svc-cred-slack-bot_token')?.tagName).toBe('DIV');
+    expect(screen.queryByRole('button', { name: 'Remove Bot token' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Undo' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(mocks.updateServiceCredentials).toHaveBeenCalledTimes(1));
@@ -184,9 +204,12 @@ describe('ServiceCredentialsSection optional secret removal', () => {
     mocks.updateServiceCredentials.mockResolvedValue(SLACKISH);
     render(<ServiceCredentialsSection />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Keep stored value' }));
-    expect((screen.getByLabelText(/Bot token/) as HTMLInputElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bot token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    const bot = screen.getByLabelText(/Bot token/, { selector: 'input' }) as HTMLInputElement;
+    expect(bot.tagName).toBe('INPUT');
+    expect(bot.value).toBe('');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove Bot token' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(mocks.updateServiceCredentials).toHaveBeenCalledTimes(1));
     expect(mocks.updateServiceCredentials).toHaveBeenCalledWith('slack', {
@@ -194,7 +217,7 @@ describe('ServiceCredentialsSection optional secret removal', () => {
     });
   });
 
-  it('offers no Remove for a secret that required_if can make required', async () => {
+  it('offers no trash button for a secret that required_if can make required', async () => {
     const detail: ServiceCredentialDetail = {
       ...SLACKISH,
       fields: [
@@ -206,7 +229,7 @@ describe('ServiceCredentialsSection optional secret removal', () => {
     mocks.fetchServiceCredentials.mockResolvedValue({ services: [detail] });
     render(<ServiceCredentialsSection />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Remove / })).toBeNull();
   });
 });
 
