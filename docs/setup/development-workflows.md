@@ -21,6 +21,7 @@ All work lands on `main` through pull requests -- never commit directly to `main
 - `plugins/<name>/tests/` -- Each plugin's own test suite (see "Plugin tests" below)
 - `tests/migration_support.py` -- The `deployment` fixture behind the `tests/test_*_migration.py` end-to-end Alembic tests: a prod-mode deployment in a temp data dir (env, `config.paths`, encryption key cache, ORM store bindings) that `alembic.command` runs against in the test process; the module docstring has the mechanics
 - `tests/authed_get_support.py` -- `mock_httpx_client()`, the recording stand-in for `httpx.AsyncClient` shared by the core and plugin suites that drive `_make_authed_request`
+- `tests/route_table_support.py` -- The session-scoped `quest_route_table` fixture: the real `quest.app` route table (methods, paths in registration order, API-docs URLs), read once in a subprocess because importing `quest` loads every plugin into the process-global registries
 - `conftest.py` (repo root) -- Pytest hook that also collects out-of-tree plugin test suites from `QUEST_PLUGIN_PATH` roots
 - `pyproject.toml` -- Dev dependency group includes `pytest`, `pytest-xdist` and `pytest-timeout`; `[tool.pytest.ini_options]` sets the per-test timeout
 

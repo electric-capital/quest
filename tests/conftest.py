@@ -19,6 +19,7 @@ from config.plugins import PLUGINS_DIR
 
 from tests.db_support import isolated_db  # noqa: F401  (fixture, re-exported)
 from tests.plugin_support import plugin_fixture
+from tests.route_table_support import quest_route_table  # noqa: F401  (fixture, re-exported)
 
 # The _example smoke plugin (never discovered in production -- the loader
 # skips _-prefixed directories, but plugin_fixture imports it directly) is

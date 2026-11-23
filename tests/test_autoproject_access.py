@@ -24,9 +24,6 @@ Uses the ``env`` fixture of tests/test_autoproject_routes.py.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -328,39 +325,16 @@ def test_account_delete_removes_autoprojects_runs_and_directories(env):
 # quest.py: SPA catch-all and the router mount
 # ---------------------------------------------------------------------------
 
-_SCRIPT = (
-    "import json, quest\n"
-    "from chat.route_table import iter_app_routes\n"
-    "app = quest.app\n"
-    "routes = sorted({(m, r.path) for r in iter_app_routes(app)"
-    " if r.methods for m in r.methods})\n"
-    "paths = [r.path for r in iter_app_routes(app)]\n"
-    "print(json.dumps({'routes': routes, 'paths': paths}))\n"
-)
-
-
-@pytest.fixture(scope="module")
-def route_table() -> dict:
-    # A subprocess: importing quest loads the plugins into the
-    # process-global registries (tests/test_spa_tables_routes.py pattern).
-    proc = subprocess.run(
-        [sys.executable, "-c", _SCRIPT],
-        capture_output=True, text=True, cwd=Path(__file__).resolve().parent.parent,
-    )
-    assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-def test_spa_autoprojects_routes_precede_static_fallback(route_table):
-    routes = {tuple(r) for r in route_table["routes"]}
-    paths = route_table["paths"]
+def test_spa_autoprojects_routes_precede_static_fallback(quest_route_table):
+    routes = {tuple(r) for r in quest_route_table["routes"]}
+    paths = quest_route_table["paths"]
     for path in ("/autoprojects", "/autoprojects/{rest:path}"):
         assert ("GET", path) in routes
         assert paths.index(path) < paths.index("/{filename}")
 
 
-def test_autoprojects_api_mounted(route_table):
-    routes = {tuple(r) for r in route_table["routes"]}
+def test_autoprojects_api_mounted(quest_route_table):
+    routes = {tuple(r) for r in quest_route_table["routes"]}
     for method, path in [
         ("GET", "/app/api/autoprojects"),
         ("POST", "/app/api/autoprojects"),
