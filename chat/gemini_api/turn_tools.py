@@ -754,10 +754,39 @@ async def _run_spawn_arm(
     return result
 
 
+def _spawn_unavailable_result(ctx: RunContext, tool_name: str) -> str | None:
+    """Error result for a sub-agent spawner in a run kind that has none.
+
+    The ``agent_task*`` tools are not part of cross-user subagent and
+    inference API runs (USER_SUBAGENT_TOOLS / INFERENCE_API_TOOLS). The
+    handlers answer with a structured error there, like the other
+    run-kind guards in this module. ``None`` for every other run.
+    """
+    if not (ctx.is_user_subagent or ctx.is_inference_api):
+        return None
+    run_label = (
+        "cross-user subagent" if ctx.is_user_subagent else "inference API"
+    )
+    logger.warning(
+        "[%s] Not available in %s runs "
+        "(conversation=%s, user=%s)",
+        tool_name, run_label, ctx.conversation_id, ctx.user["email"],
+    )
+    return json.dumps({
+        "error": (
+            f"'{tool_name}' is not available in {run_label} runs. "
+            "Do the work in this run instead."
+        ),
+    })
+
+
 async def _handle_agent_task(
     ctx: RunContext, call: ToolCall, turn: TurnState,
 ) -> str:
     """Spawn one sub-agent (``agent_task``)."""
+    rejected = _spawn_unavailable_result(ctx, "agent_task")
+    if rejected is not None:
+        return rejected
     turn.agent_task_calls += 1
     args = call.args
     agent_name = args.get("name", "Sub-Agent")
@@ -840,6 +869,9 @@ async def _handle_agent_task_parallel(
     ctx: RunContext, call: ToolCall, turn: TurnState,
 ) -> str:
     """Spawn a batch of parallel sub-agents (``agent_task_parallel``)."""
+    rejected = _spawn_unavailable_result(ctx, "agent_task_parallel")
+    if rejected is not None:
+        return rejected
     tasks_list = call.args.get("tasks", [])
     task_names = [t.get("name", "Sub-Agent") for t in tasks_list]
 
@@ -879,6 +911,9 @@ async def _handle_agent_task_parallel_template(
     ctx: RunContext, call: ToolCall, turn: TurnState,
 ) -> str:
     """Spawn templated parallel sub-agents (``agent_task_parallel_template``)."""
+    rejected = _spawn_unavailable_result(ctx, "agent_task_parallel_template")
+    if rejected is not None:
+        return rejected
     args = call.args
     template_prompt = args.get("prompt_template", "")
     template_model = args.get("model", "")
@@ -1375,6 +1410,17 @@ async def _handle_create_action_request(
                 "create_action_request is not available in "
                 "cross-user subagent conversations. Return "
                 "your findings via return_to_caller instead."
+            ),
+        })
+    if ctx.is_inference_api:
+        # The tool is not in INFERENCE_API_TOOLS: nobody is watching an
+        # inference run to resolve a card, so the blocking call would
+        # only strand it.
+        return json.dumps({
+            "error": (
+                "create_action_request is not available in inference API "
+                "runs. Report what you could not do via "
+                "return_final_response instead."
             ),
         })
 
