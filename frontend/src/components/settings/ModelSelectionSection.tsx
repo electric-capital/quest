@@ -4,8 +4,8 @@ import type { ModelSelectionListResponse, ModelSelectionRow } from '../../api/ty
 import { formatThinkingEffort } from '../../constants/models';
 import type { ModelVisibility } from '../../constants/models';
 import { useAppConfig } from '../../contexts/AppConfigContext';
-import { SaveActions } from './ServiceCredentialsSection';
-import type { SaveStatus } from './ServiceCredentialsSection';
+import { SaveActions } from './SaveActions';
+import type { SaveStatus } from './SaveActions';
 import './ServiceCredentialsSection.css';
 import './ModelSelectionSection.css';
 

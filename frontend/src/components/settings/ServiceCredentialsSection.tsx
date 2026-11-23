@@ -16,9 +16,9 @@ import type {
   SchemaFormValues,
   ServiceCredentialDetail,
 } from '../../api/types';
+import { SaveActions } from './SaveActions';
+import type { SaveStatus } from './SaveActions';
 import './ServiceCredentialsSection.css';
-
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 /**
  * The subset of a credential/provider status the shared card chrome needs;
@@ -82,38 +82,6 @@ export function CredentialCard({
           )}
           {children}
         </>
-      )}
-    </div>
-  );
-}
-
-export function SaveActions({
-  saveStatus,
-  saveError,
-  disabled,
-  onSave,
-}: {
-  saveStatus: SaveStatus;
-  saveError: string;
-  disabled: boolean;
-  onSave: () => void;
-}) {
-  return (
-    <div className="settings-actions">
-      <button
-        className="settings-save-button"
-        onClick={onSave}
-        disabled={saveStatus === 'saving' || disabled}
-      >
-        {saveStatus === 'saving' ? 'Saving...' : 'Save'}
-      </button>
-      {saveStatus === 'saved' && (
-        <span className="settings-save-status saved">Saved</span>
-      )}
-      {saveStatus === 'error' && (
-        <span className="settings-save-status error">
-          {saveError || 'Failed to save'}
-        </span>
       )}
     </div>
   );

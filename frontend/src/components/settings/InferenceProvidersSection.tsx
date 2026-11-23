@@ -22,9 +22,10 @@ import type {
   VertexSectionInfo,
 } from '../../api/types';
 import { KEY_FETCHED_CATALOGS } from '../../api/types';
-import { CredentialCard, SaveActions } from './ServiceCredentialsSection';
+import { CredentialCard } from './ServiceCredentialsSection';
+import { SaveActions } from './SaveActions';
 import { CredentialField, secretPlaceholder } from './SchemaForm';
-import type { SaveStatus } from './ServiceCredentialsSection';
+import type { SaveStatus } from './SaveActions';
 import './ServiceCredentialsSection.css';
 import './InferenceProvidersSection.css';
 

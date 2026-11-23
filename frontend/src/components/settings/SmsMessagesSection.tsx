@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { fetchSmsTemplates, updateSmsTemplates } from '../../api/client';
 import type { SmsTemplate } from '../../api/types';
+import { useSaveStatus } from '../../hooks/useSaveStatus';
+import { SaveActions } from './SaveActions';
 import './SmsMessagesSection.css';
-
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 // Mirrors backend limits in plugins/twilio/templates.py + upstream.py.
 const MAX_TEMPLATES = 50;
@@ -27,9 +27,7 @@ export function SmsMessagesSection() {
   const [inputError, setInputError] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [saveError, setSaveError] = useState('');
-  const statusTimeoutRef = useRef<number | null>(null);
+  const { saveStatus, saveError, runSave } = useSaveStatus();
 
   useEffect(() => {
     const load = async () => {
@@ -48,12 +46,6 @@ export function SmsMessagesSection() {
       }
     };
     load();
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-    };
   }, []);
 
   const handleAdd = useCallback(() => {
@@ -87,22 +79,11 @@ export function SmsMessagesSection() {
   }, []);
 
   const handleSave = useCallback(async () => {
-    setSaveStatus('saving');
-    setSaveError('');
-    try {
+    await runSave(async () => {
       const response = await updateSmsTemplates(templates);
       setTemplates(response.templates ?? []);
-      setSaveStatus('saved');
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 2000);
-    } catch (error) {
-      console.error('Failed to save SMS messages:', error);
-      setSaveStatus('error');
-      setSaveError(error instanceof Error ? error.message : 'Failed to save');
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 3000);
-    }
-  }, [templates]);
+    }, 'Failed to save SMS messages:');
+  }, [templates, runSave]);
 
   const canAdd = newName.trim().length > 0 && newBody.trim().length > 0;
 
@@ -188,23 +169,11 @@ export function SmsMessagesSection() {
             </div>
           </div>
           {inputError && <p className="sms-templates-error">{inputError}</p>}
-          <div className="settings-actions">
-            <button
-              className="settings-save-button"
-              onClick={handleSave}
-              disabled={saveStatus === 'saving'}
-            >
-              {saveStatus === 'saving' ? 'Saving...' : 'Save'}
-            </button>
-            {saveStatus === 'saved' && (
-              <span className="settings-save-status saved">Saved</span>
-            )}
-            {saveStatus === 'error' && (
-              <span className="settings-save-status error">
-                {saveError || 'Failed to save'}
-              </span>
-            )}
-          </div>
+          <SaveActions
+            saveStatus={saveStatus}
+            saveError={saveError}
+            onSave={handleSave}
+          />
         </>
       )}
     </div>
