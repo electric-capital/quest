@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { fetchSettings, updateSettings } from '../../api/client';
+import { useSaveStatus } from '../../hooks/useSaveStatus';
+import { SaveActions } from './SaveActions';
 import './GmailSection.css';
-
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 // Mirrors backend limits in api/gmail/quest_labels.py.
 const MAX_LABELS = 50;
@@ -13,9 +13,7 @@ export function GmailSection() {
   const [newLabel, setNewLabel] = useState('');
   const [inputError, setInputError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [saveError, setSaveError] = useState('');
-  const statusTimeoutRef = useRef<number | null>(null);
+  const { saveStatus, saveError, runSave } = useSaveStatus();
 
   useEffect(() => {
     const load = async () => {
@@ -30,12 +28,6 @@ export function GmailSection() {
       }
     };
     load();
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-    };
   }, []);
 
   const handleAdd = useCallback(() => {
@@ -67,21 +59,10 @@ export function GmailSection() {
   }, []);
 
   const handleSave = useCallback(async () => {
-    setSaveStatus('saving');
-    setSaveError('');
-    try {
+    await runSave(async () => {
       await updateSettings({ gmail_labels: labels });
-      setSaveStatus('saved');
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 2000);
-    } catch (error) {
-      console.error('Failed to save Gmail settings:', error);
-      setSaveStatus('error');
-      setSaveError(error instanceof Error ? error.message : 'Failed to save');
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 3000);
-    }
-  }, [labels]);
+    }, 'Failed to save Gmail settings:');
+  }, [labels, runSave]);
 
   return (
     <div className="settings-section">
@@ -147,23 +128,11 @@ export function GmailSection() {
             </button>
           </div>
           {inputError && <p className="gmail-label-input-error">{inputError}</p>}
-          <div className="settings-actions">
-            <button
-              className="settings-save-button"
-              onClick={handleSave}
-              disabled={saveStatus === 'saving'}
-            >
-              {saveStatus === 'saving' ? 'Saving...' : 'Save'}
-            </button>
-            {saveStatus === 'saved' && (
-              <span className="settings-save-status saved">Saved</span>
-            )}
-            {saveStatus === 'error' && (
-              <span className="settings-save-status error">
-                {saveError || 'Failed to save'}
-              </span>
-            )}
-          </div>
+          <SaveActions
+            saveStatus={saveStatus}
+            saveError={saveError}
+            onSave={handleSave}
+          />
         </>
       )}
     </div>

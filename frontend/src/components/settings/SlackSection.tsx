@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { fetchSettings, updateSettings } from '../../api/client';
 import { getSelectableModels, getModelDisplayName } from '../../constants/models';
+import { useSaveStatus } from '../../hooks/useSaveStatus';
+import { SaveActions } from './SaveActions';
 import './SlackSection.css';
-
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 // Mirrors MIN/MAX_INTERVAL_MINUTES in chat/slack_notifier.py.
 const MIN_NOTIFY_INTERVAL_MINUTES = 5;
@@ -17,9 +17,7 @@ export function SlackSection() {
     String(DEFAULT_NOTIFY_INTERVAL_MINUTES)
   );
   const [loading, setLoading] = useState(true);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [saveError, setSaveError] = useState('');
-  const statusTimeoutRef = useRef<number | null>(null);
+  const { saveStatus, saveError, runSave } = useSaveStatus();
 
   useEffect(() => {
     const load = async () => {
@@ -46,12 +44,6 @@ export function SlackSection() {
     load();
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-    };
-  }, []);
-
   const parsedInterval = parseInt(notifyInterval, 10);
   const intervalValid =
     Number.isFinite(parsedInterval) &&
@@ -59,9 +51,7 @@ export function SlackSection() {
     parsedInterval <= MAX_NOTIFY_INTERVAL_MINUTES;
 
   const handleSave = useCallback(async () => {
-    setSaveStatus('saving');
-    setSaveError('');
-    try {
+    await runSave(async () => {
       // Backend treats an empty string as "clear" (stored as NULL). Sending
       // null would be silently dropped by the exclude_none filter in the
       // settings update handler. The interval uses 0 as its "clear" value;
@@ -72,17 +62,8 @@ export function SlackSection() {
         slack_pending_notification_interval_minutes:
           parsedInterval === DEFAULT_NOTIFY_INTERVAL_MINUTES ? 0 : parsedInterval,
       });
-      setSaveStatus('saved');
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 2000);
-    } catch (error) {
-      console.error('Failed to save Slack settings:', error);
-      setSaveStatus('error');
-      setSaveError(error instanceof Error ? error.message : 'Failed to save');
-      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      statusTimeoutRef.current = window.setTimeout(() => setSaveStatus('idle'), 3000);
-    }
-  }, [model, notifyEnabled, parsedInterval]);
+    }, 'Failed to save Slack settings:');
+  }, [model, notifyEnabled, parsedInterval, runSave]);
 
   return (
     <div className="settings-section">
@@ -152,23 +133,12 @@ export function SlackSection() {
               </p>
             )}
           </div>
-          <div className="settings-actions">
-            <button
-              className="settings-save-button"
-              onClick={handleSave}
-              disabled={saveStatus === 'saving' || (notifyEnabled && !intervalValid)}
-            >
-              {saveStatus === 'saving' ? 'Saving...' : 'Save'}
-            </button>
-            {saveStatus === 'saved' && (
-              <span className="settings-save-status saved">Saved</span>
-            )}
-            {saveStatus === 'error' && (
-              <span className="settings-save-status error">
-                {saveError || 'Failed to save'}
-              </span>
-            )}
-          </div>
+          <SaveActions
+            saveStatus={saveStatus}
+            saveError={saveError}
+            disabled={notifyEnabled && !intervalValid}
+            onSave={handleSave}
+          />
         </>
       )}
     </div>
