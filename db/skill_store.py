@@ -1057,6 +1057,11 @@ async def get_routine_autoloaded_skills(
     own routines in the conversation's project resolves to nothing rather
     than to a foreign user's skill bodies.
 
+    Resolution applies the ``user_can_access_skill`` rule against that
+    owner, as the project tier does against the project owner: a row
+    resolves when the owner created the skill, the skill is public, or it
+    is shared with the owner.
+
     Args:
         routine_id: Routine UUID string.
         user_id: Owner of the conversation being resolved; must own the
@@ -1079,10 +1084,27 @@ async def get_routine_autoloaded_skills(
             .scalar_subquery()
         )
 
+        # Subquery: skill IDs shared with the routine owner
+        shared_skill_ids = (
+            select(SkillShare.skill_id)
+            .where(SkillShare.user_id == user_id)
+            .scalar_subquery()
+        )
+
         stmt = (
             select(Skill, User.name, User.email)
             .outerjoin(User, Skill.creator_id == User.id)
-            .where(Skill.id.in_(autoloaded_ids))
+            .where(
+                Skill.id.in_(autoloaded_ids),
+                or_(
+                    Skill.creator_id == user_id,
+                    Skill.visibility == SkillVisibility.PUBLIC,
+                    and_(
+                        Skill.visibility == SkillVisibility.SHARED,
+                        Skill.id.in_(shared_skill_ids),
+                    ),
+                ),
+            )
             .order_by(Skill.name)
         )
 
