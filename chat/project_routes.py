@@ -9,13 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
+from chat.conversation_access import require_owned_project
 from chat.docs import files as doc_files
 from chat.realtime import bus, events as realtime_events
 from chat.storage import ChatStorage
 from db import doc_store
 from db.project_store import (
     create_project,
-    get_project,
     list_doc_source_projects,
     list_projects,
     set_doc_source_projects,
@@ -272,12 +272,7 @@ async def get_user_project(
     user: dict = Depends(get_current_user_cookie_or_apikey_checked),
 ):
     """Get a specific project by ID."""
-    project = await get_project(user["id"], project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user["id"], project_id)
     return project
 
 
@@ -357,11 +352,7 @@ async def get_project_doc_sources(
     404 for unknown projects and other users' projects, like every by-id
     endpoint.
     """
-    if await get_project(user["id"], project_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await require_owned_project(user["id"], project_id)
     sources = await list_doc_source_projects(user["id"], project_id)
     return {"sources": [_doc_source_row(p) for p in sources]}
 
@@ -379,11 +370,7 @@ async def update_project_doc_sources(
     project itself (400 ``invalid_doc_source``). Returns the new list like
     the GET.
     """
-    if await get_project(user["id"], project_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await require_owned_project(user["id"], project_id)
     try:
         sources = await set_doc_source_projects(
             user["id"], project_id, body.source_project_ids,
@@ -432,11 +419,7 @@ async def delete_user_project(
 
     # Ownership check up front so a foreign id never reaches the
     # conversation/doc listing below.
-    if await get_project(user_id, project_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await require_owned_project(user_id, project_id)
 
     # Get conversation list BEFORE deleting (CASCADE will remove rows)
     conversations = await list_project_conversations_meta(project_id)
@@ -547,12 +530,7 @@ async def create_project_conversation(
     user_id = user["id"]
 
     # Verify project exists and belongs to user
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     # A routine id is only meaningful for one of this project's own
     # routines: the stored id drives the routine's auto-loaded skills into
@@ -612,12 +590,7 @@ async def list_project_conversations_endpoint(
 ):
     """List conversations in a project."""
 
-    project = await get_project(user["id"], project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await require_owned_project(user["id"], project_id)
 
     conversations = await ChatStorage.list_project_conversations(project_id, include_archived=include_archived)
     return {"conversations": conversations}
@@ -633,12 +606,7 @@ async def get_project_conversation_endpoint(
     user_id = user["id"]
 
     # Verify project ownership
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user_id, project_id)
 
     # Verify conversation belongs to this project
     meta = await get_conversation_meta(user_id, conversation_id)

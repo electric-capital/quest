@@ -449,7 +449,7 @@ def _client(monkeypatch, user_id, routine, project_id, report):
         assert r is routine
         return report
 
-    monkeypatch.setattr(routes_mod, "get_project", fake_get_project)
+    monkeypatch.setattr("db.project_store.get_project", fake_get_project)
     monkeypatch.setattr(routes_mod, "get_routine", fake_get_routine)
     monkeypatch.setattr(routes_mod, "get_routine_cost_report", fake_report)
 

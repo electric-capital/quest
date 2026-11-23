@@ -12,8 +12,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from chat.auth import get_current_user_cookie_or_apikey_checked
+from chat.conversation_access import require_owned_project
 from chat.routine_costs import get_routine_cost_report
-from db.project_store import get_project
 from db.routine_store import (
     StaleRoutineError,
     create_routine,
@@ -43,12 +43,7 @@ async def get_routine_project(user: dict, project_id: str) -> dict:
     ``public`` flag only trims what a routine there can carry (no skill
     auto-loads, public-allowed models).
     """
-    project = await get_project(user["id"], project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    project = await require_owned_project(user["id"], project_id)
     return project
 
 
@@ -82,12 +77,7 @@ async def list_project_routines(
     """List all routines for a project."""
     user_id = user["id"]
 
-    project = await get_project(user_id, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": "Project not found"},
-        )
+    await require_owned_project(user_id, project_id)
     routines = await list_routines_with_schedules(project_id)
     return {"routines": routines}
 
