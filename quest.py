@@ -336,6 +336,23 @@ async def lifespan(app: FastAPI):
         logger.exception("Stale browser container sweep failed; continuing")
     browser_reaper_task = asyncio.create_task(browser_sessions.reaper_loop())
 
+    # run_script/run_python containers (chat/gemini_api/sandbox_containers.py)
+    # run without --rm and are removed in the background after each run:
+    # remove any a previous process of this instance left behind, then
+    # prune stopped leftovers periodically. Best-effort, like the browser
+    # sweep above.
+    from chat.gemini_api.sandbox_containers import (
+        prune_loop as sandbox_prune_loop,
+        remove_stale_sandbox_containers,
+    )
+    try:
+        stale = await asyncio.to_thread(remove_stale_sandbox_containers)
+        if stale:
+            logger.info("Removed %d stale sandbox container(s)", stale)
+    except Exception:
+        logger.exception("Stale sandbox container sweep failed; continuing")
+    sandbox_prune_task = asyncio.create_task(sandbox_prune_loop())
+
     # Start the loopback-only sandbox tool API server: the sole surface
     # run_script/run_python containers can reach (their QUEST_PORT points
     # here, and their iptables rules block every other host port). Guarded
@@ -381,6 +398,20 @@ async def lifespan(app: FastAPI):
         await browser_sessions.stop_all()
     except Exception:
         logger.exception("Stopping browser sessions failed; continuing")
+
+    # Shutdown: stop the sandbox container prune and remove this instance's
+    # sandbox containers. A run cancelled by the shutdown may never get its
+    # background removal, and a server that is stopped rather than restarted
+    # has no next boot sweep.
+    sandbox_prune_task.cancel()
+    try:
+        await sandbox_prune_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await asyncio.to_thread(remove_stale_sandbox_containers)
+    except Exception:
+        logger.exception("Sandbox container sweep at shutdown failed; continuing")
 
     # Shutdown: stop the sandbox tool API server
     if sandbox_server is not None:
