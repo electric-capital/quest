@@ -54,7 +54,7 @@ describe('scanAutoProjectOutline', () => {
       [1, '', 'Goal'],
       [2, '', 'Scope'],
       [1, '', 'Open questions'],
-      [0, '', 'AutoProject files'],
+      [0, '', 'Files'],
       [0, '', 'Docs and tables'],
       [0, '', 'Updates'],
       [1, '3', 'Third prompt'],
@@ -101,7 +101,7 @@ describe('AutoProjectOutline', () => {
     const column = buildColumn({ brief: '<h2>Goal</h2>' });
     mount(column);
     const nav = screen.getByRole('navigation', { name: 'On this page' });
-    expect(nav.textContent).toBe('BriefGoalAutoProject filesUpdates');
+    expect(nav.textContent).toBe('BriefGoalFilesUpdates');
 
     await act(async () => {
       column.querySelector('.autoproject-updates-list')!.innerHTML = updateHtml(1, 'First prompt');

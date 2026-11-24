@@ -3,7 +3,7 @@
  * (AutoProjectPage.css `.autoproject-page-layout` places it). Sticky, so it
  * stays in view while the column scrolls, and scrolls on its own only when
  * it is taller than the scroller (`--autoproject-scroller-height`, kept by
- * useAutoProjectOutlineMode). Quiet text on the page ground, no card. */
+ * useAutoProjectOutlineShown). Quiet text on the page ground, no card. */
 
 .autoproject-outline {
   position: sticky;
@@ -13,7 +13,10 @@
   min-width: 0;
   max-height: var(--autoproject-scroller-height, 100vh);
   overflow-y: auto;
-  padding: 1.75rem 0 2rem 1rem;
+  /* Left: the entries' text starts as far from the scroller's edge as the
+     cards end from its other edge (the column's 2rem gutter plus the
+     scroller's 6px scrollbar inset), less an entry's own border and padding. */
+  padding: 1.75rem 0 2rem calc(2rem + 6px - 2px - 0.5rem);
   scrollbar-width: thin;
 }
 

@@ -5,24 +5,11 @@ import { prefersReducedMotion } from './autoprojectArrival'
 /** The most updates listed under Updates: the first ones in the shown order. */
 export const OUTLINE_MAX_UPDATES = 10
 /** Scroller width (px) from which the outline shows beside the column. */
-const OUTLINE_SIDE_MIN_PX = 1000
-/**
- * Scroller width (px) from which the column stays centred with the outline
- * in its left margin: the column's full width plus the outline's track on
- * both sides (AutoProjectPage.css `.autoproject-page-layout--margin`).
- */
-const OUTLINE_MARGIN_MIN_PX = 1624
+const OUTLINE_MIN_PX = 1000
 /** Gap (px) left above a target scrolled to the top of the view. */
 const TARGET_MARGIN_PX = 12
 /** A target counts as reached once its top is within this (px) of the view's top. */
 const CURRENT_SLACK_PX = 48
-
-/**
- * Where the outline goes: `none` (too narrow: phones, a small window, the
- * detail panel open on a small screen), `side` (left of the column, the
- * pair centred) or `margin` (in the left margin of the centred column).
- */
-export type AutoProjectOutlineMode = 'none' | 'side' | 'margin'
 
 export interface AutoProjectOutlineItem {
   key: string
@@ -34,31 +21,28 @@ export interface AutoProjectOutlineItem {
   el: HTMLElement
 }
 
-function outlineModeFor(width: number): AutoProjectOutlineMode {
-  return width >= OUTLINE_MARGIN_MIN_PX ? 'margin' : width >= OUTLINE_SIDE_MIN_PX ? 'side' : 'none'
-}
-
 /**
- * The outline's mode from the scroller's width, which follows the window,
- * the sidebar and the detail panel. Also keeps the scroller's height in
+ * Whether the outline shows, from the scroller's width, which follows the
+ * window, the sidebar and the detail panel: not on phones, in a small
+ * window, or with the detail panel open beside a narrow column. Also keeps the scroller's height in
  * `--autoproject-scroller-height` for the sticky outline's own bound.
  * Without ResizeObserver (old browsers) there is no outline.
  */
-export function useAutoProjectOutlineMode(scrollerRef: RefObject<HTMLElement | null>): AutoProjectOutlineMode {
-  const [mode, setMode] = useState<AutoProjectOutlineMode>('none')
+export function useAutoProjectOutlineShown(scrollerRef: RefObject<HTMLElement | null>): boolean {
+  const [shown, setShown] = useState(false)
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller || typeof ResizeObserver === 'undefined') return
     const measure = () => {
       scroller.style.setProperty('--autoproject-scroller-height', `${scroller.clientHeight}px`)
-      setMode(outlineModeFor(scroller.clientWidth))
+      setShown(scroller.clientWidth >= OUTLINE_MIN_PX)
     }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(scroller)
     return () => observer.disconnect()
   }, [scrollerRef])
-  return mode
+  return shown
 }
 
 function text(el: Element | null | undefined): string {
@@ -66,7 +50,8 @@ function text(el: Element | null | undefined): string {
 }
 
 /**
- * The outline of the page column as rendered: every card (its title), the
+ * The outline of the page column as rendered: every card (its title; the
+ * AutoProject files card as "Files"), the
  * rendered brief's h1-h3 under Brief (indented from the shallowest level
  * the brief uses; none while it is being edited), and the first
  * OUTLINE_MAX_UPDATES updates under Updates, in the order shown.
@@ -75,8 +60,10 @@ export function scanAutoProjectOutline(column: HTMLElement): AutoProjectOutlineI
   const items: AutoProjectOutlineItem[] = []
   const cards = column.querySelectorAll<HTMLElement>(':scope > .autoproject-card')
   cards.forEach((card, cardIndex) => {
-    const label = text(card.querySelector('.autoproject-card-title'))
-    if (!label) return
+    const title = text(card.querySelector('.autoproject-card-title'))
+    if (!title) return
+    // "AutoProject files" is just "Files" in the outline's narrow column.
+    const label = card.classList.contains('autoproject-files') ? 'Files' : title
     items.push({ key: `card:${cardIndex}`, label, depth: 0, el: card })
 
     if (card.classList.contains('autoproject-brief')) {
@@ -129,7 +116,7 @@ function sameOutline(a: AutoProjectOutlineItem[], b: AutoProjectOutlineItem[]): 
 
 /**
  * The AutoProject page's outline (AutoProjectMainColumn renders it inside the
- * scroller, left of the column, while useAutoProjectOutlineMode has room for
+ * scroller, left of the column, while useAutoProjectOutlineShown has room for
  * it): a table of contents of the page (the cards, the brief's headings,
  * the first ten updates) whose entries scroll their target to the top of
  * the view, with the entry the reader is in marked.
@@ -225,7 +212,7 @@ export function AutoProjectOutline({
             <button
               type="button"
               className={`autoproject-outline-item${item.depth === 0 ? ' is-section' : ''}`}
-              style={item.depth > 1 ? { paddingLeft: `${0.5 + (item.depth - 1) * 0.75}rem` } : undefined}
+              style={item.depth > 0 ? { paddingLeft: `${0.5 + item.depth * 0.75}rem` } : undefined}
               aria-current={item.key === currentKey ? 'location' : undefined}
               title={item.label}
               onClick={() => jumpTo(item)}

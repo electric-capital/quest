@@ -57,22 +57,15 @@
 }
 
 /* The outline (AutoProjectOutline.css) and the column, side by side while the
-   scroller has room (AutoProjectMainColumn sets the modifier): `side` centres
-   the pair, `margin` keeps the column centred with the outline in its left
-   margin (an empty track of the outline's width balances it). */
-.autoproject-page-layout--side,
-.autoproject-page-layout--margin {
+   scroller has room (AutoProjectMainColumn sets `has-outline`), centred as a
+   pair: the space left of the outline equals the space right of the column. */
+.autoproject-page-layout.has-outline {
   display: grid;
   justify-content: center;
   grid-template-columns: 15rem minmax(0, calc(1080px + 4rem));
 }
 
-.autoproject-page-layout--margin {
-  grid-template-columns: 15rem minmax(0, calc(1080px + 4rem)) 15rem;
-}
-
-.autoproject-page-layout--side > .autoproject-page-column,
-.autoproject-page-layout--margin > .autoproject-page-column {
+.autoproject-page-layout.has-outline > .autoproject-page-column {
   margin: 0;
 }
 
