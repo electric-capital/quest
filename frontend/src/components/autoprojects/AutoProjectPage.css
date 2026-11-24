@@ -56,6 +56,19 @@
   padding: 1.25rem 2rem 2rem;
 }
 
+/* The outline (AutoProjectOutline.css) and the column, side by side while the
+   scroller has room (AutoProjectMainColumn sets `has-outline`), centred as a
+   pair: the space left of the outline equals the space right of the column. */
+.autoproject-page-layout.has-outline {
+  display: grid;
+  justify-content: center;
+  grid-template-columns: 15rem minmax(0, calc(1080px + 4rem));
+}
+
+.autoproject-page-layout.has-outline > .autoproject-page-column {
+  margin: 0;
+}
+
 /* Router-state notice (AutoProjectNotice) between the header and the scroller. */
 .autoproject-page-notice {
   flex-shrink: 0;

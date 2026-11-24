@@ -25,6 +25,7 @@ import { UploadProgress, type UploadStatus } from '../UploadProgress'
 import { AutoProjectComposer } from './AutoProjectComposer'
 import { AutoProjectHeader, type AutoProjectHeaderJump, type AutoProjectHeaderJumpTarget } from './AutoProjectHeader'
 import { AutoProjectNotice } from './AutoProjectNotice'
+import { AutoProjectOutline, useAutoProjectOutlineShown } from './AutoProjectOutline'
 import { autoprojectRunCardKey, type AutoProjectRunActivityView, type AutoProjectRunCard } from './AutoProjectRunEntry'
 import { AutoProjectUpdates, type PendingStart } from './AutoProjectUpdates'
 import { readAutoProjectUpdatesOrder, writeAutoProjectUpdatesOrder, type AutoProjectUpdatesOrder } from './autoprojectUpdatesOrder'
@@ -86,7 +87,10 @@ function newestElement(section: HTMLElement | null, order: AutoProjectUpdatesOrd
  * header, the page's notice, and one scroller holding the `lead` content
  * (the Brief and AutoProject files cards, from AutoProjectPage), the composer in the page
  * flow, and the Updates card (AutoProjectUpdates) under it. Nothing is pinned to
- * the bottom. The page opens at the TOP, on the brief.
+ * the bottom. The page opens at the TOP, on the brief. While the scroller is
+ * wide enough (useAutoProjectOutlineShown) the outline (AutoProjectOutline, a
+ * table of contents of the column) sits sticky left of the column, the pair
+ * centred.
  *
  * It owns the run side of the page: the composer's state
  * (deriveAutoProjectComposerState: start a run, answer the pending question, or
@@ -302,6 +306,7 @@ export function AutoProjectMainColumn({
 
   const scrollerRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
+  const outlineShown = useAutoProjectOutlineShown(scrollerRef)
   const updatesRef = useRef<HTMLElement>(null)
   const composerBlockRef = useRef<HTMLDivElement>(null)
   // Following the end: only after the user scrolled there or sent something.
@@ -734,89 +739,92 @@ export function AutoProjectMainColumn({
       <AutoProjectHeader autoproject={autoproject} onAutoProjectDetail={onAutoProjectDetail} jump={jump} />
       {pageNotice}
       <div className="autoproject-page-scroller" ref={scrollerRef}>
-        <div className="autoproject-page-column" ref={columnRef}>
-          {lead}
-          <div className="autoproject-composer-block" ref={composerBlockRef}>
-            {composer.mode === 'archived' ? (
-              <div className="autoproject-composer-archived">
-                <span>This AutoProject is archived.</span>
-                <button
-                  type="button"
-                  className="autoproject-ctl-button"
-                  onClick={() => void handleUnarchive()}
-                  disabled={unarchiving}
-                >
-                  {unarchiving ? 'Unarchiving...' : 'Unarchive'}
-                </button>
-                {unarchiveError && (
-                  <div className="autoproject-composer-archived-error">
-                    <AutoProjectNotice message={unarchiveError} onDismiss={() => setUnarchiveError(null)} />
-                  </div>
-                )}
-              </div>
-            ) : (
-              <>
-                {composer.label && (
-                  <div className="autoproject-composer-label">
-                    <span className="autoproject-composer-label-main">{composer.label}</span>
-                    {composer.question && (
-                      <span className="autoproject-composer-label-question" title={composer.question.question}>
-                        {composer.question.question}
-                      </span>
-                    )}
-                    {composer.question && (
-                      <button type="button" className="autoproject-composer-label-show" onClick={showQuestion}>
-                        Show question
-                      </button>
-                    )}
-                  </div>
-                )}
-                {notice && (
-                  <div className="autoproject-composer-notice">
-                    <AutoProjectNotice message={notice} onDismiss={() => setNotice(null)} />
-                  </div>
-                )}
-                {uploadStatus && (
-                  <div className="autoproject-composer-upload">
-                    <UploadProgress status={uploadStatus} />
-                  </div>
-                )}
-                <AutoProjectComposer
-                  draftKey={draftKey}
-                  onSubmit={handleSubmit}
-                  busy={composer.busy}
-                  disabled={composer.disabled}
-                  onStop={composer.disabled && stopConversationId ? handleComposerStop : undefined}
-                  placeholder={composer.placeholder}
-                  initialModel={autoproject.model}
-                  initialThinkingEffort={autoproject.thinking_effort}
-                  onModelChange={handleModelChange}
-                />
-              </>
-            )}
+        <div className={`autoproject-page-layout${outlineShown ? ' has-outline' : ''}`}>
+          {outlineShown && <AutoProjectOutline scrollerRef={scrollerRef} columnRef={columnRef} />}
+          <div className="autoproject-page-column" ref={columnRef}>
+            {lead}
+            <div className="autoproject-composer-block" ref={composerBlockRef}>
+              {composer.mode === 'archived' ? (
+                <div className="autoproject-composer-archived">
+                  <span>This AutoProject is archived.</span>
+                  <button
+                    type="button"
+                    className="autoproject-ctl-button"
+                    onClick={() => void handleUnarchive()}
+                    disabled={unarchiving}
+                  >
+                    {unarchiving ? 'Unarchiving...' : 'Unarchive'}
+                  </button>
+                  {unarchiveError && (
+                    <div className="autoproject-composer-archived-error">
+                      <AutoProjectNotice message={unarchiveError} onDismiss={() => setUnarchiveError(null)} />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {composer.label && (
+                    <div className="autoproject-composer-label">
+                      <span className="autoproject-composer-label-main">{composer.label}</span>
+                      {composer.question && (
+                        <span className="autoproject-composer-label-question" title={composer.question.question}>
+                          {composer.question.question}
+                        </span>
+                      )}
+                      {composer.question && (
+                        <button type="button" className="autoproject-composer-label-show" onClick={showQuestion}>
+                          Show question
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {notice && (
+                    <div className="autoproject-composer-notice">
+                      <AutoProjectNotice message={notice} onDismiss={() => setNotice(null)} />
+                    </div>
+                  )}
+                  {uploadStatus && (
+                    <div className="autoproject-composer-upload">
+                      <UploadProgress status={uploadStatus} />
+                    </div>
+                  )}
+                  <AutoProjectComposer
+                    draftKey={draftKey}
+                    onSubmit={handleSubmit}
+                    busy={composer.busy}
+                    disabled={composer.disabled}
+                    onStop={composer.disabled && stopConversationId ? handleComposerStop : undefined}
+                    placeholder={composer.placeholder}
+                    initialModel={autoproject.model}
+                    initialThinkingEffort={autoproject.thinking_effort}
+                    onModelChange={handleModelChange}
+                  />
+                </>
+              )}
+            </div>
+            <AutoProjectUpdates
+              ref={updatesRef}
+              autoprojectId={autoprojectId}
+              archived={autoproject.archived}
+              runs={runs}
+              pendingStart={pendingVisible ? pendingStart : null}
+              keptCards={keptCards}
+              activeRunId={activeRun?.id ?? null}
+              activity={activeActivity}
+              answeringHandleId={answeringHandleId}
+              openRunConversationId={openRunConversationId}
+              count={autoproject.run_count}
+              order={order}
+              onOrderChange={handleOrderChange}
+              onLoadOlder={handleLoadOlder}
+              onStop={handleStop}
+              onQuestionAnswered={handleQuestionAnswered}
+              onOpenFile={onOpenFile}
+              onDelete={openDelete}
+              onView={onViewRun}
+              claimArrival={claimArrival}
+            />
           </div>
-          <AutoProjectUpdates
-            ref={updatesRef}
-            autoprojectId={autoprojectId}
-            archived={autoproject.archived}
-            runs={runs}
-            pendingStart={pendingVisible ? pendingStart : null}
-            keptCards={keptCards}
-            activeRunId={activeRun?.id ?? null}
-            activity={activeActivity}
-            answeringHandleId={answeringHandleId}
-            openRunConversationId={openRunConversationId}
-            count={autoproject.run_count}
-            order={order}
-            onOrderChange={handleOrderChange}
-            onLoadOlder={handleLoadOlder}
-            onStop={handleStop}
-            onQuestionAnswered={handleQuestionAnswered}
-            onOpenFile={onOpenFile}
-            onDelete={openDelete}
-            onView={onViewRun}
-            claimArrival={claimArrival}
-          />
         </div>
       </div>
 
