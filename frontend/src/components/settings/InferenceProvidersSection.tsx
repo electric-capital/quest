@@ -789,6 +789,11 @@ function addModelCopy(
         placeholder: 'Add a model — search the TrustedRouter catalog or type a model id',
         emptyHint: 'Type to search the catalog',
       };
+    case 'martllm':
+      return {
+        placeholder: 'Add a model — search the MartLLM catalog or type a model id',
+        emptyHint: 'Type to search the catalog',
+      };
     default:
       return {
         placeholder: 'Add a model — search the OpenRouter catalog or type an id',
@@ -978,7 +983,7 @@ function InstanceCard({
   const existing = new Set(status.models.map((m) => m.wire_id));
   const dirty = !!apiKey.trim() || labelDirty || baseUrlDirty || apiTypeDirty;
   // The shared OpenRouter catalog needs no credentials and neither does
-  // NEAR AI's or TrustedRouter's public list; a self-hosted server's list and
+  // NEAR AI's, TrustedRouter's or MartLLM's public list; a self-hosted server's list and
   // the key-fetched vendor catalogs (Anthropic, OpenAI, Gemini, Fireworks)
   // are read with the instance's own URL / key, so they wait for that to be
   // saved.
@@ -1013,7 +1018,10 @@ function InstanceCard({
               : catalog === 'gemini'
                 ? 'Gemini API model ids are names such as gemini-3.8-flash. The API publishes each model\u2019s ' +
                   'token limits; prices and thinking levels come from the matching Vertex registry entry.'
-                : undefined;
+                : catalog === 'martllm'
+                  ? 'MartLLM model ids are <vendor>/<model> slugs such as deepseek/deepseek-v4-flash-0731; ' +
+                    'the catalog lists the chat models with their current prices.'
+                  : undefined;
 
   return (
     <CredentialCard
