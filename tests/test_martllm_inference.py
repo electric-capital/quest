@@ -1,10 +1,10 @@
-"""Tests for UberLLM inference provider instances (kind ``uberllm``).
+"""Tests for MartLLM inference provider instances (kind ``martllm``).
 
 Covers the registry entry and credential-file bootstrap in
 ``config/inference_providers.py``, the fixed-upstream endpoint resolution
-of ``OpenRouterProvider`` (UberLLM base URL, bearer key, no OpenRouter
+of ``OpenRouterProvider`` (MartLLM base URL, bearer key, no OpenRouter
 extras), model resolution / backend label through the shared instance
-machinery, the catalog module ``chat/llm/uberllm_catalog.py`` (UberLLM's
+machinery, the catalog module ``chat/llm/martllm_catalog.py`` (MartLLM's
 ``display_name`` and ``available`` fields on top of the shared
 OpenRouter-shaped normalization, caching and error degradation against a
 stubbed ``urllib``), and the keyless admin catalog route. No network:
@@ -23,20 +23,20 @@ import urllib.request
 import pytest
 from fastapi import HTTPException
 
-import chat.llm.uberllm_catalog as ub
+import chat.llm.martllm_catalog as ub
 import config.inference_providers as ip
 from chat.llm.openrouter_provider import OpenRouterProvider
 
 ADMIN_USER = {"id": 1, "email": "admin@example.com", "is_admin": True}
-UBERLLM_URL = "https://api.uberllm.dev/v1"
+MARTLLM_URL = "https://api.martllm.com/v1"
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-def _uberllm(instance_id="uberllm", models=()):
-    return {"id": instance_id, "kind": "uberllm", "label": "UB", "models": list(models)}
+def _martllm(instance_id="martllm", models=()):
+    return {"id": instance_id, "kind": "martllm", "label": "UB", "models": list(models)}
 
 
 def _raw(
@@ -44,7 +44,7 @@ def _raw(
     prompt="0.0000003", completion="0.0000012", cache_read="0.000000006",
     context=1048576, max_output=393216, available=True,
 ):
-    """One entry shaped like UberLLM's ``GET /v1/models``: the OpenRouter
+    """One entry shaped like MartLLM's ``GET /v1/models``: the OpenRouter
     row shape, with the human name in ``display_name`` (no ``name``) and an
     ``available`` flag."""
     pricing = {"prompt": prompt, "completion": completion, "unit": "1M tokens"}
@@ -66,63 +66,63 @@ def _raw(
 # Registry + config store
 # ---------------------------------------------------------------------------
 
-def test_uberllm_kind_registry_entry():
-    spec = ip.INSTANCE_KINDS["uberllm"]
-    assert spec["label"] == "UberLLM" and spec["hint"] == "ull_..."
-    assert spec["provider"] == "openrouter" and spec["backend"] == "uberllm"
+def test_martllm_kind_registry_entry():
+    spec = ip.INSTANCE_KINDS["martllm"]
+    assert spec["label"] == "MartLLM" and spec["hint"] == "ull_..."
+    assert spec["provider"] == "openrouter" and spec["backend"] == "martllm"
     assert spec["key_required"] is True and spec["endpoint"] is False
-    assert spec["upstream_url"] == UBERLLM_URL and spec["catalog"] == "uberllm"
-    assert ip.is_endpoint_kind("uberllm") is False
+    assert spec["upstream_url"] == MARTLLM_URL and spec["catalog"] == "martllm"
+    assert ip.is_endpoint_kind("martllm") is False
 
 
-def test_kind_for_credential_file_uberllm():
-    assert ip.kind_for_credential_file("uberllm") == "uberllm"
-    assert ip.kind_for_credential_file("uberllm-2") == "uberllm"
-    assert ip.kind_for_credential_file("uberllmx") == "openrouter"
+def test_kind_for_credential_file_martllm():
+    assert ip.kind_for_credential_file("martllm") == "martllm"
+    assert ip.kind_for_credential_file("martllm-2") == "martllm"
+    assert ip.kind_for_credential_file("martllmx") == "openrouter"
 
 
-def test_prebaked_uberllm_credential_file_bootstraps_uberllm_instance():
-    ip.write_inference_credentials("uberllm", {
+def test_prebaked_martllm_credential_file_bootstraps_martllm_instance():
+    ip.write_inference_credentials("martllm", {
         "api_key": "ull_test", "models": ["deepseek/deepseek-v4-flash-0731"],
     })
     instances = {inst["id"]: inst for inst in ip.list_instances()}
-    assert instances["uberllm"]["kind"] == "uberllm" and instances["uberllm"]["label"] == "UberLLM"
-    assert [m["id"] for m in instances["uberllm"]["models"]] == ["deepseek/deepseek-v4-flash-0731"]
-    assert ip.instance_configured(instances["uberllm"]) is True
+    assert instances["martllm"]["kind"] == "martllm" and instances["martllm"]["label"] == "MartLLM"
+    assert [m["id"] for m in instances["martllm"]["models"]] == ["deepseek/deepseek-v4-flash-0731"]
+    assert ip.instance_configured(instances["martllm"]) is True
 
 
 # ---------------------------------------------------------------------------
 # Model resolution + provider endpoint
 # ---------------------------------------------------------------------------
 
-def test_resolve_uberllm_model():
+def test_resolve_martllm_model():
     from chat.llm.config import get_backend_for_model, get_provider_for_model, resolve_model
 
-    ip.upsert_instance(_uberllm(models=[{
+    ip.upsert_instance(_martllm(models=[{
         "id": "deepseek/deepseek-v4-flash-0731", "enabled": True, "name": "DeepSeek V4 Flash",
         "context_length": 1048576, "max_completion_tokens": None,
         "pricing": {"prompt": 0.3, "completion": 1.2},
     }]))
-    model_id = "uberllm:deepseek/deepseek-v4-flash-0731"
+    model_id = "martllm:deepseek/deepseek-v4-flash-0731"
     spec = resolve_model(model_id)
-    assert (spec.instance_id, spec.wire_id) == ("uberllm", "deepseek/deepseek-v4-flash-0731")
-    assert spec.provider == "openrouter" and spec.backend == "uberllm"
+    assert (spec.instance_id, spec.wire_id) == ("martllm", "deepseek/deepseek-v4-flash-0731")
+    assert spec.provider == "openrouter" and spec.backend == "martllm"
     assert get_provider_for_model(model_id) == "openrouter"
-    assert get_backend_for_model(model_id) == "uberllm"
+    assert get_backend_for_model(model_id) == "martllm"
 
 
-def test_openrouter_provider_endpoint_for_uberllm_instance():
-    ip.upsert_instance(_uberllm())
-    provider = OpenRouterProvider("uberllm")
-    with pytest.raises(ValueError, match="UberLLM API key not configured"):
+def test_openrouter_provider_endpoint_for_martllm_instance():
+    ip.upsert_instance(_martllm())
+    provider = OpenRouterProvider("martllm")
+    with pytest.raises(ValueError, match="MartLLM API key not configured"):
         provider._endpoint()
-    ip.write_inference_credentials("uberllm", {"api_key": "ull_test"})
+    ip.write_inference_credentials("martllm", {"api_key": "ull_test"})
     assert provider._endpoint() == {
-        "base_url": UBERLLM_URL, "api_key": "ull_test", "headers": None,
-        "openrouter": False, "kind": "uberllm",
+        "base_url": MARTLLM_URL, "api_key": "ull_test", "headers": None,
+        "openrouter": False, "kind": "martllm",
     }
     client = provider._get_client()
-    assert str(client.base_url).rstrip("/") == UBERLLM_URL
+    assert str(client.base_url).rstrip("/") == MARTLLM_URL
     assert provider._is_openrouter is False
 
 
@@ -187,19 +187,19 @@ def test_fetch_catalog_filters_sorts_and_dedupes(fake_urlopen):
     ]}
     assert [m["id"] for m in ub.fetch_catalog()] == ["anthropic/claude-sonnet-5", "z-ai/glm-5.3-flash"]
     request = fake_urlopen["seen"][0]
-    assert request.full_url == ub.CATALOG_URL == f"{UBERLLM_URL}/models"
+    assert request.full_url == ub.CATALOG_URL == f"{MARTLLM_URL}/models"
     assert not request.has_header("Authorization")
 
 
 def test_fetch_catalog_errors(fake_urlopen):
     fake_urlopen["payload"] = {"data": "nope"}
-    with pytest.raises(ub.UberLLMCatalogError, match="shape"):
+    with pytest.raises(ub.MartLLMCatalogError, match="shape"):
         ub.fetch_catalog()
     fake_urlopen["payload"] = {"data": [_raw("vendor/offline", available=False)]}
-    with pytest.raises(ub.UberLLMCatalogError, match="no chat models"):
+    with pytest.raises(ub.MartLLMCatalogError, match="no chat models"):
         ub.fetch_catalog()
     fake_urlopen["payload"] = urllib.error.HTTPError(ub.CATALOG_URL, 503, "unavailable", {}, io.BytesIO(b""))
-    with pytest.raises(ub.UberLLMCatalogError, match="HTTP 503"):
+    with pytest.raises(ub.MartLLMCatalogError, match="HTTP 503"):
         ub.fetch_catalog()
 
 
@@ -215,7 +215,7 @@ def test_get_catalog_caches_and_degrades(fake_urlopen, monkeypatch):
     degraded = ub.get_catalog()
     assert degraded["models"] == first["models"]
     assert degraded["stale"] is True and "offline" in degraded["error"]
-    ub.UBERLLM_CATALOG_FILE.unlink()
+    ub.MARTLLM_CATALOG_FILE.unlink()
     assert ub.get_catalog() == {"fetched_at": None, "models": [], "stale": True, "error": "<urlopen error offline>"}
 
 
@@ -234,7 +234,7 @@ def admin(monkeypatch, tmp_path):
     return admin_routes
 
 
-def test_admin_instance_catalog_for_uberllm(admin, monkeypatch):
+def test_admin_instance_catalog_for_martllm(admin, monkeypatch):
     calls: list[bool] = []
 
     def fake_get_catalog(refresh=False):
@@ -250,10 +250,10 @@ def test_admin_instance_catalog_for_uberllm(admin, monkeypatch):
         }
 
     monkeypatch.setattr(ub, "get_catalog", fake_get_catalog)
-    ip.upsert_instance(_uberllm())
+    ip.upsert_instance(_martllm())
     # No key yet: the public list is still served
-    result = _run(admin.admin_instance_catalog("uberllm", q="kimi", user=ADMIN_USER))
+    result = _run(admin.admin_instance_catalog("martllm", q="kimi", user=ADMIN_USER))
     assert [m["id"] for m in result["models"]] == ["moonshotai/kimi-k3"] and calls == [False]
     with pytest.raises(HTTPException) as exc_info:
-        _run(admin.admin_instance_catalog("uberllm", user={"id": 2, "email": "x@y", "is_admin": False}))
+        _run(admin.admin_instance_catalog("martllm", user={"id": 2, "email": "x@y", "is_admin": False}))
     assert exc_info.value.status_code == 403

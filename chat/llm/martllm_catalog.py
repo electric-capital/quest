@@ -1,8 +1,8 @@
-"""Cached UberLLM model catalog for the admin typeahead and metadata
+"""Cached MartLLM model catalog for the admin typeahead and metadata
 snapshots.
 
-UberLLM (https://uberllm.dev) is an OpenAI-compatible router at
-``https://api.uberllm.dev/v1`` (the ``uberllm`` instance kind in
+MartLLM (https://martllm.com) is an OpenAI-compatible router at
+``https://api.martllm.com/v1`` (the ``martllm`` instance kind in
 config/inference_providers.py). Its chat model list, ``GET /v1/models``, is
 **public** (no key) and uses the OpenRouter row shape -- ``<vendor>/<model>``
 ids, ``context_length``, ``top_provider.max_completion_tokens``,
@@ -11,12 +11,12 @@ per-token price strings in ``pricing.prompt`` / ``pricing.completion`` /
 ``supported_parameters`` -- the same shape the TrustedRouter catalog reads,
 so this module reuses that module's normalization (chat-model filter,
 ``tools`` / ``vision`` capabilities, null-for-unknown) instead of copying
-it. Two UberLLM differences are handled here: the human name is in
+it. Two MartLLM differences are handled here: the human name is in
 ``display_name`` (there is no ``name``), and rows marked ``available:
 false`` (temporarily without a serving provider) are left out.
 
-The normalized list is cached in ``data/uberllm_catalog.json`` for
-:data:`CATALOG_TTL_SECONDS` (one cache serves every UberLLM instance); a
+The normalized list is cached in ``data/martllm_catalog.json`` for
+:data:`CATALOG_TTL_SECONDS` (one cache serves every MartLLM instance); a
 failed fetch keeps serving the stale cache -- or an empty list when there
 never was one -- with the error reported alongside, so the UI falls back to
 custom-id entry.
@@ -31,18 +31,18 @@ import urllib.error
 import urllib.request
 
 from chat.llm import trustedrouter_catalog as _router_rows
-from config.paths import UBERLLM_CATALOG_FILE
+from config.paths import MARTLLM_CATALOG_FILE
 
 logger = logging.getLogger(__name__)
 
-CATALOG_URL = "https://api.uberllm.dev/v1/models"
+CATALOG_URL = "https://api.martllm.com/v1/models"
 CATALOG_TTL_SECONDS = 24 * 60 * 60
 FETCH_TIMEOUT_SECONDS = 15
 
 is_chat_model = _router_rows.is_chat_model
 
 
-class UberLLMCatalogError(RuntimeError):
+class MartLLMCatalogError(RuntimeError):
     """The catalog could not be fetched (network, unexpected shape)."""
 
 
@@ -58,12 +58,12 @@ def _normalize_entry(raw) -> dict | None:
 
 def _read_cache() -> dict | None:
     try:
-        with open(UBERLLM_CATALOG_FILE, "r") as f:
+        with open(MARTLLM_CATALOG_FILE, "r") as f:
             data = json.load(f)
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError):
-        logger.warning("Unreadable UberLLM catalog cache: %s", UBERLLM_CATALOG_FILE)
+        logger.warning("Unreadable MartLLM catalog cache: %s", MARTLLM_CATALOG_FILE)
         return None
     if not isinstance(data, dict) or not isinstance(data.get("models"), list):
         return None
@@ -75,14 +75,14 @@ def _read_cache() -> dict | None:
 
 
 def _write_cache(cache: dict) -> None:
-    UBERLLM_CATALOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MARTLLM_CATALOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
-        dir=UBERLLM_CATALOG_FILE.parent, prefix=".uberllm_catalog.", suffix=".tmp"
+        dir=MARTLLM_CATALOG_FILE.parent, prefix=".martllm_catalog.", suffix=".tmp"
     )
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(cache, f)
-        os.replace(tmp_path, UBERLLM_CATALOG_FILE)
+        os.replace(tmp_path, MARTLLM_CATALOG_FILE)
     except BaseException:
         try:
             os.unlink(tmp_path)
@@ -93,18 +93,18 @@ def _write_cache(cache: dict) -> None:
 
 def fetch_catalog() -> list[dict]:
     """Download and normalize the live catalog (blocking; raises
-    :class:`UberLLMCatalogError` on failure). No key: the list is public."""
+    :class:`MartLLMCatalogError` on failure). No key: the list is public."""
     request = urllib.request.Request(CATALOG_URL, headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
             payload = json.load(response)
     except urllib.error.HTTPError as exc:
-        raise UberLLMCatalogError(f"HTTP {exc.code}") from exc
+        raise MartLLMCatalogError(f"HTTP {exc.code}") from exc
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
-        raise UberLLMCatalogError(str(exc) or exc.__class__.__name__) from exc
+        raise MartLLMCatalogError(str(exc) or exc.__class__.__name__) from exc
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, list):
-        raise UberLLMCatalogError("Unexpected model list response shape")
+        raise MartLLMCatalogError("Unexpected model list response shape")
     models: list[dict] = []
     seen: set[str] = set()
     for raw in data:
@@ -113,7 +113,7 @@ def fetch_catalog() -> list[dict]:
             seen.add(entry["id"])
             models.append(entry)
     if not models:
-        raise UberLLMCatalogError("Model list contained no chat models")
+        raise MartLLMCatalogError("Model list contained no chat models")
     models.sort(key=lambda m: m["id"].lower())
     return models
 
@@ -132,9 +132,9 @@ def get_catalog(refresh: bool = False) -> dict:
         return {**cache, "stale": False, "error": None}
     try:
         models = fetch_catalog()
-    except UberLLMCatalogError as exc:
+    except MartLLMCatalogError as exc:
         error = str(exc) or exc.__class__.__name__
-        logger.warning("UberLLM catalog fetch failed: %s", error)
+        logger.warning("MartLLM catalog fetch failed: %s", error)
         if cache is None:
             return {"fetched_at": None, "models": [], "stale": True, "error": error}
         return {**cache, "stale": True, "error": error}
@@ -142,5 +142,5 @@ def get_catalog(refresh: bool = False) -> dict:
     try:
         _write_cache(cache)
     except OSError:
-        logger.warning("Failed to write UberLLM catalog cache", exc_info=True)
+        logger.warning("Failed to write MartLLM catalog cache", exc_info=True)
     return {**cache, "stale": False, "error": None}
